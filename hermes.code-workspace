@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "earth"
+		},
+		{
+			"path": "kademlia"
 		}
 	],
 	"settings": {}

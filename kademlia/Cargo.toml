@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 expect-test = "1.5.1"
+futures = "0.3.31"
 ringbuffer = "0.16.0"
 sha2 = { version = "0.10.9", features = ["asm", "asm-aarch64"] }
 thiserror = "2.0.16"
+tokio = { version = "1.47.1", features = ["sync"] }

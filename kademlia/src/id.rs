@@ -1,9 +1,7 @@
 mod distance;
 mod logging;
-use std::ops::BitXor;
 use std::ops::BitXorAssign;
 use std::ops::Index;
-use std::ops::IndexMut;
 
 pub use self::distance::Distance;
 pub use self::distance::Pair as DistancePair;

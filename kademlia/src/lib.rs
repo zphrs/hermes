@@ -11,6 +11,8 @@ use crate::id::Id;
 
 pub mod id;
 mod routing_table;
+mod traits;
+mod rpc;
 
 pub use routing_table::RoutingTable;
 

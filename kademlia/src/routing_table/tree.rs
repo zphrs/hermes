@@ -2,7 +2,7 @@ use std::ops::Index;
 use std::sync::atomic::AtomicUsize;
 
 use crate::HasId;
-use crate::id::{Distance, DistancePair, Id};
+use crate::id::{Distance, DistancePair};
 
 pub(crate) struct Tree<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     branch_type: BranchType<Node, ID_LEN, BUCKET_SIZE>,
@@ -86,7 +86,25 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         leaf
     }
 
-    pub fn get_leaf(
+    pub fn get_leaf(&self, distance: &Distance<ID_LEN>) -> &Leaf<Node, ID_LEN, BUCKET_SIZE> {
+        self.cached_len
+            .store(0, std::sync::atomic::Ordering::Release);
+        match &self.branch_type {
+            BranchType::Split { left, right } => {
+                let is_zero = bit_of_array::<ID_LEN>(distance, self.depth);
+                if is_zero {
+                    return right.get_leaf(distance);
+                } else {
+                    return left.get_leaf(distance);
+                }
+            }
+            BranchType::Leaf(leaf) => {
+                return leaf;
+            }
+        };
+    }
+
+    pub fn get_leaf_mut(
         &mut self,
         distance: &Distance<ID_LEN>,
     ) -> &mut Leaf<Node, ID_LEN, BUCKET_SIZE> {
@@ -98,9 +116,9 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
             BranchType::Split { left, right } => {
                 let is_zero = bit_of_array::<ID_LEN>(distance, self.depth);
                 if is_zero {
-                    return right.get_leaf(distance);
+                    return right.get_leaf_mut(distance);
                 } else {
-                    return left.get_leaf(distance);
+                    return left.get_leaf_mut(distance);
                 }
             }
             BranchType::Leaf(leaf) => {

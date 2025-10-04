@@ -37,7 +37,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
             // Means that if another split is needed on a right node created
             // below the newly created split node then another split will
             // occur.
-            let leaf = split.get_leaf(value.distance());
+            let leaf = split.get_leaf_mut(value.distance());
             if let Err(Error::FullLeaf) = leaf.try_insert(value) {
                 cold_path();
                 unreachable!();

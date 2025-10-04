@@ -1,10 +1,7 @@
 mod tree;
-
-use std::sync::Arc;
-
 use crate::{
     HasId,
-    id::{self, Distance, DistancePair, Id},
+    id::{self, Distance, DistancePair},
     routing_table::tree::{Leaf, Tree},
 };
 
@@ -29,14 +26,24 @@ where
             nearest_siblings_list: Vec::with_capacity(5 * BUCKET_SIZE),
         }
     }
-
-    pub fn nearest_siblings() {}
     /// Gets a [leaf](Leaf) based on a provided [distance](Distance).
     /// Useful to possibly add a node to a bucket.
     /// Since kademlia recommends potentially pinging each node before inserting
     /// into a specific leaf (when the leaf is full), insertions should be done
     /// directly on the returned leaf.
-    pub fn get_leaf(&mut self, distance: &Distance<ID_LEN>) -> &mut Leaf<Node, ID_LEN, BUCKET_SIZE>
+    pub fn get_leaf_mut(
+        &mut self,
+        distance: &Distance<ID_LEN>,
+    ) -> &mut Leaf<Node, ID_LEN, BUCKET_SIZE>
+    where
+        Node: HasId<ID_LEN>,
+    {
+        self.tree.get_leaf_mut(distance)
+    }
+
+    /// Gets a [leaf](Leaf) based on a provided [distance](Distance).
+    /// Useful to get a list of references to a given leaf.
+    pub fn get_leaf(&self, distance: &Distance<ID_LEN>) -> &Leaf<Node, ID_LEN, BUCKET_SIZE>
     where
         Node: HasId<ID_LEN>,
     {
@@ -56,7 +63,7 @@ where
     /// node in the tree.
     /// ``
     /// table.maybe_add_to_siblings_list(node);
-    pub fn maybe_add_to_siblings_list(
+    pub fn maybe_add_node_to_siblings_list(
         &mut self,
         pair: impl Into<DistancePair<Node, ID_LEN>>,
     ) -> Option<DistancePair<Node, ID_LEN>> {
@@ -78,6 +85,8 @@ where
         }
         Some(pair)
     }
+
+    pub fn find_nodes_near(&mut self, distance: &Distance<ID_LEN>, count: usize) {}
 
     pub fn find_node(
         &self,
@@ -103,11 +112,9 @@ where
 #[cfg(test)]
 mod tests {
 
-    use std::vec;
-
     use crate::{
         HasId,
-        id::{Distance, DistancePair, Id},
+        id::{Distance, DistancePair},
         node::Node,
         routing_table::RoutingTable,
     };
@@ -121,9 +128,9 @@ mod tests {
         let n1 = Node::new("0.0.0.0:1".parse().unwrap());
         let n1_pair: DistancePair<Node, _> = (n1, local_id).into();
         let n1_dist = n1_pair.distance().clone();
-        if let Some(n1_pair) = table.maybe_add_to_siblings_list(n1_pair) {
+        if let Some(n1_pair) = table.maybe_add_node_to_siblings_list(n1_pair) {
             // didn't add to siblings list
-            let leaf = table.get_leaf(&n1_dist);
+            let leaf = table.get_leaf_mut(&n1_dist);
             if leaf.is_full() {
                 let mut failed_to_ping: Option<Distance<_>> = None;
                 // try to make room if it's full, maybe by pinging in async code
