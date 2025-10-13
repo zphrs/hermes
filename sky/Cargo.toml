@@ -12,6 +12,8 @@ crypto = { version = "0.5.1", features = ["digest"] }
 tokio-util = { version = "0.7.16", features = ["compat"] }
 futures-util = "0.3.31"
 thiserror = "2.0.16"
+kademlia = { version = "0.1.0", path = "../kademlia" }
+sha2 = { version = "0.10.9", features = ["asm", "asm-aarch64"] }
 
 [build-dependencies]
 capnpc = "0.21"
