@@ -5,14 +5,14 @@
 #![feature(cold_path)]
 #![feature(trait_alias)]
 
-use std::ops::BitXor;
-
 use crate::id::Id;
 
 pub mod id;
 mod routing_table;
-mod traits;
 mod rpc;
+mod traits;
+pub use rpc::RpcManager;
+pub use traits::RequestHandler;
 
 pub use routing_table::RoutingTable;
 

@@ -4,7 +4,7 @@ use ringbuffer::{ConstGenericRingBuffer, RingBuffer as _};
 
 use crate::{BUCKET_SIZE, HasId, id::DistancePair};
 
-pub struct Bucket<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize>(
+pub struct Bucket<Node, const ID_LEN: usize, const BUCKET_SIZE: usize>(
     ConstGenericRingBuffer<DistancePair<Node, ID_LEN>, BUCKET_SIZE>,
 );
 

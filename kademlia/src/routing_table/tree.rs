@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicUsize;
 use crate::HasId;
 use crate::id::{Distance, DistancePair};
 
-pub(crate) struct Tree<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> {
+pub(crate) struct Tree<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     branch_type: BranchType<Node, ID_LEN, BUCKET_SIZE>,
     // actual cached len might be zero, but recreating a zero length value
     // is a) rare and b) cheap.
@@ -12,7 +12,7 @@ pub(crate) struct Tree<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> 
     depth: usize,
 }
 
-pub(crate) enum BranchType<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> {
+pub(crate) enum BranchType<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     Split {
         left: Box<Tree<Node, ID_LEN, BUCKET_SIZE>>,
         right: Box<Tree<Node, ID_LEN, BUCKET_SIZE>>,

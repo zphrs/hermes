@@ -6,7 +6,7 @@ use super::Tree;
 
 pub use super::bucket::Bucket;
 
-pub struct Leaf<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> {
+pub struct Leaf<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     bucket: Bucket<Node, ID_LEN, BUCKET_SIZE>,
     on_left: bool,
 }
@@ -63,7 +63,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
     }
 
     fn contains(&self, pair: &DistancePair<Node, ID_LEN>) -> bool {
-        self.iter().any(|other| other == pair)
+        self.iter().any(|other| other.node() == pair.node())
     }
 
     /// Errors if this leaf is full. Remove any unresponsive nodes in this

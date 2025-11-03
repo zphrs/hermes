@@ -1,17 +1,20 @@
 {
-	"folders": [
-		{
-			"path": "."
-		},
-		{
-			"path": "sky"
-		},
-		{
-			"path": "earth"
-		},
-		{
-			"path": "kademlia"
-		}
-	],
-	"settings": {}
+    "folders": [
+        {
+            "path": "."
+        },
+        {
+            "path": "sky"
+        },
+        {
+            "path": "earth"
+        },
+        {
+            "path": "kademlia"
+        },
+        {
+            "path": "proxy-ring"
+        }
+    ],
+    "settings": {}
 }

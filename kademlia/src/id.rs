@@ -7,7 +7,7 @@ pub use self::distance::Distance;
 pub use self::distance::Pair as DistancePair;
 use crate::HasId;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Id<const N: usize>([u8; N]);
 
 impl<const N: usize> HasId<N> for Id<N> {
