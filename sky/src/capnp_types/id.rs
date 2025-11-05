@@ -1,7 +1,7 @@
 use super::InitWith;
 use crate::sky_capnp::id::{Builder, Reader};
 
-pub type Id = kademlia::id::Id<32>;
+pub type Id = kademlia::Id<32>;
 
 impl<'a> InitWith<'a, Id> for Builder<'a> {
     fn with(mut self, other: &Id) -> Result<(), capnp::Error> {

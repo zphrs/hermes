@@ -1,10 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 
-use kademlia::{HasId, id::Id};
+use kademlia::{HasId, Id};
 use sha2::{Digest, Sha256};
-use tokio::net::ToSocketAddrs;
-
-use crate::sky_capnp::node;
 
 #[derive(Clone, Debug)]
 pub struct Node {
