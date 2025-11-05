@@ -271,11 +271,11 @@ pub(crate) mod tests {
 
     #[test]
     pub fn test_bit_from_id() {
-        assert_eq!(false, bit_of_array::<1>(&[0], 0));
-        assert_eq!(true, bit_of_array::<1>(&[0b10000000], 0));
-        assert_eq!(false, bit_of_array::<1>(&[0b01000000], 0));
-        assert_eq!(true, bit_of_array::<1>(&[0b01000000], 1));
-        assert_eq!(true, bit_of_array::<1>(&[0b00000001], 7));
-        assert_eq!(false, bit_of_array::<1>(&[0b00000001], 6));
+        assert!(!bit_of_array::<1>(&[0], 0));
+        assert!(bit_of_array::<1>(&[0b10000000], 0));
+        assert!(!bit_of_array::<1>(&[0b01000000], 0));
+        assert!(bit_of_array::<1>(&[0b01000000], 1));
+        assert!(bit_of_array::<1>(&[0b00000001], 7));
+        assert!(!bit_of_array::<1>(&[0b00000001], 6));
     }
 }
