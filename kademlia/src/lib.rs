@@ -5,23 +5,20 @@
 #![feature(cold_path)]
 #![feature(trait_alias)]
 
-use crate::id::Id;
-
-pub mod id;
+mod id;
+pub mod prelude;
 mod routing_table;
 mod rpc;
 mod traits;
 pub use rpc::RpcManager;
-pub use traits::RequestHandler;
 
-pub use routing_table::RoutingTable;
+pub use traits::{HasId, RequestHandler};
+
+pub use id::{Distance, DistancePair, Id};
+
+pub use routing_table::{Bucket, RoutingTable};
 
 pub const BUCKET_SIZE: usize = 20;
-
-pub trait HasId<const N: usize> {
-    fn id(&self) -> &Id<N>;
-    const BITS: usize = N / 8;
-}
 
 #[cfg(test)]
 mod node {
@@ -73,6 +70,3 @@ mod node {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

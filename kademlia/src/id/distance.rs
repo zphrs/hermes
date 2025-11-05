@@ -76,16 +76,14 @@ impl<const N: usize> Shl<usize> for Distance<N> {
         let mut out = [0u8; N];
 
         // Shift bytes
-        for i in 0..(N - byte_shift) {
-            out[i] = self.0[i + byte_shift];
-        }
+        out[0..(N - byte_shift)].copy_from_slice(&self.0[byte_shift..N]);
 
         // Shift bits within bytes
         if bit_shift > 0 {
             let mut carry = 0u8;
-            for i in 0..N {
-                let new_carry = out[i] >> (8 - bit_shift);
-                out[i] = (out[i] << bit_shift) | carry;
+            for out_i in &mut out[0..N] {
+                let new_carry = *out_i >> (8 - bit_shift);
+                *out_i = (*out_i << bit_shift) | carry;
                 carry = new_carry;
             }
         }
@@ -108,9 +106,7 @@ impl<const N: usize> Shr<usize> for Distance<N> {
         let mut out = [0u8; N];
 
         // Shift bytes
-        for i in byte_shift..N {
-            out[i] = self.0[i - byte_shift];
-        }
+        out[byte_shift..N].copy_from_slice(&self.0[..(N - byte_shift)]);
 
         // Shift bits within bytes
         if bit_shift > 0 {
@@ -226,7 +222,7 @@ impl<Node: Eq, const ID_LEN: usize> From<Pair<Node, ID_LEN>> for (Distance<ID_LE
 
 impl<Node: Eq, const ID_LEN: usize> PartialEq for Pair<Node, ID_LEN> {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0 && self.1 == self.1
+        self.0 == other.0 && self.1 == other.1
     }
 }
 
@@ -255,6 +251,6 @@ where
     Node: HasId<ID_LEN>,
 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(&other))
+        Some(self.cmp(other))
     }
 }

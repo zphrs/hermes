@@ -3,13 +3,18 @@ use std::cmp::min;
 
 use std::fmt::Debug;
 use thiserror::Error;
-use tracing::warn;
+
+use futures::stream::FuturesUnordered;
+use futures::stream::StreamExt;
 
 use crate::{
-    HasId,
+    HasId, RequestHandler,
     id::{self, Distance, DistancePair},
-    routing_table::tree::{Leaf, Tree},
 };
+
+use tree::{Leaf, Tree};
+
+pub use tree::Bucket;
 
 pub struct RoutingTable<Node, const ID_LEN: usize, const BUCKET_SIZE: usize = 20>
 where
@@ -22,28 +27,35 @@ where
 }
 #[derive(Debug, Error)]
 pub enum Error<Node, const ID_LEN: usize> {
-    Full(DistancePair<Node, ID_LEN>),
     OutOfRange(DistancePair<Node, ID_LEN>),
 }
 
 impl<Node, const ID_LEN: usize> From<Error<Node, ID_LEN>> for DistancePair<Node, ID_LEN> {
     fn from(value: Error<Node, ID_LEN>) -> Self {
         match value {
-            Error::Full(pair) => pair,
             Error::OutOfRange(pair) => pair,
         }
     }
 }
 
-impl<Node: Eq + Debug, const ID_LEN: usize, const BUCKET_SIZE: usize>
+impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize> Default
+    for RoutingTable<Node, ID_LEN, BUCKET_SIZE>
+{
+    fn default() -> Self {
+        Self {
+            tree: Tree::new(0),
+            nearest_siblings_list: Vec::with_capacity(5 * BUCKET_SIZE + 1),
+        }
+    }
+}
+
+impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize>
     RoutingTable<Node, ID_LEN, BUCKET_SIZE>
-where
-    Node: HasId<ID_LEN>,
 {
     pub fn new() -> Self {
         Self {
             tree: Tree::new(0),
-            nearest_siblings_list: Vec::with_capacity(5 * BUCKET_SIZE),
+            nearest_siblings_list: Vec::with_capacity(5 * BUCKET_SIZE + 1),
         }
     }
     /// Gets a [leaf](Leaf) based on a provided [distance](Distance).
@@ -70,40 +82,14 @@ where
         self.tree.get_leaf(distance)
     }
 
-    fn nearest_siblings_insert(
-        &mut self,
-        pair: DistancePair<Node, ID_LEN>,
-    ) -> Result<(), Error<Node, ID_LEN>> {
-        // if in list already, no-op
-        if let Ok(_) = self.nearest_siblings_list.binary_search(&pair) {
-            return Ok(());
-        }
-        if self.nearest_siblings_list.len() + 1 > 5 * BUCKET_SIZE {
-            return Err(Error::Full(pair));
-        }
-        self.nearest_siblings_list.push(pair);
-        self.nearest_siblings_list.sort();
-        for pair in self.nearest_siblings_list.drain(
-            min(5 * BUCKET_SIZE, self.nearest_siblings_list.len())
-                ..self.nearest_siblings_list.len(),
-        ) {
-            // likely evicting into closest bucket anyways, and if not then we
-            // can still afford potentially losing the occasional close but not
-            // close enough pair.
-            let res = self.tree.get_leaf_mut(pair.distance()).try_insert(pair);
-            if let Err(_e) = res {
-                warn!("improperly evicted a node without pinging other nodes in bucket first")
-            }
-        }
-        Ok(())
-    }
-
     #[cfg(test)]
+    #[allow(unused)]
     pub(crate) fn sibling_list(&self) -> &Vec<DistancePair<Node, ID_LEN>> {
         &self.nearest_siblings_list
     }
 
     #[cfg(test)]
+    #[allow(unused)]
     pub(crate) fn everything(&self) -> Vec<DistancePair<Node, ID_LEN>>
     where
         Node: Clone,
@@ -114,53 +100,57 @@ where
         out.sort();
         out
     }
-
-    /// either adds to the sibling list or returns Some(pair), where pair is the
-    /// inputted pair.
-    /// If this returns none then it is safe to add the node to the leaf
-    /// node in the tree.
-    /// ``
-    /// table.maybe_add_to_siblings_list(node);
-    pub fn maybe_add_node_to_siblings_list(
+    /// tries to add nodes to the siblings list.
+    /// Returns any nodes which got evicted from the list.
+    pub fn maybe_add_nodes_to_siblings_list<
+        DP: Into<DistancePair<Node, ID_LEN>>,
+        Iter: IntoIterator<Item = DP>,
+    >(
         &mut self,
-        pair: impl Into<DistancePair<Node, ID_LEN>>,
-    ) -> Result<(), Error<Node, ID_LEN>> {
-        let pair = pair.into();
-
-        if self.nearest_siblings_list.len() == 0 {
-            // first item to be added into the list
-            // expects that the returned iterator is empty
-            // since we just added it in
-            self.nearest_siblings_insert(pair)
-                .expect("insert to succeed since the list is empty");
-            return Ok(());
-        };
-        let last_in_siblings_list = self
-            .nearest_siblings_list
-            .get(self.nearest_siblings_list.len() - 1)
-            .expect("at least one sibling in the list");
-        if let Ok(_) = self.nearest_siblings_list.binary_search(&pair) {
-            return Ok(()); // already added
-        }
-        if last_in_siblings_list.distance() > pair.distance() {
-            // we can insert into siblings since we're closer than the farthest.
-            // might wanna try inserting the displaced node
-            self.nearest_siblings_insert(pair);
-            return Ok(());
-        }
-        Err(Error::OutOfRange(pair))
+        pair: Iter,
+    ) -> impl IntoIterator<Item = DistancePair<Node, ID_LEN>> {
+        let iter = pair.into_iter();
+        self.nearest_siblings_list.extend(iter.map(Into::into));
+        self.nearest_siblings_list.sort();
+        self.nearest_siblings_list.drain(
+            min(5 * BUCKET_SIZE, self.nearest_siblings_list.len())
+                ..self.nearest_siblings_list.len(),
+        )
     }
 
     pub fn sibling_list_pairs(&self) -> impl Iterator<Item = &DistancePair<Node, ID_LEN>> {
         self.nearest_siblings_list.iter()
     }
 
-    pub fn remove_siblings_list_nodes_where<F: FnMut(&DistancePair<Node, ID_LEN>) -> bool>(
+    pub async fn remove_unreachable_siblings_list_nodes(
         &mut self,
-        pred: F,
+        local_node: &Node,
+        handler: &impl RequestHandler<Node, ID_LEN>,
     ) {
-        let filtered: Vec<_> = self.nearest_siblings_list.drain(0..).filter(pred).collect();
-        self.nearest_siblings_list.extend(filtered);
+        // Ping all nodes concurrently and collect the ones that respond.
+        let mut futures = FuturesUnordered::new();
+
+        for pair in self.nearest_siblings_list.drain(0..) {
+            // Capture references to `handler` and `local_node` by reference.
+            // `pair` is moved into the async block so we can return it if ping succeeds.
+            let fut = async move {
+                if handler.ping(local_node, pair.node()).await {
+                    Some(pair)
+                } else {
+                    None
+                }
+            };
+            futures.push(fut);
+        }
+
+        let mut new_list = Vec::with_capacity(self.nearest_siblings_list.capacity());
+        while let Some(maybe_pair) = futures.next().await {
+            if let Some(pair) = maybe_pair {
+                new_list.push(pair);
+            }
+        }
+
+        self.nearest_siblings_list = new_list;
     }
 
     pub fn nearest_in_sibling_list(
@@ -180,11 +170,8 @@ where
             self.nearest_siblings_list
                 .iter()
                 .skip(min(
-                    nearest.checked_sub(BUCKET_SIZE / 2).unwrap_or(0),
-                    self.nearest_siblings_list
-                        .len()
-                        .checked_sub(BUCKET_SIZE)
-                        .unwrap_or(0),
+                    nearest.saturating_sub(BUCKET_SIZE / 2),
+                    self.nearest_siblings_list.len().saturating_sub(BUCKET_SIZE),
                 ))
                 .take(BUCKET_SIZE),
         )
@@ -196,7 +183,7 @@ where
     ) -> Box<dyn Iterator<Item = &DistancePair<Node, ID_LEN>> + '_> {
         Box::new(
             self.nearest_in_sibling_list(dist)
-                .chain(self.tree.nodes_near(dist, 1)),
+                .chain(self.tree.nodes_near(dist, BUCKET_SIZE)),
         )
     }
 
@@ -207,53 +194,6 @@ where
         match self.tree.nodes_near_mut(pair.distance(), 1).next() {
             Some(out) if out == pair => Some(out),
             _ => None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use crate::{
-        HasId,
-        id::{Distance, DistancePair},
-        node::Node,
-        routing_table::RoutingTable,
-    };
-
-    #[test]
-    pub fn insert_example() {
-        let local_node = Node::new("127.0.0.1:2000".parse().unwrap());
-        let local_id = local_node.id();
-
-        let mut table = RoutingTable::<_, _, 20>::new();
-        let n1 = Node::new("0.0.0.0:1".parse().unwrap());
-        let n1_pair: DistancePair<Node, _> = (n1, local_id).into();
-        let n1_dist = n1_pair.distance().clone();
-        if let Err(n1_pair) = table.maybe_add_node_to_siblings_list(n1_pair) {
-            // didn't add to siblings list
-            let leaf = table.get_leaf_mut(&n1_dist);
-            if leaf.is_full() {
-                let mut failed_to_ping: Option<Distance<_>> = None;
-                // try to make room if it's full, maybe by pinging in async code
-                for pair in leaf.iter() {
-                    // ping node, add it to dists_to_remove if the ping fails
-                    let ping_succeeded = true;
-                    if !ping_succeeded {
-                        failed_to_ping = Some(pair.distance().clone());
-                        break;
-                    }
-                }
-                if let Some(failed_to_ping) = failed_to_ping {
-                    leaf.remove_where(|pair| failed_to_ping == *pair.distance());
-                } else {
-                    // no node got cleared, no need to re-attempt an insertion.
-                }
-            }
-            // since we tried our best to make space if the leaf is full, now we can insert
-            // and safely ignore the error if the leaf is still full as kademlia says to
-            // drop new nodes heard about if none of the existing nodes are
-            let _ = leaf.try_insert(n1_pair);
         }
     }
 }

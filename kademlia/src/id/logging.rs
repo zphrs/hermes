@@ -62,14 +62,13 @@ impl<const N: usize> Id<N> {
     }
 
     pub(crate) fn get_first_zero_byte(&self) -> usize {
-        let first_zero_offset = self.bytes().len()
+        self.bytes().len()
             - self
                 .bytes()
                 .iter()
                 .rev()
                 .position(|b| *b != 0)
-                .unwrap_or(self.bytes().len());
-        first_zero_offset
+                .unwrap_or(self.bytes().len())
     }
 }
 

@@ -48,7 +48,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
     /// Either splits self into a new subtree if a split is due and returns a
     /// new tree to replace this leaf with or returns [None] if this
     /// node either is not empty or is a left node (which never get split).
-    pub fn maybe_split(&mut self, depth: usize) -> Option<Tree<Node, ID_LEN, BUCKET_SIZE>> {
+    pub(crate) fn maybe_split(&mut self, depth: usize) -> Option<Tree<Node, ID_LEN, BUCKET_SIZE>> {
         if self.bucket.is_full() && !self.on_left {
             cold_path();
             Some(self.split(depth))

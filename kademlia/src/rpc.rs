@@ -1,9 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Debug,
-    ops::Not,
-    sync::Arc,
-};
+use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use futures::{prelude::*, stream::FuturesUnordered};
 use futures_time::{future::FutureExt, time::Duration};
@@ -15,7 +10,6 @@ use tracing::{Instrument, instrument, trace, trace_span};
 use crate::{
     HasId, RoutingTable,
     id::{Distance, DistancePair, Id},
-    routing_table,
     traits::RequestHandler,
 };
 
@@ -91,24 +85,24 @@ impl<
     // k-buckets as necessary.
     #[instrument(skip(self))]
     pub async fn join_network(&self) {
-        self.node_lookup(&self.local_node.id()).await;
+        self.node_lookup(self.local_node.id()).await;
         // trace!("Post self lookup sib list", &self.local_nod)
-        let farthest_dist_seen = {
+        let closest_dist = {
             let routing_table = self.routing_table.read().await;
             routing_table
-                .find_node(&Distance::MAX)
-                .max()
-                .or_else(|| routing_table.nearest_in_sibling_list(&Distance::MAX).max())
+                .find_node(&Distance::ZERO)
+                .min()
+                .or_else(|| routing_table.nearest_in_sibling_list(&Distance::ZERO).min())
                 .map(|v| v.distance())
                 .unwrap_or(&Distance::ZERO)
                 .clone()
         };
 
-        self.refresh_buckets_after(&farthest_dist_seen).await;
+        self.refresh_buckets_after(&closest_dist).await;
     }
 
     fn local_addr(&self) -> &Id<ID_LEN> {
-        &self.local_node.id()
+        self.local_node.id()
     }
 
     pub async fn add_node(&self, node: Node) {
@@ -117,52 +111,61 @@ impl<
 
     async fn remove_and_insert(
         &self,
-        to_remove: Vec<Distance<ID_LEN>>,
+        to_remove: Vec<Id<ID_LEN>>,
         pair: DistancePair<Node, ID_LEN>,
         lock: &mut RwLockWriteGuard<'_, RoutingTable<Node, ID_LEN, BUCKET_SIZE>>,
     ) {
         let leaf = lock.get_leaf_mut(pair.distance());
-        leaf.remove_where(|pair| to_remove.contains(pair.distance()));
+        leaf.remove_where(|pair| to_remove.contains(pair.node().id()));
         // since we either made room or returned early, we can safely
         // assume that the leaf likely has room when doing this insertion.
         let _ = leaf.try_insert(pair);
     }
 
+    async fn insert_without_removal(
+        &self,
+        pair: DistancePair<Node, ID_LEN>,
+        lock: &mut RwLockWriteGuard<'_, RoutingTable<Node, ID_LEN, BUCKET_SIZE>>,
+    ) -> bool {
+        let leaf = lock.get_leaf_mut(pair.distance());
+        leaf.try_insert(pair).is_ok()
+    }
+
     async fn get_removal_candidates(
         &self,
         pair: &DistancePair<Node, ID_LEN>,
-    ) -> Option<Vec<Distance<ID_LEN>>> {
+    ) -> Option<Vec<Id<ID_LEN>>> {
         let routing_table = self.routing_table.read().await;
         let leaf = routing_table.get_leaf(pair.distance());
         let leaf_len = leaf.len();
         // probably smart to batch this
 
         if leaf.is_full() {
-            let mut failed_to_ping: Vec<Distance<_>> = vec![];
+            let mut failed_to_ping: Vec<Id<_>> = vec![];
             {
                 let unordered_futures = FuturesUnordered::new();
                 for pair in leaf.iter() {
                     unordered_futures.push(async move {
                         (
                             self.handler.ping(&self.local_node, pair.node()).await,
-                            pair.distance(),
+                            pair.node().id(),
                         )
                     });
                 }
                 let mut unordered_futures_chunks = unordered_futures.ready_chunks(leaf_len);
                 while let Some(finished_pings) = unordered_futures_chunks.next().await {
-                    for (ping_succeeded, distance) in finished_pings {
+                    for (ping_succeeded, id) in finished_pings {
                         if !ping_succeeded {
-                            failed_to_ping.push(distance.clone());
+                            failed_to_ping.push(id.clone());
                         }
                     }
-                    if failed_to_ping.len() != 0 {
+                    if !failed_to_ping.is_empty() {
                         // we've freed up at least some nodes
                         break;
                     }
                 }
             }
-            if failed_to_ping.len() == 0 {
+            if failed_to_ping.is_empty() {
                 // no room was freed up, all nodes in bucket were online
                 return None;
             }
@@ -172,13 +175,14 @@ impl<
         }
     }
 
-    fn maybe_add_node_to_siblings_list(
+    fn maybe_add_nodes_to_siblings_list<NodeIter: IntoIterator<Item = Node>>(
         &self,
-        node: Node,
+        nodes: NodeIter,
         table_lock: &mut RwLockWriteGuard<'_, RoutingTable<Node, ID_LEN, BUCKET_SIZE>>,
-    ) -> Result<(), routing_table::Error<Node, ID_LEN>> {
-        let pair: DistancePair<Node, ID_LEN> = (node, self.local_addr()).into();
-        table_lock.maybe_add_node_to_siblings_list(pair)
+    ) -> impl IntoIterator<Item = DistancePair<Node, ID_LEN>> {
+        let local_addr = self.local_addr();
+        table_lock
+            .maybe_add_nodes_to_siblings_list(nodes.into_iter().map(move |node| (node, local_addr)))
     }
 
     /// pipelines the three stages for the nodes which allows all to complete
@@ -186,68 +190,17 @@ impl<
     #[instrument(skip_all)]
     pub async fn add_nodes(&self, nodes: impl IntoIterator<Item = Node>) {
         let mut write_lock = self.routing_table.write().await;
-        let leftover: Vec<_> = nodes
-            .into_iter()
-            .map(|node| self.maybe_add_node_to_siblings_list(node, &mut write_lock))
-            .filter_map(|node| node.err())
-            .collect();
+        // first remove unreachable siblings list nodes
+        write_lock
+            .remove_unreachable_siblings_list_nodes(&self.local_node, &self.handler)
+            .await;
 
-        let leftover: Vec<_> = if leftover
-            .iter()
-            .any(|err| matches!(err, routing_table::Error::Full(_)))
-        {
-            // try to make room in siblings list. If any room was made,
-            // replace leftover with another call. If no room could be made,
-            // treat all like they should be inserted into the tree
-            let sibling_list_pairs = write_lock.sibling_list_pairs().cloned().collect::<Vec<_>>();
-            let pings = FuturesUnordered::new();
-            for pair in sibling_list_pairs.iter() {
-                pings.push(async {
-                    (
-                        pair.node().id().clone(),
-                        self.handler.ping(&self.local_node, pair.node()).await,
-                    )
-                });
-            }
-            let mut chunked_pings = pings.ready_chunks(BUCKET_SIZE);
-            let space_made = loop {
-                let Some(ping_chunk) = chunked_pings.next().await else {
-                    break false;
-                };
-                let unreachable_nodes: HashSet<_> = ping_chunk
-                    .into_iter()
-                    .filter_map(|(node_id, is_alive)| (!is_alive).then_some(node_id))
-                    .collect();
-                let mut removed_any = false;
-                write_lock.remove_siblings_list_nodes_where(|pair| {
-                    let should_remove = unreachable_nodes.contains(pair.node().id());
-                    removed_any = should_remove || removed_any;
-                    should_remove
-                });
-                if removed_any {
-                    break true;
-                } // otherwise do another loop
-            };
-            let iter: Box<dyn Iterator<Item = routing_table::Error<Node, ID_LEN>>> = if space_made {
-                // try adding nodes one last time to the list
-                Box::new(leftover.into_iter().filter_map(|err| {
-                    self.maybe_add_node_to_siblings_list(
-                        DistancePair::from(err).into_node(),
-                        &mut write_lock,
-                    )
-                    .err()
-                }))
-            } else {
-                Box::new(leftover.into_iter())
-            };
-            iter.filter_map(|e| match e {
-                routing_table::Error::Full(_pair) => None,
-                routing_table::Error::OutOfRange(pair) => Some(pair),
-            })
-            .collect()
-        } else {
-            leftover.into_iter().map(|e| e.into()).collect()
-        };
+        // now if there are any leftover, they are all alive nodes that
+        // oveflowed the siblings list
+        let leftover: Vec<_> = self
+            .maybe_add_nodes_to_siblings_list(nodes, &mut write_lock)
+            .into_iter()
+            .collect();
 
         drop(write_lock);
 
@@ -255,13 +208,7 @@ impl<
         for pair in leftover {
             unordered.push(async { (self.get_removal_candidates(&pair).await, pair) });
         }
-        let unordered = unordered.filter_map(async |v| {
-            if let Some(to_remove) = v.0 {
-                Some((to_remove, v.1))
-            } else {
-                None
-            }
-        });
+        let unordered = unordered.filter_map(async |v| v.0.map(|to_remove| (to_remove, v.1)));
 
         let to_removes: Vec<_> = unordered.collect().await;
         {
@@ -270,6 +217,24 @@ impl<
                 self.remove_and_insert(to_remove, pair, &mut write_lock)
                     .await;
             }
+        }
+    }
+
+    /// pipelines the three stages for the nodes which allows all to complete
+    /// their write, read, write stages in synchronicity when inserting.
+    #[instrument(skip_all)]
+    pub async fn add_nodes_without_removing(&self, nodes: impl IntoIterator<Item = Node>) {
+        let mut write_lock = self.routing_table.write().await;
+
+        // now if there are any leftover, they are all alive nodes that
+        // oveflowed the siblings list
+        let leftover: Vec<_> = self
+            .maybe_add_nodes_to_siblings_list(nodes, &mut write_lock)
+            .into_iter()
+            .collect();
+
+        for pair in leftover {
+            self.insert_without_removal(pair, &mut write_lock).await;
         }
     }
 
@@ -330,7 +295,7 @@ impl<
                 .collect()
         };
 
-        while remaining.len() != 0 {
+        while !remaining.is_empty() {
             trace!("querying remaining {} unqueried nodes", remaining.len());
             let querying = FuturesUnordered::new();
             {
@@ -406,12 +371,11 @@ impl<
         let next_to_query = k_closest_lock
             .downgrade()
             .iter()
-            .filter_map(|pair| {
-                (!queried_node_ids_lock.contains(pair.node().id())).then(|| pair.node().clone())
-            })
+            .filter(|&pair| !queried_node_ids_lock.contains(pair.node().id()))
+            .map(|pair| pair.node().clone())
             .take(ALPHA)
             .collect::<Vec<_>>();
-        if next_to_query.len() == 0 {
+        if next_to_query.is_empty() {
             // round either succeeded and found more or it didn't.
             // Either way, recursive call is now over since there are no more nodes to query
             return out;
@@ -442,12 +406,11 @@ impl<
         let closest_nodes = self
             .handler
             .find_node(&self.local_node, &node, target_id)
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
             .await
             .ok()?;
         // try to add all these nodes
-        self.add_nodes(closest_nodes.iter().cloned().collect::<Vec<_>>())
-            .await;
+        self.add_nodes(closest_nodes.clone()).await;
 
         let mut k_closest = k_closest.write().await;
         let init_len = k_closest.len();
@@ -477,21 +440,25 @@ impl<
 
 #[cfg(test)]
 mod tests {
+    use crate::{HasId, Id, RpcManager, id::DistancePair, traits::RequestHandler};
+    use futures::{StreamExt as _, stream::FuturesUnordered};
+    use rand::random_range;
+    use rand_distr::Distribution;
+    use std::cmp::max;
+    use std::fmt::Debug;
     use std::{
         collections::{HashMap, HashSet},
         hash::{DefaultHasher, Hash, Hasher},
-        sync::{LazyLock, atomic::AtomicU64},
+        sync::{
+            LazyLock,
+            atomic::{AtomicBool, AtomicU64},
+        },
         time::{Duration, Instant},
     };
-
-    use futures::{StreamExt as _, stream::FuturesUnordered};
-    use futures_time::task::sleep;
-    use tokio::sync::RwLock;
+    use tokio::{sync::RwLock, time::sleep};
     use tracing::{instrument, instrument::WithSubscriber as _, subscriber::NoSubscriber, trace};
     use tracing_test::traced_test;
 
-    use crate::{HasId, Id, RpcManager, id::DistancePair, traits::RequestHandler};
-    use std::fmt::Debug;
     #[derive(Default)]
     pub struct HandlerInstance {
         nodes: HashSet<Node>,
@@ -503,7 +470,8 @@ mod tests {
         LazyLock::new(|| RwLock::new(HandlerInstance::default()));
 
     static TOTAL_RPCS: AtomicU64 = AtomicU64::new(0);
-    static SHOULD_KEEP_ROTATING: LazyLock<RwLock<bool>> = LazyLock::new(|| RwLock::new(true));
+    static SHOULD_KEEP_ROTATING: AtomicBool = AtomicBool::new(true);
+    static SHOULD_DELAY_RPC: AtomicBool = AtomicBool::new(false);
 
     pub struct Handler;
 
@@ -511,7 +479,7 @@ mod tests {
         pub fn add_node(&mut self, node: Node) -> &RpcManager<Node, Handler, ID_LEN, BUCKET_SIZE> {
             let manager = RpcManager::new(Handler, node.clone());
             self.managers.insert(node.id().clone(), manager);
-            let manager_ref = self.managers.get(&node.id()).unwrap();
+            let manager_ref = self.managers.get(node.id()).unwrap();
             self.nodes.insert(node);
             manager_ref
         }
@@ -567,12 +535,6 @@ mod tests {
     impl RequestHandler<Node, ID_LEN> for Handler {
         #[instrument(level = "trace", skip(self))]
         async fn ping(&self, from: &Node, node: &Node) -> bool {
-            // add random latency; since all call ping, this adds latency
-            // to all calls
-            if !*SHOULD_KEEP_ROTATING.read().await {
-                trace!("SLEEPING ON PING");
-                sleep(Duration::from_millis(rand::random_range(0..1000)).into()).await;
-            }
             let reader = HANDLER.read().await;
             let ping_reader = reader.ping_cache.read().await;
             let Some(cache) = ping_reader.get(&node.id().clone()) else {
@@ -588,8 +550,14 @@ mod tests {
             to: &Node,
             address: &crate::id::Id<ID_LEN>,
         ) -> Vec<Node> {
-            if self.ping(from, to).await == false {
+            if !self.ping(from, to).await {
                 return vec![];
+            }
+            // add random latency; since all call ping, this adds latency
+            // to all calls
+            if SHOULD_DELAY_RPC.load(std::sync::atomic::Ordering::Acquire) {
+                trace!("SLEEPING ON FIND NODE");
+                sleep(Duration::from_millis(rand::random_range(0..1000))).await;
             }
             TOTAL_RPCS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let read_lock = HANDLER.read().await;
@@ -603,132 +571,164 @@ mod tests {
     #[traced_test]
     async fn test() {
         trace!("STARTING TEST");
-        let mut handler = HANDLER.write().await;
-        trace!("GOT HANDLER LOCK");
+        let mut write_handler = HANDLER.write().await;
+
         // generate 1000 nodes, add them, then have all connect to the manager
         let mut nodes: Vec<Node> = vec![];
         trace!("Made vec");
+        let exp_process = rand_distr::Exp::new(1_000_000.0).unwrap();
 
         for n in 0..100_000 {
             let node = Node::from(n.to_string());
             nodes.push(node.clone());
 
-            handler
-                .ping_cache
-                .write()
-                .await
-                .insert(node.id().clone(), (Instant::now(), true));
+            write_handler.add_node(node.clone());
 
-            let manager = handler.add_node(node.clone());
-            // add 1% of the nodes to each node
-            manager
-                .add_nodes((0..100).map(|_| Node::from(rand::random_range(0..100_000).to_string())))
-                .await;
+            if n == 0 {
+                write_handler
+                    .ping_cache
+                    .write()
+                    .await
+                    .entry(node.id().clone())
+                    .and_modify(|v| v.1 = true)
+                    .or_insert((Instant::now(), true));
+                continue;
+            } else {
+                write_handler
+                    .ping_cache
+                    .write()
+                    .await
+                    .insert(node.id().clone(), (Instant::now(), false));
+            }
+
+            trace!("inited node {n}");
 
             tokio::spawn(async move {
-                let mut node_is_online = true;
+                // sleep(Duration::from_secs(5)).await;
+                {
+                    let read_handler = HANDLER.read().await;
+                    let manager = read_handler.manager_of(node.id());
+                    // add node 0 to everyone
+                    trace!("initing node {n}");
+
+                    manager.add_node(Node::from("0")).await;
+
+                    manager
+                        .add_nodes(
+                            (0..100).map(|_| Node::from(random_range(1..100_000).to_string())),
+                        )
+                        .await;
+                }
+                let mut node_is_online = false;
                 let mut last_changed = Instant::now();
-                sleep(Duration::from_millis(rand::random_range(500..100_000)).into()).await;
                 loop {
-                    sleep(Duration::from_micros(rand::random_range(1..50_000)).into()).await;
+                    let dur = max(
+                        { exp_process.sample(&mut rand::rng()) as u64 } + 10_000,
+                        100_000,
+                    );
+                    sleep(Duration::from_micros(dur)).await;
+                    while !SHOULD_KEEP_ROTATING.load(std::sync::atomic::Ordering::Acquire) {
+                        sleep(Duration::from_millis(5_000)).await;
+                    }
                     let dur_since_change = last_changed.duration_since(last_changed).as_micros();
                     // otherwise, update cache
 
-                    let chance_of_changing_online_status =
-                        0.5 + 0.5 * (1. - 1. / (0.001 * (dur_since_change as f64) + 1.));
+                    let chance_of_changing_online_status = if node_is_online {
+                        0.5 + 0.5 * (1. - 1. / (0.001 * (dur_since_change as f64) + 1.))
+                    } else {
+                        0.0001
+                    };
                     let changed_status = rand::random_bool(chance_of_changing_online_status);
                     if changed_status {
                         node_is_online = !node_is_online;
                         last_changed = Instant::now();
-                        HANDLER
-                            .read()
-                            .await
-                            .ping_cache
-                            .write()
-                            .await
-                            .entry(node.id().clone())
-                            .and_modify(|v| v.1 = node_is_online)
-                            .or_insert((last_changed, node_is_online));
+                        {
+                            let read_lock = HANDLER.read().await;
+                            let mut write_lock = read_lock.ping_cache.write().await;
+                            if !SHOULD_KEEP_ROTATING.load(std::sync::atomic::Ordering::Acquire) {
+                                node_is_online = !node_is_online;
+                                continue; // undo this change
+                            }
+                            write_lock
+                                .entry(node.id().clone())
+                                .and_modify(|v| v.1 = node_is_online)
+                                .or_insert((last_changed, node_is_online));
+                        }
                         if node_is_online {
-                            // trace!("bringing node {:?} online", node);
                             // just came online, should probably tell
                             // everyone again!
                             let handler = HANDLER.read().await;
                             let my_manager = handler.manager_of(node.id());
+                            // trace!("bringing online\t{:?}", node);
                             my_manager
                                 .join_network()
                                 .with_subscriber(NoSubscriber::new())
                                 .await;
-                            // trace!("brought node {:?} online", node);
+
+                            trace!("brought online\t{:?}", node)
                         }
                     };
-                    while !*SHOULD_KEEP_ROTATING.read().await {
-                        sleep(Duration::from_millis(rand::random_range(0..3000)).into()).await;
-                    }
                 }
             });
         }
         // handler.add_node(main_node.clone());
         trace!("made list of nodes");
-        let read_handler = handler.downgrade();
+        let read_handler = write_handler.downgrade();
+        sleep(Duration::from_secs(30)).await;
+
+        trace!("finished joining");
+        SHOULD_KEEP_ROTATING.store(false, std::sync::atomic::Ordering::Release);
+        // sleep(Duration::new(60, 0)).await;
+
         let join_net = FuturesUnordered::new();
+        let mut online_nodes = Vec::new();
         for node in nodes.iter() {
+            let node = node.clone();
+            if !Handler.ping(&node, &node).await {
+                continue;
+            };
+            online_nodes.push(node);
+        }
+
+        for node in online_nodes.iter() {
             let manager = read_handler.manager_of(node.id());
-            join_net.push(manager.join_network());
+            trace!("{:?} joining network", node);
+            join_net.push(manager.join_network().with_subscriber(NoSubscriber::new()));
         }
 
         join_net.count().await;
 
-        println!(
+        trace!(
             "Total number of rpcs: {}",
             TOTAL_RPCS.load(std::sync::atomic::Ordering::Acquire)
         );
-        trace!("finished joining");
-        *SHOULD_KEEP_ROTATING.write().await = false;
-        sleep(Duration::new(1, 0).into()).await;
 
         // pings all nodes
 
-        let mut sorted_dist_nodes = nodes
+        let mut sorted_dist_nodes = online_nodes
             .iter()
             .cloned()
-            .map(|node| DistancePair::from((node, &Id::from([0u8; 8]))))
+            .map(|node| DistancePair::from((node, &Id::from([127u8; 8]))))
             .collect::<Vec<_>>();
-        let pings = FuturesUnordered::new();
-        for pair in sorted_dist_nodes.iter() {
-            pings.push(async {
-                (
-                    Handler.ping(&Node::from("1"), pair.node()).await,
-                    pair.node().clone(),
-                )
-            });
-        }
-        // remove all that don't fit
-        let down_nodes: HashSet<_> = pings
-            .filter_map(|v| async move { (!v.0).then_some(v.1) })
-            .collect()
-            .await;
-        sorted_dist_nodes = Vec::from_iter(
-            sorted_dist_nodes
-                .drain(0..)
-                .filter(|node| !down_nodes.contains(node.node())),
-        );
+
         sorted_dist_nodes.sort();
         let sorted_dist_nodes: Vec<_> = sorted_dist_nodes.into_iter().take(BUCKET_SIZE).collect();
 
         // start of rpc
+        SHOULD_DELAY_RPC.store(true, std::sync::atomic::Ordering::Release);
         let rpc_start = Instant::now();
         trace!("created all handlers");
-        let manager = read_handler.manager_of(Node::from("50").id());
-        manager.add_nodes(nodes.clone()).await;
-        // try to get nodes nearest addr 0
-        let nearby = manager.node_lookup(&Id::from([0u8; 8])).await;
+        let manager =
+            read_handler.manager_of(online_nodes[rand::random_range(0..online_nodes.len())].id());
+        // manager.add_nodes(nodes.clone()).await;
+        // try to get nodes nearest addr 1...1
+        let nearby = manager.node_lookup(&Id::from([127u8; 8])).await;
 
         trace!(
             "queried nearby: {:#?}",
             nearby
                 .into_iter()
-                .map(|node| DistancePair::from((node, &Id::from([0u8; 8]))))
+                .map(|node| DistancePair::from((node, &Id::from([127u8; 8]))))
                 .collect::<Vec<_>>()
         );
         trace!(?sorted_dist_nodes);

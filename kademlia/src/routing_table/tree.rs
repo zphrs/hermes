@@ -23,7 +23,9 @@ pub(crate) enum BranchType<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> 
 mod bucket;
 mod leaf;
 
-pub use leaf::Leaf;
+pub(crate) use leaf::Leaf;
+
+pub use leaf::Bucket;
 
 impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN, BUCKET_SIZE> {
     pub fn new(depth: usize) -> Self {
@@ -79,7 +81,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         // nodes are always leaf nodes.
         let mut leaf = Leaf::new(false);
         for value in self.drain() {
-            if let Err(_) = leaf.try_insert(value) {
+            if leaf.try_insert(value).is_err() {
                 unreachable!()
             }
         }
@@ -93,15 +95,13 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
             BranchType::Split { left, right } => {
                 let is_zero = bit_of_array::<ID_LEN>(distance, self.depth);
                 if is_zero {
-                    return right.get_leaf(distance);
+                    right.get_leaf(distance)
                 } else {
-                    return left.get_leaf(distance);
+                    left.get_leaf(distance)
                 }
             }
-            BranchType::Leaf(leaf) => {
-                return leaf;
-            }
-        };
+            BranchType::Leaf(leaf) => leaf,
+        }
     }
 
     pub fn get_leaf_mut(
@@ -116,15 +116,13 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
             BranchType::Split { left, right } => {
                 let is_zero = bit_of_array::<ID_LEN>(distance, self.depth);
                 if is_zero {
-                    return right.get_leaf_mut(distance);
+                    right.get_leaf_mut(distance)
                 } else {
-                    return left.get_leaf_mut(distance);
+                    left.get_leaf_mut(distance)
                 }
             }
-            BranchType::Leaf(leaf) => {
-                return leaf;
-            }
-        };
+            BranchType::Leaf(leaf) => leaf,
+        }
     }
 
     pub fn nodes_near<const N: usize>(
