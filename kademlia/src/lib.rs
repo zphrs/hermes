@@ -10,6 +10,10 @@ pub mod prelude;
 mod routing_table;
 mod rpc;
 mod traits;
+
+#[cfg(test)]
+mod rpc_test;
+
 pub use rpc::RpcManager;
 
 pub use traits::{HasId, RequestHandler};
