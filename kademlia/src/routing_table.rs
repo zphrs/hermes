@@ -107,9 +107,9 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         Iter: IntoIterator<Item = DP>,
     >(
         &mut self,
-        pair: Iter,
+        pairs: Iter,
     ) -> impl IntoIterator<Item = DistancePair<Node, ID_LEN>> {
-        let iter = pair.into_iter();
+        let iter = pairs.into_iter();
         self.nearest_siblings_list.extend(iter.map(Into::into));
         self.nearest_siblings_list.sort();
         self.nearest_siblings_list.dedup();

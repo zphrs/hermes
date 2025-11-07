@@ -67,6 +67,7 @@ impl<
         let lz_count = after.leading_zeros();
         let shift_by = ID_LEN * 8 - lz_count;
         let lookups = FuturesUnordered::new();
+        trace!("refreshing {} buckets", lz_count);
         for shift_by in shift_by..(shift_by + lz_count) {
             let shifted_one: Distance<ID_LEN> = Distance::ONE << shift_by;
             let next_bucket_addr = after + &shifted_one;
@@ -191,6 +192,9 @@ impl<
     #[instrument(skip_all)]
     pub async fn add_nodes(&self, nodes: impl IntoIterator<Item = Node>) {
         let mut write_lock = self.routing_table.write().await;
+
+        let nodes = nodes.into_iter().filter(|v| v.id() != self.local_node.id());
+
         // first remove unreachable siblings list nodes
         write_lock
             .remove_unreachable_siblings_list_nodes(&self.local_node, &self.handler)
@@ -226,6 +230,8 @@ impl<
     #[instrument(skip_all)]
     pub async fn add_nodes_without_removing(&self, nodes: impl IntoIterator<Item = Node>) {
         let mut write_lock = self.routing_table.write().await;
+
+        let nodes = nodes.into_iter().filter(|v| v.id() != self.local_node.id());
 
         // now if there are any leftover, they are all alive nodes that
         // oveflowed the siblings list
@@ -264,6 +270,7 @@ impl<
         };
         closest_nodes.sort();
         closest_nodes.truncate(ALPHA);
+        trace!(?closest_nodes);
         let queried_ids = RwLock::new(HashSet::<Id<ID_LEN>>::new());
         let alpha_closest: Vec<Node> = closest_nodes.iter().map(|p| p.node()).cloned().collect();
         let k_closest = RwLock::new(closest_nodes);
