@@ -112,6 +112,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         let iter = pair.into_iter();
         self.nearest_siblings_list.extend(iter.map(Into::into));
         self.nearest_siblings_list.sort();
+        self.nearest_siblings_list.dedup();
         self.nearest_siblings_list.drain(
             min(5 * BUCKET_SIZE, self.nearest_siblings_list.len())
                 ..self.nearest_siblings_list.len(),
@@ -128,27 +129,11 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         handler: &impl RequestHandler<Node, ID_LEN>,
     ) {
         // Ping all nodes concurrently and collect the ones that respond.
-        let mut futures = FuturesUnordered::new();
+        let futures = FuturesUnordered::from_iter(self.nearest_siblings_list.drain(0..).map(
+            |pair| async move { handler.ping(local_node, pair.node()).await.then_some(pair) },
+        ));
 
-        for pair in self.nearest_siblings_list.drain(0..) {
-            // Capture references to `handler` and `local_node` by reference.
-            // `pair` is moved into the async block so we can return it if ping succeeds.
-            let fut = async move {
-                if handler.ping(local_node, pair.node()).await {
-                    Some(pair)
-                } else {
-                    None
-                }
-            };
-            futures.push(fut);
-        }
-
-        let mut new_list = Vec::with_capacity(self.nearest_siblings_list.capacity());
-        while let Some(maybe_pair) = futures.next().await {
-            if let Some(pair) = maybe_pair {
-                new_list.push(pair);
-            }
-        }
+        let new_list: Vec<_> = futures.filter_map(async |v| v).collect().await;
 
         self.nearest_siblings_list = new_list;
     }
@@ -158,13 +143,10 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         dist: &Distance<ID_LEN>,
     ) -> Box<dyn Iterator<Item = &DistancePair<Node, ID_LEN>> + '_> {
         // maybe include some from sib list
-        let nearest = match self
+        let nearest = self
             .nearest_siblings_list
             .binary_search_by(|p| p.distance().cmp(dist))
-        {
-            Ok(v) => v,
-            Err(v) => v,
-        };
+            .unwrap_or_else(|v| v);
         // get at least BUCKET_SIZE from nearest_in_sib_list
         Box::new(
             self.nearest_siblings_list
@@ -191,9 +173,81 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         &mut self,
         pair: &DistancePair<Node, ID_LEN>,
     ) -> Option<&mut DistancePair<Node, ID_LEN>> {
-        match self.tree.nodes_near_mut(pair.distance(), 1).next() {
-            Some(out) if out == pair => Some(out),
-            _ => None,
+        self.nearest_siblings_list
+            .binary_search(pair)
+            .ok()
+            .map(|ind| &mut self.nearest_siblings_list[ind])
+            .or_else(
+                || match self.tree.nodes_near_mut(pair.distance(), 1).next() {
+                    Some(out) if out == pair => Some(out),
+                    _ => None,
+                },
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use expect_test::expect;
+    use tracing::trace;
+    use tracing_test::traced_test;
+
+    use crate::{HasId, RoutingTable, node::Node};
+    #[test]
+    #[traced_test]
+    pub fn siblings() {
+        let mut table: RoutingTable<_, _, 1> = RoutingTable::new();
+        // generate 1k nodes in a loop
+        let self_node = Node::new("0.0.0.0:0".parse().unwrap());
+        for _ in 0..10 {
+            let nodes = (1..1001).map(|port| {
+                (
+                    Node::new(format!("127.0.0.1:{port}").parse().unwrap()),
+                    self_node.id(),
+                )
+            });
+            table.maybe_add_nodes_to_siblings_list(nodes);
         }
+        expect![[r#"
+            [
+                DistancePair(
+                    002C...DDD7,
+                    Node {
+                        addr: 127.0.0.1:673,
+                        id: Id(B0DA...C093),
+                    },
+                ),
+                DistancePair(
+                    0108...8658,
+                    Node {
+                        addr: 127.0.0.1:358,
+                        id: Id(B1FE...9B1C),
+                    },
+                ),
+                DistancePair(
+                    016D...4003,
+                    Node {
+                        addr: 127.0.0.1:18,
+                        id: Id(B19B...5D47),
+                    },
+                ),
+                DistancePair(
+                    01AA...CB9B,
+                    Node {
+                        addr: 127.0.0.1:597,
+                        id: Id(B15C...D6DF),
+                    },
+                ),
+                DistancePair(
+                    0204...6D32,
+                    Node {
+                        addr: 127.0.0.1:642,
+                        id: Id(B2F2...7076),
+                    },
+                ),
+            ]
+        "#]]
+        .assert_debug_eq(table.sibling_list());
+        trace!("{:#?}", table.sibling_list());
     }
 }

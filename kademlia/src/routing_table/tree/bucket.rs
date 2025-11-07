@@ -121,18 +121,11 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Bucket<Node, ID_LE
     ) {
         // Ping all nodes concurrently and keep only reachable ones.
         let mut new_self = Self(Default::default());
-        let mut futures = FuturesUnordered::new();
-
-        for node in self.0.drain() {
-            let fut = async move {
-                if handler.ping(local_node, node.node()).await {
-                    Some(node)
-                } else {
-                    None
-                }
-            };
-            futures.push(fut);
-        }
+        let mut futures: FuturesUnordered<_> = self
+            .0
+            .drain()
+            .map(|node| async move { handler.ping(local_node, node.node()).await.then_some(node) })
+            .collect();
 
         while let Some(maybe_node) = futures.next().await {
             if let Some(node) = maybe_node {
@@ -162,7 +155,7 @@ mod tests {
             Bucket(
                 [
                     DistancePair(
-                        Distance(03B3...9EC4),
+                        03B3...9EC4,
                         Node {
                             addr: 127.0.0.1:8080,
                             id: Id(1019...668C),
@@ -184,14 +177,14 @@ mod tests {
             Bucket(
                 [
                     DistancePair(
-                        Distance(03B3...9EC4),
+                        03B3...9EC4,
                         Node {
                             addr: 127.0.0.1:8080,
                             id: Id(1019...668C),
                         },
                     ),
                     DistancePair(
-                        Distance(0AD0...F026),
+                        0AD0...F026,
                         Node {
                             addr: 0.0.0.0:8080,
                             id: Id(197A...086E),
@@ -207,14 +200,14 @@ mod tests {
             Bucket(
                 [
                     DistancePair(
-                        Distance(0AD0...F026),
+                        0AD0...F026,
                         Node {
                             addr: 0.0.0.0:8080,
                             id: Id(197A...086E),
                         },
                     ),
                     DistancePair(
-                        Distance(03B3...9EC4),
+                        03B3...9EC4,
                         Node {
                             addr: 127.0.0.1:8080,
                             id: Id(1019...668C),
@@ -230,14 +223,14 @@ mod tests {
             Bucket(
                 [
                     DistancePair(
-                        Distance(03B3...9EC4),
+                        03B3...9EC4,
                         Node {
                             addr: 127.0.0.1:8080,
                             id: Id(1019...668C),
                         },
                     ),
                     DistancePair(
-                        Distance(0AD0...F026),
+                        0AD0...F026,
                         Node {
                             addr: 0.0.0.0:8080,
                             id: Id(197A...086E),
@@ -253,14 +246,14 @@ mod tests {
             Bucket(
                 [
                     DistancePair(
-                        Distance(0AD0...F026),
+                        0AD0...F026,
                         Node {
                             addr: 0.0.0.0:8080,
                             id: Id(197A...086E),
                         },
                     ),
                     DistancePair(
-                        Distance(0AD0...F026),
+                        0AD0...F026,
                         Node {
                             addr: 0.0.0.0:8080,
                             id: Id(197A...086E),
@@ -278,14 +271,14 @@ mod tests {
         expect![[r#"
             [
                 DistancePair(
-                    Distance(03B3...9EC4),
+                    03B3...9EC4,
                     Node {
                         addr: 127.0.0.1:8080,
                         id: Id(1019...668C),
                     },
                 ),
                 DistancePair(
-                    Distance(0AD0...F026),
+                    0AD0...F026,
                     Node {
                         addr: 0.0.0.0:8080,
                         id: Id(197A...086E),

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt::Debug, sync::Arc};
+use std::{collections::HashSet, fmt::Debug, ops::Deref, sync::Arc};
 
 use futures::{prelude::*, stream::FuturesUnordered};
 use futures_time::{future::FutureExt, time::Duration};
@@ -75,7 +75,7 @@ impl<
             lookups.push(async move { self.node_lookup(&target_id).await });
         }
         // await all refreshes
-        lookups.count().await;
+        let _ = lookups.count().timeout(Duration::from_secs(10)).await;
     }
     // 2.3: To join the network, a node u must have a contact to an already
     // participating node w. u inserts w into the appropriate k-bucket. u then
@@ -122,12 +122,13 @@ impl<
         let _ = leaf.try_insert(pair);
     }
 
-    async fn insert_without_removal(
+    fn insert_without_removal(
         &self,
         pair: DistancePair<Node, ID_LEN>,
         lock: &mut RwLockWriteGuard<'_, RoutingTable<Node, ID_LEN, BUCKET_SIZE>>,
     ) -> bool {
         let leaf = lock.get_leaf_mut(pair.distance());
+        // if full just skip pings
         leaf.try_insert(pair).is_ok()
     }
 
@@ -234,7 +235,7 @@ impl<
             .collect();
 
         for pair in leftover {
-            self.insert_without_removal(pair, &mut write_lock).await;
+            self.insert_without_removal(pair, &mut write_lock);
         }
     }
 
@@ -242,7 +243,7 @@ impl<
         self.add_node(from.clone()).await;
         let lock = self.routing_table.read().await;
         let mut out: Vec<DistancePair<Node, ID_LEN>> = self
-            .find_node_with_lock(id, &*lock)
+            .find_node_with_lock(id, &lock)
             .map(|pair| pair.node())
             .cloned()
             .map(|node| DistancePair::from((node, id)))
@@ -264,12 +265,7 @@ impl<
         closest_nodes.sort();
         closest_nodes.truncate(ALPHA);
         let queried_ids = RwLock::new(HashSet::<Id<ID_LEN>>::new());
-        let alpha_closest: Vec<Node> = closest_nodes
-            .iter()
-            .take(ALPHA)
-            .map(|p| p.node())
-            .cloned()
-            .collect();
+        let alpha_closest: Vec<Node> = closest_nodes.iter().map(|p| p.node()).cloned().collect();
         let k_closest = RwLock::new(closest_nodes);
         let querying = FuturesUnordered::new();
         for node in alpha_closest {
@@ -391,24 +387,26 @@ impl<
         let round_succeeded = querying.any(|b| async move { b }).await;
         trace!("finished querying");
         if !round_succeeded {
-            out // even if the sub-queries didn't, we still succeeded
+            out // even if the sub-queries didn't, we still might have succeeded
         } else {
             true // round found more
         }
     }
-    #[instrument(skip(self, k_closest))]
+
     async fn update_k_closest_nodes<'a>(
         &self,
         node: Node,
         target_id: &Id<ID_LEN>,
         k_closest: &'a RwLock<Vec<DistancePair<Node, ID_LEN>>>,
     ) -> Option<(RwLockWriteGuard<'a, Vec<DistancePair<Node, ID_LEN>>>, bool)> {
+        trace!(
+            "{:?} finding nearest nodes",
+            DistancePair::from((self.local_node.clone(), target_id))
+        );
         let closest_nodes = self
             .handler
             .find_node(&self.local_node, &node, target_id)
-            .timeout(Duration::from_secs(30))
-            .await
-            .ok()?;
+            .await;
         // try to add all these nodes
         self.add_nodes(closest_nodes.clone()).await;
 
@@ -431,7 +429,7 @@ impl<
     fn find_node_with_lock<'a>(
         &self,
         id: &Id<ID_LEN>,
-        lock: &'a RoutingTable<Node, ID_LEN, BUCKET_SIZE>,
+        lock: &'a impl Deref<Target = RoutingTable<Node, ID_LEN, BUCKET_SIZE>>,
     ) -> Box<dyn Iterator<Item = &'a DistancePair<Node, ID_LEN>> + 'a> {
         let dist = self.local_addr().xor_distance(id);
         lock.find_node(&dist)
@@ -444,7 +442,7 @@ mod tests {
     use futures::{StreamExt as _, stream::FuturesUnordered};
     use rand::random_range;
     use rand_distr::Distribution;
-    use std::cmp::max;
+    use std::cmp::{max, min};
     use std::fmt::Debug;
     use std::{
         collections::{HashMap, HashSet},
@@ -535,6 +533,15 @@ mod tests {
     impl RequestHandler<Node, ID_LEN> for Handler {
         #[instrument(level = "trace", skip(self))]
         async fn ping(&self, from: &Node, node: &Node) -> bool {
+            // add random latency; since all call ping, this adds latency
+            // to all calls
+            if SHOULD_DELAY_RPC.load(std::sync::atomic::Ordering::Acquire) {
+                let load_time = Duration::from_millis(rand::random_range(50..1100));
+                sleep(min(load_time, Duration::from_millis(1000))).await;
+                if load_time > Duration::from_millis(1000) {
+                    return false;
+                }
+            }
             let reader = HANDLER.read().await;
             let ping_reader = reader.ping_cache.read().await;
             let Some(cache) = ping_reader.get(&node.id().clone()) else {
@@ -553,12 +560,7 @@ mod tests {
             if !self.ping(from, to).await {
                 return vec![];
             }
-            // add random latency; since all call ping, this adds latency
-            // to all calls
-            if SHOULD_DELAY_RPC.load(std::sync::atomic::Ordering::Acquire) {
-                trace!("SLEEPING ON FIND NODE");
-                sleep(Duration::from_millis(rand::random_range(0..1000))).await;
-            }
+
             TOTAL_RPCS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let read_lock = HANDLER.read().await;
             let Some(manager) = read_lock.managers.get(to.id()) else {
@@ -578,96 +580,95 @@ mod tests {
         trace!("Made vec");
         let exp_process = rand_distr::Exp::new(1_000_000.0).unwrap();
 
-        for n in 0..100_000 {
+        const NODE_COUNT: usize = 1_000;
+
+        for n in 0..NODE_COUNT {
             let node = Node::from(n.to_string());
             nodes.push(node.clone());
 
-            write_handler.add_node(node.clone());
-
+            write_handler
+                .ping_cache
+                .write()
+                .await
+                .insert(node.id().clone(), (Instant::now(), true));
+            let manager = write_handler.add_node(node.clone());
             if n == 0 {
-                write_handler
-                    .ping_cache
-                    .write()
-                    .await
-                    .entry(node.id().clone())
-                    .and_modify(|v| v.1 = true)
-                    .or_insert((Instant::now(), true));
+                // don't do the rotating on/offline
                 continue;
-            } else {
-                write_handler
-                    .ping_cache
-                    .write()
-                    .await
-                    .insert(node.id().clone(), (Instant::now(), false));
             }
 
-            trace!("inited node {n}");
+            manager.add_node(Node::from("0")).await;
 
+            manager
+                .add_nodes_without_removing(
+                    (0..10).map(|_| Node::from(random_range(1..NODE_COUNT).to_string())),
+                )
+                .await;
+            trace!("inited node {n}");
             tokio::spawn(async move {
                 // sleep(Duration::from_secs(5)).await;
-                {
-                    let read_handler = HANDLER.read().await;
-                    let manager = read_handler.manager_of(node.id());
-                    // add node 0 to everyone
-                    trace!("initing node {n}");
 
-                    manager.add_node(Node::from("0")).await;
+                let handler = HANDLER.read().await;
+                let my_manager = handler.manager_of(node.id());
+                trace!("setting up node {n}");
+                my_manager
+                    .join_network()
+                    .with_subscriber(NoSubscriber::new())
+                    .await;
+                trace!("fully setup node {n}");
 
-                    manager
-                        .add_nodes(
-                            (0..100).map(|_| Node::from(random_range(1..100_000).to_string())),
-                        )
+                let mut node_is_online = true;
+                let mut last_changed = Instant::now();
+                while SHOULD_KEEP_ROTATING.load(std::sync::atomic::Ordering::Acquire) {
+                    let dur = rand::random_range(1..10_000);
+                    sleep(Duration::from_millis(dur)).await;
+
+                    my_manager
+                        .join_network()
+                        .with_subscriber(NoSubscriber::new())
                         .await;
                 }
-                let mut node_is_online = false;
-                let mut last_changed = Instant::now();
-                loop {
-                    let dur = max(
-                        { exp_process.sample(&mut rand::rng()) as u64 } + 10_000,
-                        100_000,
-                    );
-                    sleep(Duration::from_micros(dur)).await;
-                    while !SHOULD_KEEP_ROTATING.load(std::sync::atomic::Ordering::Acquire) {
-                        sleep(Duration::from_millis(5_000)).await;
-                    }
-                    let dur_since_change = last_changed.duration_since(last_changed).as_micros();
-                    // otherwise, update cache
+                if false {
+                    while SHOULD_KEEP_ROTATING.load(std::sync::atomic::Ordering::Acquire) {
+                        let dur = max(
+                            { exp_process.sample(&mut rand::rng()) as u64 } + 10_000,
+                            100_000,
+                        );
+                        sleep(Duration::from_micros(dur)).await;
+                        let dur_since_change =
+                            last_changed.duration_since(last_changed).as_micros();
+                        // otherwise, update cache
 
-                    let chance_of_changing_online_status = if node_is_online {
-                        0.5 + 0.5 * (1. - 1. / (0.001 * (dur_since_change as f64) + 1.))
-                    } else {
-                        0.0001
-                    };
-                    let changed_status = rand::random_bool(chance_of_changing_online_status);
-                    if changed_status {
-                        node_is_online = !node_is_online;
-                        last_changed = Instant::now();
-                        {
-                            let read_lock = HANDLER.read().await;
-                            let mut write_lock = read_lock.ping_cache.write().await;
-                            if !SHOULD_KEEP_ROTATING.load(std::sync::atomic::Ordering::Acquire) {
-                                node_is_online = !node_is_online;
-                                continue; // undo this change
+                        let chance_of_changing_online_status = if node_is_online {
+                            0.5 + 0.5 * (1. - 1. / (0.001 * (dur_since_change as f64) + 1.))
+                        } else {
+                            0.0
+                        };
+                        let changed_status = rand::random_bool(chance_of_changing_online_status);
+                        if changed_status {
+                            node_is_online = !node_is_online;
+                            last_changed = Instant::now();
+                            {
+                                let read_lock = HANDLER.read().await;
+                                let mut write_lock = read_lock.ping_cache.write().await;
+                                if !SHOULD_KEEP_ROTATING.load(std::sync::atomic::Ordering::Acquire)
+                                {
+                                    break; // don't carry out this change, exit loop
+                                }
+                                write_lock
+                                    .entry(node.id().clone())
+                                    .and_modify(|v| v.1 = node_is_online)
+                                    .or_insert((last_changed, node_is_online));
                             }
-                            write_lock
-                                .entry(node.id().clone())
-                                .and_modify(|v| v.1 = node_is_online)
-                                .or_insert((last_changed, node_is_online));
-                        }
-                        if node_is_online {
-                            // just came online, should probably tell
-                            // everyone again!
-                            let handler = HANDLER.read().await;
-                            let my_manager = handler.manager_of(node.id());
-                            // trace!("bringing online\t{:?}", node);
-                            my_manager
-                                .join_network()
-                                .with_subscriber(NoSubscriber::new())
-                                .await;
-
-                            trace!("brought online\t{:?}", node)
-                        }
-                    };
+                            if node_is_online {
+                                trace!(node_back_online = ?node);
+                                my_manager
+                                    .join_network()
+                                    .with_subscriber(NoSubscriber::new())
+                                    .await;
+                            }
+                        };
+                    }
                 }
             });
         }
@@ -678,25 +679,25 @@ mod tests {
 
         trace!("finished joining");
         SHOULD_KEEP_ROTATING.store(false, std::sync::atomic::Ordering::Release);
-        // sleep(Duration::new(60, 0)).await;
 
-        let join_net = FuturesUnordered::new();
-        let mut online_nodes = Vec::new();
-        for node in nodes.iter() {
-            let node = node.clone();
-            if !Handler.ping(&node, &node).await {
-                continue;
-            };
-            online_nodes.push(node);
+        let online_nodes: Vec<_> = FuturesUnordered::from_iter(
+            nodes
+                .iter()
+                .map(|node| async move { (node.clone(), Handler.ping(node, node).await) }),
+        )
+        .filter_map(async |(node, ping_successful)| ping_successful.then_some(node))
+        .collect()
+        .await;
+
+        if false {
+            let join_net = FuturesUnordered::new();
+            for node in online_nodes.iter() {
+                let manager = read_handler.manager_of(node.id());
+                trace!("{:?} joining network", node);
+                join_net.push(manager.join_network().with_subscriber(NoSubscriber::new()));
+            }
+            join_net.count().await;
         }
-
-        for node in online_nodes.iter() {
-            let manager = read_handler.manager_of(node.id());
-            trace!("{:?} joining network", node);
-            join_net.push(manager.join_network().with_subscriber(NoSubscriber::new()));
-        }
-
-        join_net.count().await;
 
         trace!(
             "Total number of rpcs: {}",
@@ -716,10 +717,12 @@ mod tests {
 
         // start of rpc
         SHOULD_DELAY_RPC.store(true, std::sync::atomic::Ordering::Release);
-        let rpc_start = Instant::now();
         trace!("created all handlers");
         let manager =
             read_handler.manager_of(online_nodes[rand::random_range(0..online_nodes.len())].id());
+        trace!("{:#?}", manager.routing_table.read().await.everything());
+
+        let rpc_start = Instant::now();
         // manager.add_nodes(nodes.clone()).await;
         // try to get nodes nearest addr 1...1
         let nearby = manager.node_lookup(&Id::from([127u8; 8])).await;
