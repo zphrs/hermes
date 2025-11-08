@@ -8,7 +8,6 @@ use thiserror::Error;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 
-use crate::BUCKET_SIZE;
 use crate::routing_table::tree::LeafMut;
 use crate::{
     HasId, RequestHandler,
@@ -155,7 +154,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
             let mut total_pinged = 0;
             while let Some(chunk) = chunks.next().await {
                 total_pinged += chunk.len();
-                to_remove_set.extend(chunk.into_iter().filter_map(move |v| v));
+                to_remove_set.extend(chunk.into_iter().flatten());
                 if total_pinged >= BUCKET_SIZE {
                     break;
                 }

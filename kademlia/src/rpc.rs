@@ -514,6 +514,8 @@ mod tests {
     use crate::{HasId, Id, RpcManager, id::DistancePair, traits::RequestHandler};
     use futures::{StreamExt as _, stream::FuturesUnordered};
     use rand::random_range;
+    use rand_distr::Distribution;
+    use std::cmp::min;
     use std::fmt::Debug;
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -616,6 +618,9 @@ mod tests {
     impl RequestHandler<Node, ID_LEN> for Handler {
         #[instrument(level = "trace", skip(self))]
         async fn ping(&self, from: &Node, node: &Node) -> bool {
+            static EXP_PROCESS: LazyLock<rand_distr::Exp<f64>> =
+                LazyLock::new(|| rand_distr::Exp::new(750.0).unwrap());
+
             // add random latency; since all call ping, this adds latency
             // to all calls
             let out = {
@@ -634,12 +639,15 @@ mod tests {
                     self.cache.write().await.insert(node.clone());
                 }
                 let delay = if out {
-                    rand::random_range(50..1000)
+                    EXP_PROCESS.sample(&mut rand::rng()) as u64 + 50
                 } else {
                     1000
                 };
-                let load_time = Duration::from_millis(delay);
+
+                let load_time = Duration::from_millis(min(delay, 1000));
+
                 sleep(load_time).await;
+                return delay < 1000;
             }
             return out;
         }
