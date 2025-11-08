@@ -50,7 +50,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         Self {
             branch_type: BranchType::Leaf(leaf::Leaf::new(true)),
             // makes sure it doesn't get merged instantly
-            cached_len: AtomicUsize::new(1),
+            cached_len: AtomicUsize::new(0),
             depth,
         }
     }
@@ -94,7 +94,6 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
 
     fn maybe_merge(&mut self) {
         let self_len = self.len();
-        trace!(self_len);
         let new_leaf_node = match &self.branch_type {
             BranchType::Split { .. } if self_len < 1 => self.merge_into(),
             // can't merge/isn't worth splitting yet
