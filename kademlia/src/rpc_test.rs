@@ -1,13 +1,17 @@
 use std::{
     collections::HashMap,
     fmt::Debug,
+    iter,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
 
+use futures::future;
+use rand::seq::IndexedRandom as _;
 use sha2::Digest as _;
+use tracing::{instrument::WithSubscriber as _, subscriber::NoSubscriber};
 use tracing_test::traced_test;
 
 use crate::{HasId, Id, RequestHandler};
@@ -153,7 +157,7 @@ async fn find_exact_peer_through_bootstrap() {
     )
     .await;
 
-    let result = my_manager.find_node(my_node.clone(), peer_node.id()).await;
+    let result = my_manager.node_lookup(peer_node.id()).await;
     assert_ne!(result.len(), 0);
     assert_eq!(result[0], peer_node);
 }
@@ -175,4 +179,88 @@ async fn find_exact_peer_boostrap_self() {
     let result = my_manager.find_node(my_node.clone(), peer_node.id()).await;
     assert_ne!(result.len(), 0);
     assert_eq!(result[0], peer_node);
+
+    let result = peer_manager.node_lookup(my_node.id()).await;
+    assert_ne!(result.len(), 0);
+    assert_eq!(result[0], my_node);
+}
+
+async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) -> Vec<Node> {
+    let bootstrap_node = a.new_node();
+    bootstrap_and_join(&net.add_node(bootstrap_node.clone()), []).await;
+    let bootstrap_nodes: Vec<_> = iter::repeat_with(|| a.new_node())
+        .take((size as f64).log2() as usize + 1)
+        .collect();
+    let bootstrap_nodes = Arc::new(bootstrap_nodes);
+    future::join_all(bootstrap_nodes.iter().cloned().map(async |node| {
+        let manager = net.add_node(node.clone());
+        bootstrap_and_join(&manager, vec![bootstrap_node.clone()])
+            .with_subscriber(NoSubscriber::new())
+            .await;
+    }))
+    .await;
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for i in 0..size {
+        tasks.spawn({
+            let net = net.clone();
+            let a = a.clone();
+            let bootstrap_node = bootstrap_nodes[i % bootstrap_nodes.len()].clone();
+            async move {
+                let node = a.new_node();
+                let manager = net.add_node(node.clone());
+                bootstrap_and_join(&manager, vec![bootstrap_node.clone()])
+                    .with_subscriber(NoSubscriber::new())
+                    .await;
+                node
+            }
+        });
+    }
+    let nodes = tasks.join_all().await;
+    nodes
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[traced_test]
+async fn find_peer_large_network() {
+    let num_nodes = 100;
+    let num_trials = 10;
+
+    let net = NetworkState::default();
+    let a = NodeAllocator::default();
+    let rng = &mut rand::rng();
+
+    let nodes = create_large_network(net.clone(), a.clone(), num_nodes).await;
+
+    /// Experiment: bootstrap using random node and find a random peer
+    async fn bootstrap_and_find_peer(
+        net: &NetworkState,
+        a: &NodeAllocator,
+        bootstrap_node: Node,
+        target_node: Node,
+    ) {
+        let my_node = a.new_node();
+        let my_manager = net.add_node(my_node.clone());
+        bootstrap_and_join(&my_manager, vec![bootstrap_node])
+            .with_subscriber(NoSubscriber::new())
+            .await;
+
+        let result = my_manager.node_lookup(target_node.id()).await;
+        assert_ne!(result.len(), 0);
+        assert_eq!(result[0], target_node);
+    }
+
+    future::join_all(
+        iter::repeat_with(|| {
+            (
+                nodes.choose(rng).unwrap().clone(),
+                nodes.choose(rng).unwrap().clone(),
+            )
+        })
+        .map(async |(bootstrap_node, target_node)| {
+            bootstrap_and_find_peer(&net, &a, bootstrap_node, target_node)
+        })
+        .take(num_trials),
+    )
+    .await;
 }
