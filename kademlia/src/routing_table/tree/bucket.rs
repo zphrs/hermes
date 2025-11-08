@@ -1,4 +1,5 @@
 use std::fmt::{Debug, from_fn};
+use std::time::{Duration, Instant};
 
 use ringbuffer::{ConstGenericRingBuffer, RingBuffer as _};
 
@@ -100,7 +101,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Bucket<Node, ID_LE
         &mut self,
         mut predicate: F,
     ) -> Vec<DistancePair<Node, ID_LEN>> {
-        let mut new_self = Self(Default::default());
+        let mut new_self = Self::new();
         let mut removed = Vec::new();
         for node in self.0.drain() {
             if (predicate)(&node) {
@@ -113,14 +114,15 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Bucket<Node, ID_LE
         *self = new_self;
         removed
     }
-
+    /// Removes all unreachable nodes in this bucket by pinging each node using
+    /// the provided handler.
     pub async fn remove_unreachable_nodes(
         &mut self,
         local_node: &Node,
         handler: &impl RequestHandler<Node, ID_LEN>,
     ) {
         // Ping all nodes concurrently and keep only reachable ones.
-        let mut new_self = Self(Default::default());
+        let mut new_self = Self::new();
         let mut futures: FuturesUnordered<_> = self
             .0
             .drain()

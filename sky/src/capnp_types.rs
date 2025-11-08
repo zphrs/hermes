@@ -1,6 +1,5 @@
 pub mod addr;
 mod id;
-use std::any::Any;
 
 use capnp::{message::HeapAllocator, traits::FromPointerBuilder};
 pub use id::Id;

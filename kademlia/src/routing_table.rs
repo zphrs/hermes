@@ -82,6 +82,10 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         self.tree.get_leaf(distance)
     }
 
+    pub fn leaves_iter(&self) -> Box<dyn Iterator<Item = &Leaf<Node, ID_LEN, BUCKET_SIZE>> + '_> {
+        self.tree.leaves_iter()
+    }
+
     #[cfg(test)]
     #[allow(unused)]
     pub(crate) fn sibling_list(&self) -> &Vec<DistancePair<Node, ID_LEN>> {
@@ -121,6 +125,11 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 
     pub fn sibling_list_pairs(&self) -> impl Iterator<Item = &DistancePair<Node, ID_LEN>> {
         self.nearest_siblings_list.iter()
+    }
+
+    pub(crate) fn mark_bucket_as_looked_up(&mut self, distance: &Distance<ID_LEN>) {
+        let leaf = self.get_leaf_mut(distance);
+        leaf.mark_as_looked_up();
     }
 
     pub async fn remove_unreachable_siblings_list_nodes(

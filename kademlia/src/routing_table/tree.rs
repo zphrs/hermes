@@ -202,6 +202,15 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         }
     }
 
+    pub fn leaves_iter(&self) -> Box<dyn Iterator<Item = &Leaf<Node, ID_LEN, BUCKET_SIZE>> + '_> {
+        match &self.branch_type {
+            BranchType::Split { left, right } => {
+                Box::new(right.leaves_iter().chain(left.leaves_iter()))
+            }
+            BranchType::Leaf(leaf) => Box::new(LeafIterator::new(leaf)),
+        }
+    }
+
     /// Iterates by joining recursively, iterating roughly from right (closest)
     /// to left (furthest)
     pub fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &mut DistancePair<Node, ID_LEN>> + '_> {
@@ -211,7 +220,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         }
     }
 
-    pub fn drain(&mut self) -> Box<dyn Iterator<Item = DistancePair<Node, ID_LEN>> + '_> {
+    fn drain(&mut self) -> Box<dyn Iterator<Item = DistancePair<Node, ID_LEN>> + '_> {
         match &mut self.branch_type {
             BranchType::Split { left, right } => Box::new(right.drain().chain(left.drain())),
             BranchType::Leaf(leaf) => Box::new(leaf.drain()),
@@ -250,6 +259,29 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         self.cached_len
             .store(len, std::sync::atomic::Ordering::Release);
         len
+    }
+}
+
+struct LeafIterator<'a, Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
+    leaf: &'a Leaf<Node, ID_LEN, BUCKET_SIZE>,
+    used: bool,
+}
+
+impl<'a, Node, const ID_LEN: usize, const BUCKET_SIZE: usize>
+    LeafIterator<'a, Node, ID_LEN, BUCKET_SIZE>
+{
+    fn new(leaf: &'a Leaf<Node, ID_LEN, BUCKET_SIZE>) -> Self {
+        Self { leaf, used: true }
+    }
+}
+
+impl<'a, Node, const ID_LEN: usize, const BUCKET_SIZE: usize> Iterator
+    for LeafIterator<'a, Node, ID_LEN, BUCKET_SIZE>
+{
+    type Item = &'a Leaf<Node, ID_LEN, BUCKET_SIZE>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        (!self.used).then_some(self.leaf)
     }
 }
 

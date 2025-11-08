@@ -1,7 +1,6 @@
-use std::{collections::HashSet, fmt::Debug, ops::Deref, sync::Arc};
+use std::{collections::HashSet, fmt::Debug, ops::Deref, sync::Arc, time::Duration};
 
 use futures::{prelude::*, stream::FuturesUnordered};
-use futures_time::{future::FutureExt, time::Duration};
 // sync is runtime agnostic;
 // see https://docs.rs/tokio/latest/tokio/sync/index.html#runtime-compatibility
 use tokio::sync::{RwLock, RwLockWriteGuard};
@@ -59,9 +58,39 @@ impl<
             local_node,
         }
     }
+
+    fn get_shifted_target_id(&self, shift_by: usize) -> Id<ID_LEN> {
+        let shifted_one: Distance<ID_LEN> = Distance::ONE << shift_by;
+
+        let next_bucket_addr = &shifted_one;
+        next_bucket_addr ^ self.local_addr()
+    }
+    /// refreshes all buckets which haven't been looked up within the past
+    /// [duration](Duration).
+    pub async fn refresh_stale_buckets(&self, duration: &Duration) {
+        let lock = self.routing_table.read().await;
+
+        FuturesUnordered::from_iter(
+            lock.leaves_iter()
+                .filter(|leaf| !leaf.looked_up_within(duration))
+                .filter_map(|leaf| leaf.iter().next().map(|pair| pair.distance()))
+                .map(|dist| async { self.refresh_bucket(dist) }),
+        )
+        .count()
+        .await;
+    }
+    /// Should be scheduled to run about every hour for any bucket which hasn't
+    /// been touched recently.
+    async fn refresh_bucket(&self, distance: &Distance<ID_LEN>) {
+        let lz_count = distance.leading_zeros();
+        let shift_by = ID_LEN * 8 - lz_count;
+        let target_id = self.get_shifted_target_id(shift_by);
+        self.node_lookup(&target_id).await;
+    }
     // 2.3: Refreshing means picking a random ID (just gonna do halfway) in the
     // bucket's range and performing a node search for that ID.
-    pub async fn refresh_buckets_after(&self, after: &Distance<ID_LEN>) {
+    // Run internally when joining network
+    async fn refresh_buckets_after(&self, after: &Distance<ID_LEN>) {
         // perform node_lookup on the bucket directly after the input distance.
         // could also simply do a left shift instead
         let lz_count = after.leading_zeros();
@@ -69,14 +98,17 @@ impl<
         let lookups = FuturesUnordered::new();
         trace!("refreshing {} buckets", lz_count);
         for shift_by in shift_by..(shift_by + lz_count) {
-            let shifted_one: Distance<ID_LEN> = Distance::ONE << shift_by;
-            let next_bucket_addr = after + &shifted_one;
             // reverse engineer distance to id
-            let target_id = &next_bucket_addr ^ self.local_addr();
-            lookups.push(async move { self.node_lookup(&target_id).await });
+            let target_id = self.get_shifted_target_id(shift_by);
+            lookups.push(async move {
+                self.node_lookup(&target_id).await;
+            });
         }
         // await all refreshes
-        let _ = lookups.count().timeout(Duration::from_secs(10)).await;
+        let _ = lookups
+            .count()
+            // .timeout(futures_time::time::Duration::from_secs(10))
+            .await;
     }
     // 2.3: To join the network, a node u must have a contact to an already
     // participating node w. u inserts w into the appropriate k-bucket. u then
@@ -87,7 +119,6 @@ impl<
     #[instrument(skip(self))]
     pub async fn join_network(&self) {
         self.node_lookup(self.local_node.id()).await;
-        // trace!("Post self lookup sib list", &self.local_nod)
         let closest_dist = {
             let routing_table = self.routing_table.read().await;
             routing_table
@@ -260,10 +291,12 @@ impl<
 
         Vec::from_iter(out.into_iter().map(DistancePair::into_node))
     }
-    #[instrument(level = "trace", skip_all, fields(%id))]
+    #[instrument(level = "trace", skip_all, fields(%id, dst=%id^self.local_addr()))]
     pub async fn node_lookup(&self, id: &Id<ID_LEN>) -> Vec<Node> {
         let mut closest_nodes: Vec<DistancePair<Node, ID_LEN>> = {
-            let lock = self.routing_table.read().await;
+            let mut lock = self.routing_table.write().await;
+            lock.mark_bucket_as_looked_up(&(self.local_node.id() ^ id));
+            let lock = lock.downgrade();
             self.find_node_with_lock(id, &lock)
                 .map(|pair| DistancePair::from((pair.node().clone(), id)))
                 .collect()
@@ -406,10 +439,7 @@ impl<
         target_id: &Id<ID_LEN>,
         k_closest: &'a RwLock<Vec<DistancePair<Node, ID_LEN>>>,
     ) -> Option<(RwLockWriteGuard<'a, Vec<DistancePair<Node, ID_LEN>>>, bool)> {
-        trace!(
-            "{:?} finding nearest nodes",
-            DistancePair::from((self.local_node.clone(), target_id))
-        );
+        trace!("finding nearest nodes");
         let closest_nodes = self
             .handler
             .find_node(&self.local_node, &node, target_id)
@@ -420,15 +450,17 @@ impl<
         let mut k_closest = k_closest.write().await;
         let init_len = k_closest.len();
 
+        let farthest_closest = k_closest[k_closest.len() - 1].distance().clone();
+
         let closest_nodes = closest_nodes
             .into_iter()
-            .map(|node| DistancePair::from((node, target_id)));
+            .map(|node| DistancePair::from((node, target_id)))
+            .filter(|pair| pair.distance() < &farthest_closest);
         k_closest.extend(closest_nodes);
         k_closest.sort();
         k_closest.dedup();
-        k_closest.truncate(BUCKET_SIZE);
-
         let out = k_closest.len() > init_len;
+        k_closest.truncate(BUCKET_SIZE);
 
         Some((k_closest, out))
     }
@@ -451,6 +483,7 @@ mod tests {
     use rand_distr::Distribution;
     use std::cmp::{max, min};
     use std::fmt::Debug;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{
         collections::{HashMap, HashSet},
         hash::{DefaultHasher, Hash, Hasher},
@@ -542,9 +575,9 @@ mod tests {
         async fn ping(&self, from: &Node, node: &Node) -> bool {
             // add random latency; since all call ping, this adds latency
             // to all calls
-            if SHOULD_DELAY_RPC.load(std::sync::atomic::Ordering::Acquire) {
+            if SHOULD_DELAY_RPC.load(Ordering::Acquire) {
                 let load_time = Duration::from_millis(rand::random_range(50..1100));
-                sleep(min(load_time, Duration::from_millis(1000))).await;
+                // sleep(min(load_time, Duration::from_millis(1000))).await;
                 if load_time > Duration::from_millis(1000) {
                     return false;
                 }
@@ -568,7 +601,7 @@ mod tests {
                 return vec![];
             }
 
-            TOTAL_RPCS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            TOTAL_RPCS.fetch_add(1, Ordering::Relaxed);
             let read_lock = HANDLER.read().await;
             let Some(manager) = read_lock.managers.get(to.id()) else {
                 return vec![];
@@ -588,6 +621,8 @@ mod tests {
         let exp_process = rand_distr::Exp::new(1_000_000.0).unwrap();
 
         const NODE_COUNT: usize = 1_000;
+
+        static NODES_INITED: AtomicUsize = AtomicUsize::new(0);
 
         for n in 0..NODE_COUNT {
             let node = Node::from(n.to_string());
@@ -624,19 +659,24 @@ mod tests {
                     .await;
                 trace!("fully setup node {n}");
 
+                NODES_INITED.fetch_add(1, Ordering::Relaxed);
+
                 let mut node_is_online = true;
                 let mut last_changed = Instant::now();
-                while SHOULD_KEEP_ROTATING.load(std::sync::atomic::Ordering::Acquire) {
-                    let dur = rand::random_range(1..10_000);
+                while SHOULD_KEEP_ROTATING.load(Ordering::Acquire) {
+                    let dur = rand::random_range(1..500);
                     sleep(Duration::from_millis(dur)).await;
+                    // my_manager
+                    //     .refresh_stale_buckets(&Duration::from_secs(1))
+                    //     .await;
 
-                    my_manager
-                        .join_network()
-                        .with_subscriber(NoSubscriber::new())
-                        .await;
+                    // my_manager
+                    //     .join_network()
+                    //     .with_subscriber(NoSubscriber::new())
+                    //     .await;
                 }
                 if false {
-                    while SHOULD_KEEP_ROTATING.load(std::sync::atomic::Ordering::Acquire) {
+                    while SHOULD_KEEP_ROTATING.load(Ordering::Acquire) {
                         let dur = max(
                             { exp_process.sample(&mut rand::rng()) as u64 } + 10_000,
                             100_000,
@@ -658,8 +698,7 @@ mod tests {
                             {
                                 let read_lock = HANDLER.read().await;
                                 let mut write_lock = read_lock.ping_cache.write().await;
-                                if !SHOULD_KEEP_ROTATING.load(std::sync::atomic::Ordering::Acquire)
-                                {
+                                if !SHOULD_KEEP_ROTATING.load(Ordering::Acquire) {
                                     break; // don't carry out this change, exit loop
                                 }
                                 write_lock
@@ -682,10 +721,14 @@ mod tests {
         // handler.add_node(main_node.clone());
         trace!("made list of nodes");
         let read_handler = write_handler.downgrade();
-        sleep(Duration::from_secs(30)).await;
+        // sleep(Duration::from_secs(60)).await;
+
+        while NODES_INITED.load(Ordering::Relaxed) < NODE_COUNT - 1 {
+            sleep(Duration::from_millis(500)).await;
+        }
 
         trace!("finished joining");
-        SHOULD_KEEP_ROTATING.store(false, std::sync::atomic::Ordering::Release);
+        SHOULD_KEEP_ROTATING.store(false, Ordering::Release);
 
         let online_nodes: Vec<_> = FuturesUnordered::from_iter(
             nodes
@@ -723,10 +766,11 @@ mod tests {
         let sorted_dist_nodes: Vec<_> = sorted_dist_nodes.into_iter().take(BUCKET_SIZE).collect();
 
         // start of rpc
-        SHOULD_DELAY_RPC.store(true, std::sync::atomic::Ordering::Release);
+        SHOULD_DELAY_RPC.store(true, Ordering::Release);
         trace!("created all handlers");
         let manager =
             read_handler.manager_of(online_nodes[rand::random_range(0..online_nodes.len())].id());
+        manager.join_network().await;
         trace!("{:#?}", manager.routing_table.read().await.everything());
 
         let rpc_start = Instant::now();

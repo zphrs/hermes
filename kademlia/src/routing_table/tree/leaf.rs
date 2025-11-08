@@ -1,6 +1,9 @@
 use crate::id::DistancePair;
 
-use std::hint::cold_path;
+use std::{
+    hint::cold_path,
+    time::{Duration, Instant},
+};
 
 use super::Tree;
 
@@ -9,6 +12,7 @@ pub use super::bucket::Bucket;
 pub struct Leaf<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     bucket: Bucket<Node, ID_LEN, BUCKET_SIZE>,
     on_left: bool,
+    last_looked_up: Instant,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -22,7 +26,16 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
         Self {
             on_left,
             bucket: Bucket::new(),
+            last_looked_up: Instant::now(),
         }
+    }
+
+    pub fn looked_up_within(&self, duration: &Duration) -> bool {
+        Instant::now().duration_since(self.last_looked_up) < *duration
+    }
+
+    pub(crate) fn mark_as_looked_up(&mut self) {
+        self.last_looked_up = Instant::now()
     }
     pub(crate) fn split(&mut self, depth: usize) -> Tree<Node, ID_LEN, BUCKET_SIZE> {
         // split bucket based on ids into a new branch
@@ -94,7 +107,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
         self.bucket.iter_mut()
     }
 
-    pub(crate) fn drain(&mut self) -> impl Iterator<Item = DistancePair<Node, ID_LEN>> {
+    pub(super) fn drain(&mut self) -> impl Iterator<Item = DistancePair<Node, ID_LEN>> {
         self.bucket.drain()
     }
 

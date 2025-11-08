@@ -50,6 +50,23 @@ impl<const N: usize> Add for &Distance<N> {
     }
 }
 
+impl<const N: usize> Add<&[u8]> for &Distance<N> {
+    type Output = Distance<N>;
+
+    fn add(self, rhs: &[u8]) -> Self::Output {
+        let mut out = [0u8; N];
+        let mut carry = 0u8;
+
+        for i in (0..N).rev() {
+            let sum = self.0[i] as u16 + *rhs.get(i).unwrap_or(&0) as u16 + carry as u16;
+            out[i] = sum as u8;
+            carry = (sum >> 8) as u8;
+        }
+
+        Distance(out)
+    }
+}
+
 impl<const N: usize> BitXor for &Id<N> {
     type Output = Distance<N>;
 
