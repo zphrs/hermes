@@ -126,9 +126,12 @@ impl<
                 .min()
                 .or_else(|| routing_table.nearest_in_sibling_list(&Distance::ZERO).min())
                 .map(|v| v.distance())
-                .unwrap_or(&Distance::ZERO)
+                .unwrap_or(&Distance::MAX)
                 .clone()
         };
+        if closest_dist == Distance::MAX {
+            return;
+        }
 
         self.refresh_buckets_after(&closest_dist).await;
     }
@@ -577,7 +580,7 @@ mod tests {
             // to all calls
             if SHOULD_DELAY_RPC.load(Ordering::Acquire) {
                 let load_time = Duration::from_millis(rand::random_range(50..1100));
-                // sleep(min(load_time, Duration::from_millis(1000))).await;
+                sleep(min(load_time, Duration::from_millis(1000))).await;
                 if load_time > Duration::from_millis(1000) {
                     return false;
                 }
@@ -643,7 +646,8 @@ mod tests {
 
             manager
                 .add_nodes_without_removing(
-                    (0..10).map(|_| Node::from(random_range(1..NODE_COUNT).to_string())),
+                    (0..NODE_COUNT / 100)
+                        .map(|_| Node::from(random_range(1..NODE_COUNT).to_string())),
                 )
                 .await;
             trace!("inited node {n}");
@@ -651,6 +655,7 @@ mod tests {
                 // sleep(Duration::from_secs(5)).await;
 
                 let handler = HANDLER.read().await;
+                sleep(Duration::from_millis(rand::random_range(0..15_000))).await;
                 let my_manager = handler.manager_of(node.id());
                 trace!("setting up node {n}");
                 my_manager
