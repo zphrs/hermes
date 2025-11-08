@@ -82,11 +82,8 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
     }
 
     pub fn maybe_merge_recursively(&mut self) {
-        match &mut self.branch_type {
-            BranchType::Split { right, .. } => {
-                right.maybe_merge_recursively();
-            }
-            _ => {}
+        if let BranchType::Split { right, .. } = &mut self.branch_type {
+            right.maybe_merge_recursively();
         }
         self.maybe_merge();
     }

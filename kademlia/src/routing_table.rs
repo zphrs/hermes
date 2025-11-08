@@ -1,12 +1,14 @@
 mod tree;
 use std::cmp::min;
 
+use std::collections::HashSet;
 use std::fmt::Debug;
 use thiserror::Error;
 
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 
+use crate::BUCKET_SIZE;
 use crate::routing_table::tree::LeafMut;
 use crate::{
     HasId, RequestHandler,
@@ -139,13 +141,32 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         handler: &impl RequestHandler<Node, ID_LEN>,
     ) {
         // Ping all nodes concurrently and collect the ones that respond.
-        let futures = FuturesUnordered::from_iter(self.nearest_siblings_list.drain(0..).map(
-            |pair| async move { handler.ping(local_node, pair.node()).await.then_some(pair) },
-        ));
+        let mut to_remove_set = HashSet::new();
+        {
+            let to_remove = FuturesUnordered::from_iter(self.nearest_siblings_list.iter().map(
+                |pair| async move {
+                    (!handler.ping(local_node, pair.node()).await)
+                        .then_some(pair.node().id().clone())
+                },
+            ));
 
-        let new_list: Vec<_> = futures.filter_map(async |v| v).collect().await;
+            // once at least half have responded, continue.
+            let mut chunks = to_remove.ready_chunks(BUCKET_SIZE);
+            let mut total_pinged = 0;
+            while let Some(chunk) = chunks.next().await {
+                total_pinged += chunk.len();
+                to_remove_set.extend(chunk.into_iter().filter_map(move |v| v));
+                if total_pinged >= BUCKET_SIZE * 3 / 4 {
+                    break;
+                }
+            }
+        }
 
-        self.nearest_siblings_list = new_list;
+        self.nearest_siblings_list = self
+            .nearest_siblings_list
+            .drain(..)
+            .filter(|pair| !to_remove_set.contains(pair.node().id()))
+            .collect();
     }
 
     pub fn nearest_in_sibling_list(

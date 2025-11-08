@@ -67,20 +67,18 @@ impl RequestHandler<Node, ID_LEN> for RpcAdapter {
         self.num_rpcs.fetch_add(1, Ordering::Relaxed);
         tracing::debug!(num_rpcs = self.num_rpcs.load(Ordering::Relaxed));
         // tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let alive = self.network.manager(to).is_some();
-        alive
+        self.network.manager(to).is_some()
     }
 
     #[tracing::instrument(skip_all, fields(from=from.addr))]
     async fn find_node(&self, from: &Node, to: &Node, id: &Id<ID_LEN>) -> Vec<Node> {
         self.num_rpcs.fetch_add(1, Ordering::Relaxed);
         tracing::debug!(num_rpcs = self.num_rpcs.load(Ordering::Relaxed));
-        let Some(manager) = self.network.manager(&to) else {
+        let Some(manager) = self.network.manager(to) else {
             return vec![];
         };
         // tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let nearest_nodes = manager.find_node(from.clone(), &id).await;
-        nearest_nodes
+        manager.find_node(from.clone(), id).await
     }
 }
 
