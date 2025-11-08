@@ -1,4 +1,4 @@
-use tracing::{instrument, trace};
+use tracing::{trace};
 
 use crate::id::DistancePair;
 

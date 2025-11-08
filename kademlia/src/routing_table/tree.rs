@@ -1,4 +1,3 @@
-use std::fmt::Pointer;
 use std::ops::{Deref, DerefMut, Index};
 use std::sync::atomic::AtomicUsize;
 

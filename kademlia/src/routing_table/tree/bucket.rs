@@ -1,5 +1,4 @@
 use std::fmt::{Debug, from_fn};
-use std::time::{Duration, Instant};
 
 use ringbuffer::{ConstGenericRingBuffer, RingBuffer as _};
 
