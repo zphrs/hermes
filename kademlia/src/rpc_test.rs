@@ -296,6 +296,15 @@ async fn find_peer_large_network() {
     .await;
 }
 
+fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
+    nodes
+        .iter()
+        .filter(|&n| n.id() != target.id())
+        .min_by_key(|n| n.id() ^ target.id())
+        .unwrap()
+        .clone()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
@@ -317,12 +326,32 @@ async fn find_nonexistent_peer_returns_closest() {
     for _ in 0..num_trials {
         let target_node = a.new_node();
 
-        let next_closest_node = nodes
-            .iter()
-            .filter(|&n| n.id() != target_node.id())
-            .min_by_key(|n| n.id() ^ target_node.id())
-            .unwrap()
-            .clone();
+        let next_closest_node = find_closest_node(&nodes, &target_node);
+        let result = my_manager.node_lookup(target_node.id()).await;
+        assert_ne!(result.len(), 0);
+        assert_eq!(result[0], next_closest_node);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[traced_test]
+async fn find_nonexistent_peer_small_network() {
+    let net = NetworkState::default();
+    let a = NodeAllocator::default();
+
+    let bootstrap_node = a.new_node();
+    bootstrap_and_join(&net.add_node(bootstrap_node.clone()), []).await;
+
+    let my_node = a.new_node();
+    let my_manager = net.add_node(my_node.clone());
+    bootstrap_and_join(&my_manager, vec![bootstrap_node.clone()]).await;
+
+    let nodes = net.all_nodes();
+
+    for _ in 0..10 {
+        let target_node = a.new_node();
+
+        let next_closest_node = find_closest_node(&nodes, &target_node);
         let result = my_manager.node_lookup(target_node.id()).await;
         assert_ne!(result.len(), 0);
         assert_eq!(result[0], next_closest_node);
