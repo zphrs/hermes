@@ -156,7 +156,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
             while let Some(chunk) = chunks.next().await {
                 total_pinged += chunk.len();
                 to_remove_set.extend(chunk.into_iter().filter_map(move |v| v));
-                if total_pinged >= BUCKET_SIZE * 3 / 4 {
+                if total_pinged >= BUCKET_SIZE {
                     break;
                 }
             }
