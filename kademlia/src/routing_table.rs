@@ -7,6 +7,7 @@ use thiserror::Error;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 
+use crate::routing_table::tree::LeafMut;
 use crate::{
     HasId, RequestHandler,
     id::{self, Distance, DistancePair},
@@ -43,7 +44,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 {
     fn default() -> Self {
         Self {
-            tree: Tree::new(0),
+            tree: Tree::new_right(0),
             nearest_siblings_list: Vec::with_capacity(5 * BUCKET_SIZE + 1),
         }
     }
@@ -54,7 +55,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 {
     pub fn new() -> Self {
         Self {
-            tree: Tree::new(0),
+            tree: Tree::new_right(0),
             nearest_siblings_list: Vec::with_capacity(5 * BUCKET_SIZE + 1),
         }
     }
@@ -63,10 +64,10 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     /// Since kademlia recommends potentially pinging each node before inserting
     /// into a specific leaf (when the leaf is full), insertions should be done
     /// directly on the returned leaf.
-    pub fn get_leaf_mut(
-        &mut self,
+    pub fn get_leaf_mut<'a>(
+        &'a mut self,
         distance: &Distance<ID_LEN>,
-    ) -> &mut Leaf<Node, ID_LEN, BUCKET_SIZE>
+    ) -> LeafMut<'a, Node, ID_LEN, BUCKET_SIZE>
     where
         Node: HasId<ID_LEN>,
     {
@@ -128,7 +129,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     }
 
     pub(crate) fn mark_bucket_as_looked_up(&mut self, distance: &Distance<ID_LEN>) {
-        let leaf = self.get_leaf_mut(distance);
+        let mut leaf = self.get_leaf_mut(distance);
         leaf.mark_as_looked_up();
     }
 

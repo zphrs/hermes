@@ -148,7 +148,7 @@ mod tests {
     use expect_test::expect;
     #[test]
     pub fn test_bucket() {
-        let mut bucket = Bucket::<Node, 256, 2>::new();
+        let mut bucket = Bucket::<Node, 32, 2>::new();
         let local_node = Node::new(SocketAddr::from_str("0.0.0.1:8080").unwrap());
         let n1 = Node::new(SocketAddr::from_str("127.0.0.1:8080").unwrap());
         let n1_pair: DistancePair<_, _> = (n1.clone(), local_node.id()).into();

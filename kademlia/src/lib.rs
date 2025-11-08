@@ -4,6 +4,7 @@
 #![feature(iter_array_chunks)]
 #![feature(cold_path)]
 #![feature(trait_alias)]
+#![feature(duration_millis_float)]
 
 mod id;
 pub mod prelude;
@@ -36,11 +37,11 @@ mod node {
     #[derive(Clone)]
     pub struct Node {
         addr: SocketAddr,
-        id: Id<256>,
+        id: Id<32>,
     }
 
-    impl HasId<256> for Node {
-        fn id(&self) -> &Id<256> {
+    impl HasId<32> for Node {
+        fn id(&self) -> &Id<32> {
             &self.id
         }
     }

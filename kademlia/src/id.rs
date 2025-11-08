@@ -50,6 +50,8 @@ impl<const N: usize> Id<N> {
     /// less long than this size
     pub const BITS: usize = N * 8;
 
+    pub const ZERO: Id<N> = Self([0u8; N]);
+
     pub fn bytes(&self) -> &[u8] {
         &self.0
     }

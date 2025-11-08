@@ -1,3 +1,5 @@
+use tracing::{instrument, trace};
+
 use crate::id::DistancePair;
 
 use std::{
@@ -39,8 +41,8 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
     }
     pub(crate) fn split(&mut self, depth: usize) -> Tree<Node, ID_LEN, BUCKET_SIZE> {
         // split bucket based on ids into a new branch
-        let left = Box::new(Tree::new(depth + 1));
-        let right = Box::new(Tree::new(depth + 1));
+        let left = Box::new(Tree::new_left(depth + 1));
+        let right = Box::new(Tree::new_right(depth + 1));
         let mut split = Tree::from_split(left, right, depth);
         // recursively re-insert all values formerly in this
         // leaf node below this leaf node
@@ -50,8 +52,8 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
             // Means that if another split is needed on a right node created
             // below the newly created split node then another split will
             // occur.
-            let leaf = split.get_leaf_mut(value.distance());
-            if let Err(Error::FullLeaf) = leaf.try_insert(value) {
+            let mut leaf = split.get_leaf_mut(value.distance());
+            if let Err(Error::FullLeaf) = (*leaf).try_insert(value) {
                 cold_path();
                 unreachable!();
             }
@@ -64,6 +66,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
     pub(crate) fn maybe_split(&mut self, depth: usize) -> Option<Tree<Node, ID_LEN, BUCKET_SIZE>> {
         if self.bucket.is_full() && !self.on_left {
             cold_path();
+            trace!("splitting");
             Some(self.split(depth))
         } else {
             None
