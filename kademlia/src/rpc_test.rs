@@ -90,6 +90,7 @@ type RpcManager = crate::RpcManager<Node, RpcAdapter, ID_LEN, BUCKET_SIZE>;
 
 struct ManagerState {
     manager: RpcManager,
+    connected: bool,
 }
 
 #[derive(Clone, Default)]
@@ -100,7 +101,14 @@ struct NetworkState {
 impl NetworkState {
     fn manager(&self, node: &Node) -> Option<RpcManager> {
         let nodes = self.nodes.read().unwrap();
-        nodes.get(&node.addr).map(|s| &s.manager).cloned()
+        let Some(ManagerState {
+            manager,
+            connected: true,
+        }) = nodes.get(&node.addr)
+        else {
+            return None;
+        };
+        Some(manager.clone())
     }
 
     fn add_node(&self, node: Node) -> RpcManager {
@@ -111,10 +119,28 @@ impl NetworkState {
         let manager = RpcManager::new(adapter, node.clone());
         let state = ManagerState {
             manager: manager.clone(),
+            connected: true,
         };
         let mut nodes = self.nodes.write().unwrap();
         nodes.insert(node.addr.to_string(), state);
         manager
+    }
+
+    #[allow(dead_code)]
+    fn set_connected(&self, node: &Node, connected: bool) {
+        let mut nodes = self.nodes.write().unwrap();
+        if let Some(state) = nodes.get_mut(&node.addr) {
+            state.connected = connected;
+        }
+    }
+
+    fn all_nodes(&self) -> Vec<Node> {
+        self.nodes
+            .read()
+            .unwrap()
+            .keys()
+            .map(|addr| Node::new(addr))
+            .collect()
     }
 }
 
@@ -176,7 +202,7 @@ async fn find_exact_peer_boostrap_self() {
     let peer_manager = net.add_node(peer_node.clone());
     bootstrap_and_join(&peer_manager, vec![my_node.clone()]).await;
 
-    let result = my_manager.find_node(my_node.clone(), peer_node.id()).await;
+    let result = my_manager.node_lookup(peer_node.id()).await;
     assert_ne!(result.len(), 0);
     assert_eq!(result[0], peer_node);
 
@@ -186,11 +212,16 @@ async fn find_exact_peer_boostrap_self() {
 }
 
 async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) -> Vec<Node> {
+    let mut nodes = Vec::new();
+
     let bootstrap_node = a.new_node();
     bootstrap_and_join(&net.add_node(bootstrap_node.clone()), []).await;
+    nodes.push(bootstrap_node.clone());
+
     let bootstrap_nodes: Vec<_> = iter::repeat_with(|| a.new_node())
         .take((size as f64).log2() as usize + 1)
         .collect();
+    nodes.extend(bootstrap_nodes.iter().cloned());
     let bootstrap_nodes = Arc::new(bootstrap_nodes);
     future::join_all(bootstrap_nodes.iter().cloned().map(async |node| {
         let manager = net.add_node(node.clone());
@@ -216,7 +247,7 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
             }
         });
     }
-    let nodes = tasks.join_all().await;
+    nodes.extend(tasks.join_all().await);
     nodes
 }
 
@@ -263,4 +294,37 @@ async fn find_peer_large_network() {
         .take(num_trials),
     )
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[traced_test]
+async fn find_nonexistent_peer_returns_closest() {
+    let num_nodes = 100;
+    let num_trials = 20;
+
+    let net = NetworkState::default();
+    let a = NodeAllocator::default();
+
+    let nodes = create_large_network(net.clone(), a.clone(), num_nodes).await;
+
+    let my_node = a.new_node();
+    let my_manager = net.add_node(my_node.clone());
+    bootstrap_and_join(&my_manager, vec![nodes[0].clone()]).await;
+
+    let nodes = net.all_nodes();
+
+    // Experiment: arbitrarily generate a node and try to find it
+    for _ in 0..num_trials {
+        let target_node = a.new_node();
+
+        let next_closest_node = nodes
+            .iter()
+            .filter(|&n| n.id() != target_node.id())
+            .min_by_key(|n| n.id() ^ target_node.id())
+            .unwrap()
+            .clone();
+        let result = my_manager.node_lookup(target_node.id()).await;
+        assert_ne!(result.len(), 0);
+        assert_eq!(result[0], next_closest_node);
+    }
 }
