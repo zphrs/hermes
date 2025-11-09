@@ -263,25 +263,12 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
     bootstrap_and_join(&net.add_node(bootstrap_node.clone()), []).await;
     nodes.push(bootstrap_node.clone());
 
-    let bootstrap_nodes: Vec<_> = iter::repeat_with(|| a.new_node())
-        .take((size as f64).log2() as usize + 1)
-        .collect();
-    nodes.extend(bootstrap_nodes.iter().cloned());
-    let bootstrap_nodes = Arc::new(bootstrap_nodes);
-    future::join_all(bootstrap_nodes.iter().cloned().map(async |node| {
-        let manager = net.add_node(node.clone());
-        bootstrap_and_join(&manager, vec![bootstrap_node.clone()])
-            .with_subscriber(NoSubscriber::new())
-            .await;
-    }))
-    .await;
-
     let mut tasks = tokio::task::JoinSet::new();
-    for i in 0..size {
+    for _ in 0..size {
         tasks.spawn({
             let net = net.clone();
             let a = a.clone();
-            let bootstrap_node = bootstrap_nodes[i % bootstrap_nodes.len()].clone();
+            let bootstrap_node = bootstrap_node.clone();
             async move {
                 let node = a.new_node();
                 let manager = net.add_node(node.clone());
