@@ -18,7 +18,7 @@ use tracing_test::traced_test;
 use crate::{HasId, Id, RequestHandler};
 
 const ID_LEN: usize = 32;
-const BUCKET_SIZE: usize = 20;
+const BUCKET_SIZE: usize = 5;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Node {
@@ -452,15 +452,11 @@ async fn load_network(test_name: &str, num_nodes: usize) -> NetworkState {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-// #[traced_test]
-async fn load_network_from_file() {
-    let net = load_network("500_nodes", 500).await;
+#[traced_test]
+async fn large_network_find_exact_node() {
+    let net = load_network("10000_nodes", 10000).await;
 
     let nodes = net.all_nodes();
-
-    // Print routing table for comparison
-    let m = net.manager(&nodes[0]).unwrap().clone();
-    println!("{:#?}", m.routing_table.read().await);
 
     let my_node = Node::new("my-node");
     let my_manager = net.add_node(my_node.clone());
