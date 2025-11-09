@@ -1,4 +1,4 @@
-use tracing::trace;
+use tracing::{trace};
 
 use crate::id::DistancePair;
 
@@ -11,7 +11,6 @@ use super::Tree;
 
 pub use super::bucket::Bucket;
 
-#[derive(Debug)]
 pub struct Leaf<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     bucket: Bucket<Node, ID_LEN, BUCKET_SIZE>,
     on_left: bool,

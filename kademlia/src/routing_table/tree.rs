@@ -12,7 +12,6 @@ use crate::id::{Distance, DistancePair};
 //     depth: usize,
 // }
 
-#[derive(Debug)]
 pub(crate) struct Tree<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     branch_type: BranchType<Node, ID_LEN, BUCKET_SIZE>,
     // actual cached len might be zero, but recreating a zero length value
@@ -21,7 +20,6 @@ pub(crate) struct Tree<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     depth: usize,
 }
 
-#[derive(Debug)]
 pub(crate) enum BranchType<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     Split {
         left: Box<Tree<Node, ID_LEN, BUCKET_SIZE>>,
