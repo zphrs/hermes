@@ -8,21 +8,41 @@ use std::{
     },
 };
 
-use futures::future;
+use futures::{StreamExt as _, future};
 use rand::seq::IndexedRandom as _;
 use sha2::Digest as _;
-use tracing::{instrument::WithSubscriber as _, subscriber::NoSubscriber};
+use tokio_stream::wrappers::ReadDirStream;
+use tracing::{debug, instrument::WithSubscriber as _, subscriber::NoSubscriber};
 use tracing_test::traced_test;
 
 use crate::{HasId, Id, RequestHandler};
 
-const ID_LEN: usize = 256;
+const ID_LEN: usize = 32;
 const BUCKET_SIZE: usize = 20;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Node {
     addr: String,
     id: Id<ID_LEN>,
+}
+
+impl<'de> serde::Deserialize<'de> for Node {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let addr = String::deserialize(deserializer)?;
+        Ok(Self::new(addr))
+    }
+}
+
+impl serde::Serialize for Node {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.addr.serialize(serializer)
+    }
 }
 
 impl Node {
@@ -52,10 +72,7 @@ impl HasId<ID_LEN> for Node {
 
 impl Debug for Node {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Node")
-            .field(&self.addr)
-            .field(&format!("{}", self.id))
-            .finish()
+        write!(f, "Node({:?}, {})", self.addr, self.id)
     }
 }
 
@@ -141,6 +158,34 @@ impl NetworkState {
             .keys()
             .map(|addr| Node::new(addr))
             .collect()
+    }
+
+    async fn to_serializable(&self) -> Vec<(Node, Vec<Node>)> {
+        future::join_all(
+            self.nodes
+                .read()
+                .unwrap()
+                .values()
+                .map(|state| state.manager.to_parts()),
+        )
+        .await
+    }
+
+    async fn load_data(&self, data: Vec<(Node, Vec<Node>)>) {
+        for (node, peers) in data {
+            let addr = node.addr.clone();
+            let handler = RpcAdapter {
+                network: self.clone(),
+                num_rpcs: Arc::new(AtomicUsize::new(0)),
+            };
+            let manager = RpcManager::from_parts_unchecked(handler, node, peers);
+            let state = ManagerState {
+                manager: manager.clone(),
+                connected: true,
+            };
+            let mut nodes = self.nodes.write().unwrap();
+            nodes.insert(addr.to_string(), state);
+        }
     }
 }
 
@@ -356,4 +401,94 @@ async fn find_nonexistent_peer_small_network() {
         assert_ne!(result.len(), 0);
         assert_eq!(result[0], next_closest_node);
     }
+}
+
+fn network_files_dir(test_name: &str, num_nodes: usize) -> String {
+    format!(
+        "{}/target/kademlia-nets/{test_name}-{num_nodes}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+async fn save_network(net: &NetworkState, test_name: &str, num_nodes: usize) {
+    let dir = network_files_dir(test_name, num_nodes);
+    debug!(path = dir, "saving network to disk");
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    let data = net.to_serializable().await;
+    let mut tasks = tokio::task::JoinSet::new();
+    for entry in data {
+        let file_path = format!("{dir}/{}", entry.0.addr);
+        tasks.spawn(async move {
+            let data = postcard::to_stdvec(&entry).unwrap();
+            tokio::fs::write(file_path, data).await.unwrap();
+        });
+    }
+    tasks.join_all().await;
+}
+
+#[tracing::instrument]
+async fn load_network(test_name: &str, num_nodes: usize) -> NetworkState {
+    let dir = network_files_dir(test_name, num_nodes);
+
+    if !tokio::fs::try_exists(&dir).await.unwrap() {
+        debug!("network dir not found");
+
+        let net = NetworkState::default();
+        let a = NodeAllocator::default();
+        create_large_network(net.clone(), a.clone(), num_nodes)
+            .with_subscriber(NoSubscriber::new())
+            .await;
+        save_network(&net, test_name, num_nodes).await;
+
+        return net;
+    }
+
+    debug!("loading network from disk");
+
+    let net = NetworkState::default();
+
+    let mut read_dir = ReadDirStream::new(tokio::fs::read_dir(&dir).await.unwrap());
+    let mut tasks = tokio::task::JoinSet::new();
+    while let Some(entry) = read_dir.next().await {
+        let path = entry.unwrap().path();
+        tasks.spawn(async move {
+            let data = tokio::fs::read(path).await.unwrap();
+            let entry: (Node, Vec<Node>) = postcard::from_bytes(&data).unwrap();
+            entry
+        });
+    }
+
+    let data = tasks.join_all().await;
+    net.load_data(data).await;
+
+    net
+}
+
+#[tokio::test(flavor = "multi_thread")]
+// #[traced_test]
+async fn load_network_from_file() {
+    let net = load_network("100_nodes", 100).await;
+
+    let nodes = net.all_nodes();
+
+    // Print routing table for comparison
+    let m = net.manager(&nodes[0]).unwrap().clone();
+    println!("{:#?}", m.routing_table.read().await);
+
+    let my_node = Node::new("my-node");
+    let my_manager = net.add_node(my_node.clone());
+    bootstrap_and_join(&my_manager, vec![nodes[0].clone()])
+        .with_subscriber(NoSubscriber::new())
+        .await;
+
+    future::join_all(
+        iter::repeat_with(async || {
+            let target_node = nodes.choose(&mut rand::rng()).unwrap().clone();
+            let result = my_manager.node_lookup(target_node.id()).await;
+            assert_ne!(result.len(), 0);
+            assert_eq!(result[0], target_node);
+        })
+        .take(10),
+    )
+    .await;
 }
