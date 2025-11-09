@@ -22,7 +22,7 @@ pub struct RpcManager<
     const BUCKET_SIZE: usize,
 > {
     handler: Handler,
-    routing_table: Arc<RwLock<RoutingTable<Node, ID_LEN, BUCKET_SIZE>>>,
+    pub(crate) routing_table: Arc<RwLock<RoutingTable<Node, ID_LEN, BUCKET_SIZE>>>,
     local_node: Node,
 }
 
@@ -506,6 +506,38 @@ impl<
     ) -> Box<dyn Iterator<Item = &'a DistancePair<Node, ID_LEN>> + 'a> {
         let dist = self.local_addr().xor_distance(id);
         lock.find_node(&dist)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn to_parts(&self) -> (Node, Vec<Node>) {
+        (
+            self.local_node.clone(),
+            self.routing_table
+                .read()
+                .await
+                .everything()
+                .into_iter()
+                .map(|pair| pair.into_node())
+                .collect(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_parts_unchecked(
+        handler: Handler,
+        local_node: Node,
+        nodes: impl IntoIterator<Item = Node>,
+    ) -> Self {
+        let mut table = RoutingTable::new();
+        for node in nodes {
+            let pair = DistancePair::from_parts((node.id() ^ local_node.id(), node));
+            let _ = table.get_leaf_mut(pair.distance()).try_insert(pair);
+        }
+        Self {
+            handler,
+            routing_table: Arc::new(RwLock::new(table)),
+            local_node,
+        }
     }
 }
 
