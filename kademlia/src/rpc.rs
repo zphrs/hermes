@@ -12,7 +12,7 @@ use crate::{
     traits::RequestHandler,
 };
 
-const ALPHA: usize = 5;
+const ALPHA: usize = 3;
 
 /// key is assumed to be an Id<ID_LEN>
 pub struct RpcManager<
@@ -619,7 +619,7 @@ mod tests {
         #[instrument(level = "trace", skip(self))]
         async fn ping(&self, from: &Node, node: &Node) -> bool {
             static EXP_PROCESS: LazyLock<rand_distr::Exp<f64>> =
-                LazyLock::new(|| rand_distr::Exp::new(750.0).unwrap());
+                LazyLock::new(|| rand_distr::Exp::new(1.0 / 750.0).unwrap());
 
             // add random latency; since all call ping, this adds latency
             // to all calls
@@ -632,24 +632,25 @@ mod tests {
                 cache.1
             };
 
-            if SHOULD_DELAY_RPC.load(Ordering::Acquire) {
-                if self.cache.read().await.contains(node) {
-                    return out;
-                } else {
-                    self.cache.write().await.insert(node.clone());
-                }
-                let delay = if out {
-                    EXP_PROCESS.sample(&mut rand::rng()) as u64 + 50
-                } else {
-                    1000
-                };
-
-                let load_time = Duration::from_millis(min(delay, 1000));
-
-                sleep(load_time).await;
-                return delay < 1000;
+            if self.cache.read().await.contains(node) {
+                return out;
+            } else {
+                self.cache.write().await.insert(node.clone());
             }
-            return out;
+            let delay = if out {
+                EXP_PROCESS.sample(&mut rand::rng()) as u64 + 50
+            } else {
+                1000
+            };
+
+            trace!(delay);
+
+            let load_time = Duration::from_millis(min(delay, 1000));
+
+            if SHOULD_DELAY_RPC.load(Ordering::Acquire) {
+                sleep(load_time).await;
+            }
+            out && delay < 1000
         }
         #[instrument(level = "trace", skip(self))]
         async fn find_node(
@@ -726,7 +727,7 @@ mod tests {
                 let mut last_changed = Instant::now();
 
                 while SHOULD_KEEP_ROTATING.load(Ordering::Acquire) {
-                    sleep(Duration::from_millis(rand::random_range(5_000..30_000))).await;
+                    sleep(Duration::from_millis(rand::random_range(5_000..20_000))).await;
                     if NODES_INITED.load(Ordering::Relaxed) < NODE_COUNT - 1 {
                         continue;
                     }
@@ -735,9 +736,9 @@ mod tests {
                     // otherwise, update cache
 
                     let chance_of_changing_online_status = if node_is_online {
-                        0.5 + 0.5 * (1. - 1. / (0.01 * (dur_since_change) + 1.))
+                        0.5 + 0.5 * (1. - 1. / (0.001 * (dur_since_change) + 1.))
                     } else {
-                        0.5 + 0.5 * (1. - 1. / (0.01 * (dur_since_change) + 1.))
+                        0.5 + 0.5 * (1. - 1. / (0.001 * (dur_since_change) + 1.))
                     };
                     let changed_status = rand::random_bool(chance_of_changing_online_status);
                     if changed_status {
@@ -787,7 +788,7 @@ mod tests {
         }
 
         trace!("finished joining");
-        sleep(Duration::from_secs(60)).await;
+        sleep(Duration::from_secs(40)).await;
 
         SHOULD_KEEP_ROTATING.store(false, Ordering::Release);
         trace!("stopping rotating");
