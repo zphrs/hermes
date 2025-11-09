@@ -492,3 +492,33 @@ async fn load_network_from_file() {
     )
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn different_routing_table() {
+    let net = NetworkState::default();
+    let a = NodeAllocator::default();
+    create_large_network(net.clone(), a.clone(), 100).await;
+
+    std::fs::write(
+        "./a.log",
+        format!(
+            "{:#?}",
+            net.manager(&net.all_nodes()[0]).unwrap().routing_table
+        ),
+    )
+    .unwrap();
+
+    let data = net.to_serializable().await;
+
+    let net = NetworkState::default();
+    net.load_data(data).await;
+
+    std::fs::write(
+        "./b.log",
+        format!(
+            "{:#?}",
+            net.manager(&net.all_nodes()[0]).unwrap().routing_table
+        ),
+    )
+    .unwrap();
+}
