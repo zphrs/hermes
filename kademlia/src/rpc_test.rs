@@ -178,7 +178,7 @@ impl NetworkState {
                 network: self.clone(),
                 num_rpcs: Arc::new(AtomicUsize::new(0)),
             };
-            let manager = RpcManager::from_parts_unchecked(handler, node, peers);
+            let manager = RpcManager::from_parts_unchecked(handler, node, peers).await;
             let state = ManagerState {
                 manager: manager.clone(),
                 connected: true,
@@ -467,7 +467,7 @@ async fn load_network(test_name: &str, num_nodes: usize) -> NetworkState {
 #[tokio::test(flavor = "multi_thread")]
 // #[traced_test]
 async fn load_network_from_file() {
-    let net = load_network("100_nodes", 100).await;
+    let net = load_network("500_nodes", 500).await;
 
     let nodes = net.all_nodes();
 

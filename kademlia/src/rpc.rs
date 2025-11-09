@@ -523,21 +523,14 @@ impl<
     }
 
     #[cfg(test)]
-    pub(crate) fn from_parts_unchecked(
+    pub(crate) async fn from_parts_unchecked(
         handler: Handler,
         local_node: Node,
         nodes: impl IntoIterator<Item = Node>,
     ) -> Self {
-        let mut table = RoutingTable::new();
-        for node in nodes {
-            let pair = DistancePair::from_parts((node.id() ^ local_node.id(), node));
-            let _ = table.get_leaf_mut(pair.distance()).try_insert(pair);
-        }
-        Self {
-            handler,
-            routing_table: Arc::new(RwLock::new(table)),
-            local_node,
-        }
+        let manager = Self::new(handler, local_node);
+        manager.add_nodes_without_removing(nodes).await;
+        manager
     }
 }
 
