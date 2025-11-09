@@ -10,7 +10,7 @@ pub struct Bucket<Node, const ID_LEN: usize, const BUCKET_SIZE: usize>(
     ConstGenericRingBuffer<DistancePair<Node, ID_LEN>, BUCKET_SIZE>,
 );
 
-impl<Node: Debug + Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Debug
+impl<Node: Debug, const ID_LEN: usize, const BUCKET_SIZE: usize> Debug
     for Bucket<Node, ID_LEN, BUCKET_SIZE>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

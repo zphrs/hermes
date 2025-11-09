@@ -18,6 +18,7 @@ use tree::{Leaf, Tree};
 
 pub use tree::Bucket;
 
+#[derive(Debug)]
 pub struct RoutingTable<Node, const ID_LEN: usize, const BUCKET_SIZE: usize = 20>
 where
     Node: HasId<ID_LEN>,
