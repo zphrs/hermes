@@ -7,7 +7,7 @@ use tokio::sync::{RwLock, RwLockWriteGuard};
 use tracing::{Instrument, instrument, trace, trace_span};
 
 use crate::{
-    HasId, RoutingTable,
+    BUCKET_SIZE, HasId, RoutingTable,
     id::{Distance, DistancePair, Id},
     traits::RequestHandler,
 };
@@ -154,7 +154,7 @@ impl<
     ) {
         let mut leaf = lock.get_leaf_mut(pairs[0].distance());
         let insertion_spots = insertion_candidates.len();
-        let removals: Vec<_> = insertion_candidates
+        let removals: HashSet<_> = insertion_candidates
             .iter()
             .filter_map(|v| v.as_ref())
             .collect();
@@ -237,13 +237,11 @@ impl<
     #[instrument(skip_all)]
     pub async fn add_nodes(&self, nodes: impl IntoIterator<Item = Node>) {
         let mut write_lock = self.routing_table.write().await;
-        let nodes = nodes.into_iter().filter(|v| v.id() != self.local_node.id());
-
         // first remove unreachable siblings list nodes
-        trace!("removing unreachable siblings list nodes");
         write_lock
             .remove_unreachable_siblings_list_nodes(&self.local_node, &self.handler)
             .await;
+        let nodes = nodes.into_iter().filter(|v| v.id() != self.local_addr());
 
         // now if there are any leftover, they are all alive nodes that
         // oveflowed the siblings list
@@ -270,7 +268,6 @@ impl<
             unordered.push(async { (self.get_insertion_candidates(&bucket[0]).await, bucket) });
         }
 
-        trace!("getting insertion candidates");
         let to_removes: Vec<_> = unordered.collect().await;
         {
             let mut write_lock = self.routing_table.write().await;
@@ -328,10 +325,15 @@ impl<
                 .collect()
         };
         closest_nodes.sort();
-        closest_nodes.truncate(ALPHA);
+        closest_nodes.truncate(BUCKET_SIZE);
         trace!(?closest_nodes);
         let queried_ids = RwLock::new(HashSet::<Id<ID_LEN>>::new());
-        let alpha_closest: Vec<Node> = closest_nodes.iter().map(|p| p.node()).cloned().collect();
+        let alpha_closest: Vec<Node> = closest_nodes
+            .iter()
+            .map(|p| p.node())
+            .take(ALPHA)
+            .cloned()
+            .collect();
         let k_closest = RwLock::new(closest_nodes);
         let querying = FuturesUnordered::new();
         for node in alpha_closest {
@@ -476,7 +478,6 @@ impl<
             .handler
             .find_node(&self.local_node, &node, target_id)
             .await;
-        trace!("found nearest nodes");
 
         // try to add all these nodes
         self.add_nodes(closest_nodes.clone()).await;
