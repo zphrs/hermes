@@ -92,6 +92,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
         if self.contains(&pair) {
             return Ok(());
         }
+
         if !self.is_full() {
             self.bucket.add(pair);
             Ok(())

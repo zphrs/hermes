@@ -85,22 +85,20 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
     }
 
     fn maybe_merge_recursively(&mut self) {
-        if let Some(right) = &mut self.right {
+        let Some(right) = &mut self.right else {
+            return;
+        };
+        if right.len() + self.left.len() == 0 {
+            self.right = None;
+        } else {
             right.maybe_merge_recursively();
-        }
-        self.maybe_merge();
-    }
-
-    fn maybe_merge(&mut self) {
-        if self.right.is_some() && self.len() < 1 {
-            self.right = None
         }
     }
 
     pub fn get_leaf(&self, distance: &Distance<ID_LEN>) -> &Leaf<Node, ID_LEN, BUCKET_SIZE> {
         let is_zero = bit_of_array::<ID_LEN>(distance, self.depth);
         match &self.right {
-            Some(right) if is_zero => right.get_leaf(distance),
+            Some(right) if !is_zero => right.get_leaf(distance),
             _ => &self.left,
         }
     }
@@ -109,9 +107,10 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         &'a mut self,
         distance: &Distance<ID_LEN>,
     ) -> LeafMut<'a, Node, ID_LEN, BUCKET_SIZE> {
+        self.maybe_split_recursively();
         LeafMut(self, distance.clone())
     }
-
+    #[instrument(skip(self, distance), fields(distance=%distance, depth=self.depth, is_zero=bit_of_array::<ID_LEN>(distance, self.depth)))]
     fn get_leaf_raw_mut(
         &mut self,
         distance: &Distance<ID_LEN>,
@@ -122,7 +121,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
             .store(0, std::sync::atomic::Ordering::Release);
         let is_zero = bit_of_array::<ID_LEN>(distance, self.depth);
         match &mut self.right {
-            Some(right) if is_zero => right.get_leaf_raw_mut(distance),
+            Some(right) if !is_zero => right.get_leaf_raw_mut(distance),
             _ => &mut self.left,
         }
     }
@@ -140,7 +139,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
                 let is_zero = bit_of_array::<ID_LEN>(dist, self.depth);
                 // figure out which branch is taken next and check if taking the
                 // next branch would be less than the splitting factor.
-                let next_branch_len = if is_zero {
+                let next_branch_len = if !is_zero {
                     right.len()
                 } else {
                     self.left.len()
@@ -151,7 +150,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
 
                     // should return iter for the one nearer to the target id, then the iter of the
                     // one farther from the target id
-                    if is_zero {
+                    if !is_zero {
                         Box::new(right.iter().chain(self.left.iter()).take(length))
                     } else {
                         Box::new(self.left.iter().chain(right.iter()).take(length))
@@ -174,7 +173,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
                 let is_zero = bit_of_array::<ID_LEN>(dist, self.depth);
                 // figure out which branch is taken next and check if taking the
                 // next branch would be less than the splitting factor.
-                let next_branch_len = if is_zero {
+                let next_branch_len = if !is_zero {
                     right.len()
                 } else {
                     self.left.len()
@@ -185,10 +184,10 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
 
                     // should return iter for the one nearer to the target id, then the iter of the
                     // one farther from the target id
-                    if is_zero {
-                        Box::new(right.iter_mut().chain(self.left.iter_mut()).take(length))
-                    } else {
+                    if !is_zero {
                         Box::new(self.left.iter_mut().chain(right.iter_mut()).take(length))
+                    } else {
+                        Box::new(right.iter_mut().chain(self.left.iter_mut()).take(length))
                     }
                 } else {
                     right.nodes_near_mut(dist, length)
@@ -205,12 +204,12 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
             None => Box::new(self.left.iter()),
         }
     }
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(depth=self.depth))]
     pub fn leaves_iter(&self) -> Box<dyn Iterator<Item = &Leaf<Node, ID_LEN, BUCKET_SIZE>> + '_> {
         match &self.right {
             Some(right) => {
                 trace!("split");
-                Box::new(LeafIterator::new(&self.left).chain(right.leaves_iter()))
+                Box::new(right.leaves_iter().chain(LeafIterator::new(&self.left)))
             }
             _ => Box::new(LeafIterator::new(&self.left)),
         }
@@ -298,7 +297,6 @@ impl<'a, Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Drop
         self.0
             .cached_len
             .store(0, std::sync::atomic::Ordering::Release);
-        self.0.maybe_split_recursively();
     }
 }
 
@@ -349,6 +347,7 @@ pub(crate) mod tests {
         assert!(bit_of_array::<1>(&[0b01000000], 1));
         assert!(bit_of_array::<1>(&[0b00000001], 7));
         assert!(!bit_of_array::<1>(&[0b00000001], 6));
+        assert!(bit_of_array::<1>(&[0b00000000, 0b10000000], 8));
     }
 
     #[test]
@@ -367,22 +366,136 @@ pub(crate) mod tests {
         }
         let buckets: Vec<_> = root
             .leaves_iter()
-            .map(|leaf| leaf.iter().collect::<Vec<_>>())
+            .map(|leaf| {
+                let mut out = leaf.iter().collect::<Vec<_>>();
+                out.sort();
+                out
+            })
             .collect();
         trace!(?buckets);
+        expect![[r#"
+            [
+                [
+                    DistancePair(
+                        03B6...0A61,
+                        Node {
+                            addr: 127.0.0.1:88,
+                            id: Id(137B...ED98),
+                        },
+                    ),
+                ],
+                [
+                    DistancePair(
+                        0579...6BF9,
+                        Node {
+                            addr: 127.0.0.1:28,
+                            id: Id(15B4...9A20),
+                        },
+                    ),
+                    DistancePair(
+                        07B3...8B5A,
+                        Node {
+                            addr: 127.0.0.1:48,
+                            id: Id(177E...6CA3),
+                        },
+                    ),
+                ],
+                [
+                    DistancePair(
+                        0A15...AB69,
+                        Node {
+                            addr: 127.0.0.1:11,
+                            id: Id(1AD8...4C90),
+                        },
+                    ),
+                    DistancePair(
+                        0C32...228B,
+                        Node {
+                            addr: 127.0.0.1:13,
+                            id: Id(1CFF...C572),
+                        },
+                    ),
+                ],
+                [
+                    DistancePair(
+                        10AE...34A3,
+                        Node {
+                            addr: 127.0.0.1:82,
+                            id: Id(0063...D35A),
+                        },
+                    ),
+                    DistancePair(
+                        16CF...561E,
+                        Node {
+                            addr: 127.0.0.1:8,
+                            id: Id(0602...B1E7),
+                        },
+                    ),
+                ],
+                [
+                    DistancePair(
+                        2E66...C6A1,
+                        Node {
+                            addr: 127.0.0.1:20,
+                            id: Id(3EAB...2158),
+                        },
+                    ),
+                    DistancePair(
+                        3802...C6AB,
+                        Node {
+                            addr: 127.0.0.1:17,
+                            id: Id(28CF...2152),
+                        },
+                    ),
+                ],
+                [
+                    DistancePair(
+                        631C...B34D,
+                        Node {
+                            addr: 127.0.0.1:1,
+                            id: Id(73D1...54B4),
+                        },
+                    ),
+                    DistancePair(
+                        7404...2BAE,
+                        Node {
+                            addr: 127.0.0.1:2,
+                            id: Id(64C9...CC57),
+                        },
+                    ),
+                ],
+                [
+                    DistancePair(
+                        A26D...518A,
+                        Node {
+                            addr: 127.0.0.1:3,
+                            id: Id(B2A0...B673),
+                        },
+                    ),
+                    DistancePair(
+                        C276...83E9,
+                        Node {
+                            addr: 127.0.0.1:4,
+                            id: Id(D2BB...6410),
+                        },
+                    ),
+                ],
+            ]
+        "#]].assert_debug_eq(&buckets);
     }
 
     #[test]
     #[traced_test]
     pub fn test_tree() {
         let mut tree: Tree<Node, 32, 20> = Tree::new();
-        let local_node = Node::new("0.0.0.0:8000".parse().unwrap());
-        let nodes = (0..100).map(|port| Node::new(format!("127.0.0.1:{port}").parse().unwrap()));
+        let local_node = Node::new("127.0.0.1:0".parse().unwrap());
+        let nodes = (1..100).map(|port| Node::new(format!("127.0.0.1:{port}").parse().unwrap()));
         for node in nodes {
             let pair: DistancePair<Node, 32> = (node, local_node.id()).into();
             let mut leaf = tree.get_leaf_mut(pair.distance());
             let _ = leaf.try_insert(pair);
         }
+
         let leaves: Vec<_> = tree
             .leaves_iter()
             .map(|leaf| {
@@ -396,492 +509,457 @@ pub(crate) mod tests {
             [
                 [
                     DistancePair(
-                        7B9A...1F70,
+                        03B6...0A61,
                         Node {
-                            addr: 127.0.0.1:0,
-                            id: Id(10CD...E7F9),
+                            addr: 127.0.0.1:88,
+                            id: Id(137B...ED98),
                         },
                     ),
                     DistancePair(
-                        1886...AC3D,
+                        04B9...33B0,
                         Node {
-                            addr: 127.0.0.1:1,
-                            id: Id(73D1...54B4),
+                            addr: 127.0.0.1:60,
+                            id: Id(1474...D449),
                         },
                     ),
                     DistancePair(
-                        0F9E...34DE,
-                        Node {
-                            addr: 127.0.0.1:2,
-                            id: Id(64C9...CC57),
-                        },
-                    ),
-                    DistancePair(
-                        0E7B...145A,
-                        Node {
-                            addr: 127.0.0.1:5,
-                            id: Id(652C...ECD3),
-                        },
-                    ),
-                    DistancePair(
-                        35BF...F877,
-                        Node {
-                            addr: 127.0.0.1:6,
-                            id: Id(5EE8...00FE),
-                        },
-                    ),
-                    DistancePair(
-                        6D55...496E,
-                        Node {
-                            addr: 127.0.0.1:8,
-                            id: Id(0602...B1E7),
-                        },
-                    ),
-                    DistancePair(
-                        0483...E94F,
-                        Node {
-                            addr: 127.0.0.1:10,
-                            id: Id(6FD4...11C6),
-                        },
-                    ),
-                    DistancePair(
-                        718F...B419,
-                        Node {
-                            addr: 127.0.0.1:11,
-                            id: Id(1AD8...4C90),
-                        },
-                    ),
-                    DistancePair(
-                        77A8...3DFB,
-                        Node {
-                            addr: 127.0.0.1:13,
-                            id: Id(1CFF...C572),
-                        },
-                    ),
-                    DistancePair(
-                        11EB...A7D2,
-                        Node {
-                            addr: 127.0.0.1:14,
-                            id: Id(7ABC...5F5B),
-                        },
-                    ),
-                    DistancePair(
-                        4398...D9DB,
-                        Node {
-                            addr: 127.0.0.1:17,
-                            id: Id(28CF...2152),
-                        },
-                    ),
-                    DistancePair(
-                        55FC...D9D1,
-                        Node {
-                            addr: 127.0.0.1:20,
-                            id: Id(3EAB...2158),
-                        },
-                    ),
-                    DistancePair(
-                        0B8F...67C5,
-                        Node {
-                            addr: 127.0.0.1:23,
-                            id: Id(60D8...9F4C),
-                        },
-                    ),
-                    DistancePair(
-                        24BD...97D9,
-                        Node {
-                            addr: 127.0.0.1:25,
-                            id: Id(4FEA...6F50),
-                        },
-                    ),
-                    DistancePair(
-                        7EE3...7489,
+                        0579...6BF9,
                         Node {
                             addr: 127.0.0.1:28,
                             id: Id(15B4...9A20),
                         },
                     ),
                     DistancePair(
-                        5577...2F96,
+                        07B3...8B5A,
+                        Node {
+                            addr: 127.0.0.1:48,
+                            id: Id(177E...6CA3),
+                        },
+                    ),
+                    DistancePair(
+                        0A15...AB69,
+                        Node {
+                            addr: 127.0.0.1:11,
+                            id: Id(1AD8...4C90),
+                        },
+                    ),
+                    DistancePair(
+                        0BBC...9DB6,
+                        Node {
+                            addr: 127.0.0.1:61,
+                            id: Id(1B71...7A4F),
+                        },
+                    ),
+                    DistancePair(
+                        0C32...228B,
+                        Node {
+                            addr: 127.0.0.1:13,
+                            id: Id(1CFF...C572),
+                        },
+                    ),
+                    DistancePair(
+                        10AE...34A3,
+                        Node {
+                            addr: 127.0.0.1:82,
+                            id: Id(0063...D35A),
+                        },
+                    ),
+                    DistancePair(
+                        16CF...561E,
+                        Node {
+                            addr: 127.0.0.1:8,
+                            id: Id(0602...B1E7),
+                        },
+                    ),
+                    DistancePair(
+                        1911...A45A,
+                        Node {
+                            addr: 127.0.0.1:84,
+                            id: Id(09DC...43A3),
+                        },
+                    ),
+                ],
+                [
+                    DistancePair(
+                        2384...8939,
+                        Node {
+                            addr: 127.0.0.1:87,
+                            id: Id(3349...6EC0),
+                        },
+                    ),
+                    DistancePair(
+                        28BA...F0C5,
+                        Node {
+                            addr: 127.0.0.1:57,
+                            id: Id(3877...173C),
+                        },
+                    ),
+                    DistancePair(
+                        2E66...C6A1,
+                        Node {
+                            addr: 127.0.0.1:20,
+                            id: Id(3EAB...2158),
+                        },
+                    ),
+                    DistancePair(
+                        2EB9...5637,
+                        Node {
+                            addr: 127.0.0.1:68,
+                            id: Id(3E74...B1CE),
+                        },
+                    ),
+                    DistancePair(
+                        2EED...30E6,
                         Node {
                             addr: 127.0.0.1:29,
                             id: Id(3E20...D71F),
                         },
                     ),
                     DistancePair(
-                        1B65...F6BD,
+                        2FB7...DADF,
                         Node {
-                            addr: 127.0.0.1:34,
-                            id: Id(7032...0E34),
+                            addr: 127.0.0.1:62,
+                            id: Id(3F7A...3D26),
                         },
                     ),
                     DistancePair(
-                        4326...F7AB,
+                        3093...90BB,
+                        Node {
+                            addr: 127.0.0.1:45,
+                            id: Id(205E...7742),
+                        },
+                    ),
+                    DistancePair(
+                        3345...6909,
+                        Node {
+                            addr: 127.0.0.1:47,
+                            id: Id(2388...8EF0),
+                        },
+                    ),
+                    DistancePair(
+                        3643...074F,
+                        Node {
+                            addr: 127.0.0.1:49,
+                            id: Id(268E...E0B6),
+                        },
+                    ),
+                    DistancePair(
+                        3749...707E,
+                        Node {
+                            addr: 127.0.0.1:94,
+                            id: Id(2784...9787),
+                        },
+                    ),
+                    DistancePair(
+                        37D8...FEB5,
+                        Node {
+                            addr: 127.0.0.1:67,
+                            id: Id(2715...194C),
+                        },
+                    ),
+                    DistancePair(
+                        3802...C6AB,
+                        Node {
+                            addr: 127.0.0.1:17,
+                            id: Id(28CF...2152),
+                        },
+                    ),
+                    DistancePair(
+                        38BC...E8DB,
                         Node {
                             addr: 127.0.0.1:35,
                             id: Id(2871...0F22),
                         },
                     ),
                     DistancePair(
-                        3879...B8AF,
+                        3F8F...2FE9,
+                        Node {
+                            addr: 127.0.0.1:83,
+                            id: Id(2F42...C810),
+                        },
+                    ),
+                ],
+                [
+                    DistancePair(
+                        4074...9450,
+                        Node {
+                            addr: 127.0.0.1:58,
+                            id: Id(50B9...73A9),
+                        },
+                    ),
+                    DistancePair(
+                        43E3...A7DF,
                         Node {
                             addr: 127.0.0.1:38,
                             id: Id(532E...4026),
                         },
                     ),
                     DistancePair(
-                        1FD8...18AD,
+                        4E11...857D,
+                        Node {
+                            addr: 127.0.0.1:59,
+                            id: Id(5EDC...6284),
+                        },
+                    ),
+                    DistancePair(
+                        4E25...E707,
+                        Node {
+                            addr: 127.0.0.1:6,
+                            id: Id(5EE8...00FE),
+                        },
+                    ),
+                    DistancePair(
+                        5281...92BE,
+                        Node {
+                            addr: 127.0.0.1:70,
+                            id: Id(424C...7547),
+                        },
+                    ),
+                    DistancePair(
+                        5BFF...E285,
+                        Node {
+                            addr: 127.0.0.1:65,
+                            id: Id(4B32...057C),
+                        },
+                    ),
+                    DistancePair(
+                        5F27...88A9,
+                        Node {
+                            addr: 127.0.0.1:25,
+                            id: Id(4FEA...6F50),
+                        },
+                    ),
+                    DistancePair(
+                        60A5...687F,
+                        Node {
+                            addr: 127.0.0.1:69,
+                            id: Id(7068...8F86),
+                        },
+                    ),
+                    DistancePair(
+                        60FF...E9CD,
+                        Node {
+                            addr: 127.0.0.1:34,
+                            id: Id(7032...0E34),
+                        },
+                    ),
+                    DistancePair(
+                        615D...2C9A,
+                        Node {
+                            addr: 127.0.0.1:53,
+                            id: Id(7190...CB63),
+                        },
+                    ),
+                    DistancePair(
+                        631C...B34D,
+                        Node {
+                            addr: 127.0.0.1:1,
+                            id: Id(73D1...54B4),
+                        },
+                    ),
+                    DistancePair(
+                        6442...07DD,
                         Node {
                             addr: 127.0.0.1:39,
                             id: Id(748F...E024),
                         },
                     ),
-                ],
-                [
                     DistancePair(
-                        B9EC...9C99,
+                        6A71...B8A2,
                         Node {
-                            addr: 127.0.0.1:4,
-                            id: Id(D2BB...6410),
+                            addr: 127.0.0.1:14,
+                            id: Id(7ABC...5F5B),
                         },
                     ),
                     DistancePair(
-                        9F76...9696,
+                        7015...78B5,
                         Node {
-                            addr: 127.0.0.1:7,
-                            id: Id(F421...6E1F),
+                            addr: 127.0.0.1:23,
+                            id: Id(60D8...9F4C),
                         },
                     ),
                     DistancePair(
-                        8904...8027,
+                        7404...2BAE,
                         Node {
-                            addr: 127.0.0.1:21,
-                            id: Id(E253...78AE),
+                            addr: 127.0.0.1:2,
+                            id: Id(64C9...CC57),
                         },
                     ),
                     DistancePair(
-                        AA0E...1127,
+                        75E1...0B2A,
                         Node {
-                            addr: 127.0.0.1:24,
-                            id: Id(C159...E9AE),
+                            addr: 127.0.0.1:5,
+                            id: Id(652C...ECD3),
                         },
                     ),
                     DistancePair(
-                        ABEE...427F,
+                        7907...75FB,
                         Node {
-                            addr: 127.0.0.1:27,
-                            id: Id(C0B9...BAF6),
+                            addr: 127.0.0.1:71,
+                            id: Id(69CA...9202),
                         },
                     ),
                     DistancePair(
-                        AFB5...95EE,
+                        7AA7...0BB9,
                         Node {
-                            addr: 127.0.0.1:30,
-                            id: Id(C4E2...6D67),
+                            addr: 127.0.0.1:42,
+                            id: Id(6A6A...EC40),
                         },
                     ),
                     DistancePair(
-                        90BB...F817,
+                        7B67...89C0,
                         Node {
-                            addr: 127.0.0.1:31,
-                            id: Id(FBEC...009E),
+                            addr: 127.0.0.1:66,
+                            id: Id(6BAA...6E39),
                         },
                     ),
                     DistancePair(
-                        8DE1...0793,
+                        7F19...F63F,
                         Node {
-                            addr: 127.0.0.1:32,
-                            id: Id(E6B6...FF1A),
-                        },
-                    ),
-                    DistancePair(
-                        A425...B8B1,
-                        Node {
-                            addr: 127.0.0.1:40,
-                            id: Id(CF72...4038),
-                        },
-                    ),
-                    DistancePair(
-                        A7DA...2873,
-                        Node {
-                            addr: 127.0.0.1:43,
-                            id: Id(CC8D...D0FA),
-                        },
-                    ),
-                    DistancePair(
-                        B920...D30F,
-                        Node {
-                            addr: 127.0.0.1:44,
-                            id: Id(D277...2B86),
-                        },
-                    ),
-                    DistancePair(
-                        AADF...BC12,
-                        Node {
-                            addr: 127.0.0.1:51,
-                            id: Id(C188...449B),
-                        },
-                    ),
-                    DistancePair(
-                        AB38...D6C0,
-                        Node {
-                            addr: 127.0.0.1:52,
-                            id: Id(C06F...2E49),
-                        },
-                    ),
-                    DistancePair(
-                        AE5C...D738,
-                        Node {
-                            addr: 127.0.0.1:54,
-                            id: Id(C50B...2FB1),
-                        },
-                    ),
-                    DistancePair(
-                        97FC...7D4C,
-                        Node {
-                            addr: 127.0.0.1:55,
-                            id: Id(FCAB...85C5),
-                        },
-                    ),
-                    DistancePair(
-                        9D53...A357,
-                        Node {
-                            addr: 127.0.0.1:64,
-                            id: Id(F604...5BDE),
-                        },
-                    ),
-                    DistancePair(
-                        9ED7...58B4,
-                        Node {
-                            addr: 127.0.0.1:75,
-                            id: Id(F580...A03D),
-                        },
-                    ),
-                    DistancePair(
-                        992E...E1B7,
-                        Node {
-                            addr: 127.0.0.1:77,
-                            id: Id(F279...193E),
-                        },
-                    ),
-                    DistancePair(
-                        8F25...B3B7,
-                        Node {
-                            addr: 127.0.0.1:80,
-                            id: Id(E472...4B3E),
-                        },
-                    ),
-                    DistancePair(
-                        A37B...6962,
-                        Node {
-                            addr: 127.0.0.1:89,
-                            id: Id(C82C...91EB),
+                            addr: 127.0.0.1:10,
+                            id: Id(6FD4...11C6),
                         },
                     ),
                 ],
                 [
                     DistancePair(
-                        D9F7...4EFA,
-                        Node {
-                            addr: 127.0.0.1:3,
-                            id: Id(B2A0...B673),
-                        },
-                    ),
-                    DistancePair(
-                        C7FA...B808,
-                        Node {
-                            addr: 127.0.0.1:9,
-                            id: Id(ACAD...4081),
-                        },
-                    ),
-                    DistancePair(
-                        D339...3CEB,
-                        Node {
-                            addr: 127.0.0.1:15,
-                            id: Id(B86E...C462),
-                        },
-                    ),
-                    DistancePair(
-                        C93F...E878,
-                        Node {
-                            addr: 127.0.0.1:16,
-                            id: Id(A268...10F1),
-                        },
-                    ),
-                    DistancePair(
-                        DACC...A5CE,
-                        Node {
-                            addr: 127.0.0.1:18,
-                            id: Id(B19B...5D47),
-                        },
-                    ),
-                    DistancePair(
-                        DF6A...35E4,
-                        Node {
-                            addr: 127.0.0.1:19,
-                            id: Id(B43D...CD6D),
-                        },
-                    ),
-                    DistancePair(
-                        CEB7...1BDE,
-                        Node {
-                            addr: 127.0.0.1:22,
-                            id: Id(A5E0...E357),
-                        },
-                    ),
-                    DistancePair(
-                        C078...CED7,
-                        Node {
-                            addr: 127.0.0.1:26,
-                            id: Id(AB2F...365E),
-                        },
-                    ),
-                    DistancePair(
-                        C485...E6A7,
-                        Node {
-                            addr: 127.0.0.1:37,
-                            id: Id(AFD2...1E2E),
-                        },
-                    ),
-                    DistancePair(
-                        C9E2...698F,
-                        Node {
-                            addr: 127.0.0.1:41,
-                            id: Id(A2B5...9106),
-                        },
-                    ),
-                    DistancePair(
-                        D883...3DF2,
-                        Node {
-                            addr: 127.0.0.1:46,
-                            id: Id(B3D4...C57B),
-                        },
-                    ),
-                    DistancePair(
-                        CFF5...9A14,
-                        Node {
-                            addr: 127.0.0.1:78,
-                            id: Id(A4A2...629D),
-                        },
-                    ),
-                    DistancePair(
-                        C55B...4A76,
-                        Node {
-                            addr: 127.0.0.1:86,
-                            id: Id(AE0C...B2FF),
-                        },
-                    ),
-                    DistancePair(
-                        C443...7C71,
-                        Node {
-                            addr: 127.0.0.1:90,
-                            id: Id(AF14...84F8),
-                        },
-                    ),
-                    DistancePair(
-                        C70D...3E37,
-                        Node {
-                            addr: 127.0.0.1:95,
-                            id: Id(AC5A...C6BE),
-                        },
-                    ),
-                    DistancePair(
-                        D23B...0FDD,
-                        Node {
-                            addr: 127.0.0.1:96,
-                            id: Id(B96C...F754),
-                        },
-                    ),
-                    DistancePair(
-                        C96E...FFB4,
-                        Node {
-                            addr: 127.0.0.1:98,
-                            id: Id(A239...073D),
-                        },
-                    ),
-                ],
-                [
-                    DistancePair(
-                        E809...1DA3,
-                        Node {
-                            addr: 127.0.0.1:12,
-                            id: Id(835E...E52A),
-                        },
-                    ),
-                    DistancePair(
-                        E153...BDBE,
-                        Node {
-                            addr: 127.0.0.1:33,
-                            id: Id(8A04...4537),
-                        },
-                    ),
-                    DistancePair(
-                        F522...6BB7,
+                        8EB8...74C7,
                         Node {
                             addr: 127.0.0.1:36,
                             id: Id(9E75...933E),
                         },
                     ),
                     DistancePair(
-                        EA93...D091,
+                        9393...02D3,
                         Node {
-                            addr: 127.0.0.1:50,
-                            id: Id(81C4...2818),
+                            addr: 127.0.0.1:12,
+                            id: Id(835E...E52A),
                         },
                     ),
                     DistancePair(
-                        E4D1...08AB,
+                        9AC9...A2CE,
                         Node {
-                            addr: 127.0.0.1:56,
-                            id: Id(8F86...F022),
+                            addr: 127.0.0.1:33,
+                            id: Id(8A04...4537),
                         },
                     ),
                     DistancePair(
-                        FCD4...FE39,
+                        A156...BABE,
                         Node {
-                            addr: 127.0.0.1:63,
-                            id: Id(9783...06B0),
+                            addr: 127.0.0.1:18,
+                            id: Id(B19B...5D47),
                         },
                     ),
                     DistancePair(
-                        FB15...2668,
+                        A26D...518A,
                         Node {
-                            addr: 127.0.0.1:72,
-                            id: Id(9042...DEE1),
+                            addr: 127.0.0.1:3,
+                            id: Id(B2A0...B673),
                         },
                     ),
                     DistancePair(
-                        E29B...B623,
+                        A4F0...2A94,
                         Node {
-                            addr: 127.0.0.1:74,
-                            id: Id(89CC...4EAA),
+                            addr: 127.0.0.1:19,
+                            id: Id(B43D...CD6D),
                         },
                     ),
                     DistancePair(
-                        E211...F898,
+                        A8A3...239B,
                         Node {
-                            addr: 127.0.0.1:76,
-                            id: Id(8946...0011),
+                            addr: 127.0.0.1:15,
+                            id: Id(B86E...C462),
                         },
                     ),
                     DistancePair(
-                        F8C3...BDB6,
+                        B2A5...F708,
                         Node {
-                            addr: 127.0.0.1:91,
-                            id: Id(9394...453F),
+                            addr: 127.0.0.1:16,
+                            id: Id(A268...10F1),
                         },
                     ),
                     DistancePair(
-                        E1CB...1CE7,
+                        B52D...04AE,
                         Node {
-                            addr: 127.0.0.1:92,
-                            id: Id(8A9C...E46E),
+                            addr: 127.0.0.1:22,
+                            id: Id(A5E0...E357),
                         },
                     ),
                     DistancePair(
-                        E964...7D4C,
+                        BBE2...D1A7,
                         Node {
-                            addr: 127.0.0.1:99,
-                            id: Id(8233...85C5),
+                            addr: 127.0.0.1:26,
+                            id: Id(AB2F...365E),
+                        },
+                    ),
+                    DistancePair(
+                        BC60...A778,
+                        Node {
+                            addr: 127.0.0.1:9,
+                            id: Id(ACAD...4081),
+                        },
+                    ),
+                    DistancePair(
+                        BF1F...F9D7,
+                        Node {
+                            addr: 127.0.0.1:37,
+                            id: Id(AFD2...1E2E),
+                        },
+                    ),
+                    DistancePair(
+                        C276...83E9,
+                        Node {
+                            addr: 127.0.0.1:4,
+                            id: Id(D2BB...6410),
+                        },
+                    ),
+                    DistancePair(
+                        D074...5D0F,
+                        Node {
+                            addr: 127.0.0.1:27,
+                            id: Id(C0B9...BAF6),
+                        },
+                    ),
+                    DistancePair(
+                        D194...0E57,
+                        Node {
+                            addr: 127.0.0.1:24,
+                            id: Id(C159...E9AE),
+                        },
+                    ),
+                    DistancePair(
+                        D42F...8A9E,
+                        Node {
+                            addr: 127.0.0.1:30,
+                            id: Id(C4E2...6D67),
+                        },
+                    ),
+                    DistancePair(
+                        E4EC...89E6,
+                        Node {
+                            addr: 127.0.0.1:7,
+                            id: Id(F421...6E1F),
+                        },
+                    ),
+                    DistancePair(
+                        EB21...E767,
+                        Node {
+                            addr: 127.0.0.1:31,
+                            id: Id(FBEC...009E),
+                        },
+                    ),
+                    DistancePair(
+                        F29E...9F57,
+                        Node {
+                            addr: 127.0.0.1:21,
+                            id: Id(E253...78AE),
+                        },
+                    ),
+                    DistancePair(
+                        F67B...18E3,
+                        Node {
+                            addr: 127.0.0.1:32,
+                            id: Id(E6B6...FF1A),
                         },
                     ),
                 ],
