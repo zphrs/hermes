@@ -1,6 +1,8 @@
 mod tree;
 use std::cmp::min;
 
+use futures_time::time::Instant;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use thiserror::Error;
@@ -18,14 +20,19 @@ use tree::{Leaf, Tree};
 
 pub use tree::Bucket;
 
+const NEARBY_NODES_MULTIP: usize = 5;
+
 pub struct RoutingTable<Node, const ID_LEN: usize, const BUCKET_SIZE: usize = 20>
 where
     Node: HasId<ID_LEN>,
 {
-    tree: tree::Tree<Node, ID_LEN, BUCKET_SIZE>,
+    buckets: tree::Tree<Node, ID_LEN, BUCKET_SIZE>,
+    // buckets: buckets::Buckets<Node, ID_LEN, BUCKET_SIZE>,
     // the nearest 5*k nodes to me, binary searched & inserted
     // because of the likelihood of having poor rotating codes
     nearest_siblings_list: Vec<id::DistancePair<Node, ID_LEN>>,
+    // when each bucket has been updated
+    bucket_updated_at: HashMap<usize, Instant>,
 }
 #[derive(Debug, Error)]
 pub enum Error<Node, const ID_LEN: usize> {
@@ -45,8 +52,9 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 {
     fn default() -> Self {
         Self {
-            tree: Tree::new_right(0),
-            nearest_siblings_list: Vec::with_capacity(5 * BUCKET_SIZE + 1),
+            buckets: Tree::new(),
+            nearest_siblings_list: Vec::with_capacity(NEARBY_NODES_MULTIP * BUCKET_SIZE + 1),
+            bucket_updated_at: Default::default(),
         }
     }
 }
@@ -56,8 +64,9 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 {
     pub fn new() -> Self {
         Self {
-            tree: Tree::new_right(0),
-            nearest_siblings_list: Vec::with_capacity(5 * BUCKET_SIZE + 1),
+            buckets: Tree::new(),
+            nearest_siblings_list: Vec::with_capacity(NEARBY_NODES_MULTIP * BUCKET_SIZE + 1),
+            bucket_updated_at: Default::default(),
         }
     }
     /// Gets a [leaf](Leaf) based on a provided [distance](Distance).
@@ -72,7 +81,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     where
         Node: HasId<ID_LEN>,
     {
-        self.tree.get_leaf_mut(distance)
+        self.buckets.get_leaf_mut(distance)
     }
 
     /// Gets a [leaf](Leaf) based on a provided [distance](Distance).
@@ -81,11 +90,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     where
         Node: HasId<ID_LEN>,
     {
-        self.tree.get_leaf(distance)
-    }
-
-    pub fn leaves_iter(&self) -> Box<dyn Iterator<Item = &Leaf<Node, ID_LEN, BUCKET_SIZE>> + '_> {
-        self.tree.leaves_iter()
+        self.buckets.get_leaf(distance)
     }
 
     #[cfg(test)]
@@ -102,26 +107,47 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     {
         let mut out: Vec<DistancePair<Node, ID_LEN>> = Vec::new();
         out.extend(self.sibling_list().iter().cloned());
-        out.extend(self.tree.nodes_near(&Distance::ZERO, usize::MAX).cloned());
+        out.extend(
+            self.buckets
+                .nodes_near(&Distance::ZERO, usize::MAX)
+                .cloned(),
+        );
         out.sort();
         out
     }
+
+    pub fn get_stale_buckets(&self, duration: &std::time::Duration) -> impl Iterator<Item = usize> {
+        self.bucket_updated_at
+            .iter()
+            .filter(|(_, at)| std::time::Instant::now().duration_since(***at) < *duration)
+            .map(|(idx, _)| *idx)
+    }
     /// tries to add nodes to the siblings list.
     /// Returns any nodes which got evicted from the list.
-    pub fn maybe_add_nodes_to_siblings_list<
-        DP: Into<DistancePair<Node, ID_LEN>>,
-        Iter: IntoIterator<Item = DP>,
-    >(
+    pub fn maybe_add_nodes_to_siblings_list<DP, Iter: IntoIterator<Item = DP>>(
         &mut self,
         pairs: Iter,
-    ) -> impl IntoIterator<Item = DistancePair<Node, ID_LEN>> {
-        let iter = pairs.into_iter();
-        self.nearest_siblings_list.extend(iter.map(Into::into));
+    ) -> impl IntoIterator<Item = DistancePair<Node, ID_LEN>>
+    where
+        DistancePair<Node, ID_LEN>: From<DP>,
+    {
+        let last_in_list = &self
+            .nearest_siblings_list
+            .get(NEARBY_NODES_MULTIP * BUCKET_SIZE)
+            .map(|p| p.distance().clone())
+            .unwrap_or(Distance::MAX);
+        let iter = pairs
+            .into_iter()
+            .map(DistancePair::from)
+            .filter(|v| v.distance() < last_in_list);
+        self.nearest_siblings_list.extend(iter);
         self.nearest_siblings_list.sort();
         self.nearest_siblings_list.dedup();
         self.nearest_siblings_list.drain(
-            min(5 * BUCKET_SIZE, self.nearest_siblings_list.len())
-                ..self.nearest_siblings_list.len(),
+            min(
+                NEARBY_NODES_MULTIP * BUCKET_SIZE,
+                self.nearest_siblings_list.len(),
+            )..self.nearest_siblings_list.len(),
         )
     }
 
@@ -130,8 +156,10 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     }
 
     pub(crate) fn mark_bucket_as_looked_up(&mut self, distance: &Distance<ID_LEN>) {
-        let mut leaf = self.get_leaf_mut(distance);
-        leaf.mark_as_looked_up();
+        let bucket_idx = distance.leading_zeros();
+        self.bucket_updated_at
+            .entry(bucket_idx)
+            .insert_entry(Instant::now());
     }
 
     pub async fn remove_unreachable_siblings_list_nodes(
@@ -195,7 +223,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     ) -> Box<dyn Iterator<Item = &DistancePair<Node, ID_LEN>> + '_> {
         Box::new(
             self.nearest_in_sibling_list(dist)
-                .chain(self.tree.nodes_near(dist, BUCKET_SIZE)),
+                .chain(self.buckets.nodes_near(dist, BUCKET_SIZE * 200)),
         )
     }
 
@@ -208,7 +236,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
             .ok()
             .map(|ind| &mut self.nearest_siblings_list[ind])
             .or_else(
-                || match self.tree.nodes_near_mut(pair.distance(), 1).next() {
+                || match self.buckets.nodes_near_mut(pair.distance(), 1).next() {
                     Some(out) if out == pair => Some(out),
                     _ => None,
                 },

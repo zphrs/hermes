@@ -1,6 +1,6 @@
 use tracing::trace;
 
-use crate::id::DistancePair;
+use crate::{Distance, id::DistancePair};
 
 use std::{
     hint::cold_path,
@@ -13,7 +13,7 @@ pub use super::bucket::Bucket;
 
 pub struct Leaf<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     bucket: Bucket<Node, ID_LEN, BUCKET_SIZE>,
-    on_left: bool,
+
     last_looked_up: Instant,
 }
 
@@ -24,9 +24,8 @@ pub enum Error {
 }
 
 impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN, BUCKET_SIZE> {
-    pub fn new(on_left: bool) -> Self {
+    pub fn new() -> Self {
         Self {
-            on_left,
             bucket: Bucket::new(),
             last_looked_up: Instant::now(),
         }
@@ -41,9 +40,8 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
     }
     pub(crate) fn split(&mut self, depth: usize) -> Tree<Node, ID_LEN, BUCKET_SIZE> {
         // split bucket based on ids into a new branch
-        let left = Box::new(Tree::new_left(depth + 1));
-        let right = Box::new(Tree::new_right(depth + 1));
-        let mut split = Tree::from_split(left, right, depth);
+        let mut right = Tree::new_with_depth(depth + 1);
+
         // recursively re-insert all values formerly in this
         // leaf node below this leaf node
         for value in self.bucket.drain() {
@@ -52,19 +50,19 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
             // Means that if another split is needed on a right node created
             // below the newly created split node then another split will
             // occur.
-            let mut leaf = split.get_leaf_mut(value.distance());
+            let mut leaf = right.get_leaf_mut(value.distance());
             if let Err(Error::FullLeaf) = (*leaf).try_insert(value) {
                 cold_path();
                 unreachable!();
             }
         }
-        split
+        right
     }
     /// Either splits self into a new subtree if a split is due and returns a
     /// new tree to replace this leaf with or returns [None] if this
     /// node either is not empty or is a left node (which never get split).
     pub(crate) fn maybe_split(&mut self, depth: usize) -> Option<Tree<Node, ID_LEN, BUCKET_SIZE>> {
-        if self.bucket.is_full() && !self.on_left {
+        if self.bucket.is_full() {
             cold_path();
             trace!("splitting");
             Some(self.split(depth))
@@ -78,7 +76,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
         self.bucket.is_full()
     }
 
-    fn contains(&self, pair: &DistancePair<Node, ID_LEN>) -> bool {
+    pub fn contains(&self, pair: &DistancePair<Node, ID_LEN>) -> bool {
         self.iter().any(|other| other.node() == pair.node())
     }
 

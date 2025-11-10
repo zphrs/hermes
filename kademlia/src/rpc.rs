@@ -7,7 +7,7 @@ use tokio::sync::{RwLock, RwLockWriteGuard};
 use tracing::{Instrument, instrument, trace, trace_span};
 
 use crate::{
-    BUCKET_SIZE, HasId, RoutingTable,
+    HasId, RoutingTable,
     id::{Distance, DistancePair, Id},
     traits::RequestHandler,
 };
@@ -68,22 +68,19 @@ impl<
     /// refreshes all buckets which haven't been looked up within the past
     /// [duration](Duration).
     pub async fn refresh_stale_buckets(&self, duration: &Duration) {
-        let to_refresh: Vec<_> = {
-            let lock = self.routing_table.read().await;
-            lock.leaves_iter()
-                .filter(|leaf| !leaf.looked_up_within(duration))
-                .filter_map(|leaf| leaf.iter().next().map(|pair| pair.distance().clone()))
-                .collect()
-        };
+        let futures: FuturesUnordered<_> = self
+            .routing_table
+            .read()
+            .await
+            .get_stale_buckets(duration)
+            .map(|lz_count| self.refresh_bucket(lz_count))
+            .collect();
 
-        FuturesUnordered::from_iter(to_refresh.iter().map(|dist| self.refresh_bucket(dist)))
-            .count()
-            .await;
+        futures.count().await;
     }
     /// Should be scheduled to run about every hour for any bucket which hasn't
     /// been touched recently.
-    async fn refresh_bucket(&self, distance: &Distance<ID_LEN>) {
-        let lz_count = distance.leading_zeros();
+    async fn refresh_bucket(&self, lz_count: usize) {
         let shift_by = ID_LEN * 8 - lz_count;
         let target_id = self.get_shifted_target_id(shift_by);
         trace!("refreshing bucket");
@@ -284,7 +281,15 @@ impl<
     pub async fn add_nodes_without_removing(&self, nodes: impl IntoIterator<Item = Node>) {
         let mut write_lock = self.routing_table.write().await;
 
-        let nodes = nodes.into_iter().filter(|v| v.id() != self.local_node.id());
+        let nodes: Vec<_> = nodes
+            .into_iter()
+            .filter(|v| v.id() != self.local_node.id())
+            .filter(|n| {
+                let dist_pair: DistancePair<Node, ID_LEN> = (n.clone(), self.local_addr()).into();
+                let leaf = write_lock.get_leaf(&dist_pair.distance());
+                !leaf.contains(&dist_pair)
+            })
+            .collect();
 
         // now if there are any leftover, they are all alive nodes that
         // oveflowed the siblings list
@@ -435,6 +440,8 @@ impl<
             return false;
         }
 
+        trace!(?k_closest_lock);
+
         let mut queried_node_ids_lock = queried_node_ids.write().await;
         let next_to_query = k_closest_lock
             .downgrade()
@@ -478,6 +485,8 @@ impl<
             .handler
             .find_node(&self.local_node, &node, target_id)
             .await;
+
+        trace!(closest_nodes=?closest_nodes.iter().cloned().map(|n| DistancePair::from((n, target_id))).collect::<Vec<_>>());
 
         // try to add all these nodes
         self.add_nodes(closest_nodes.clone()).await;

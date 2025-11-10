@@ -1,3 +1,4 @@
+use std::hint::cold_path;
 use std::ops::{Deref, DerefMut, Index};
 use std::sync::atomic::AtomicUsize;
 
@@ -13,19 +14,12 @@ use crate::id::{Distance, DistancePair};
 // }
 
 pub(crate) struct Tree<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
-    branch_type: BranchType<Node, ID_LEN, BUCKET_SIZE>,
+    left: leaf::Leaf<Node, ID_LEN, BUCKET_SIZE>,
+    right: Option<Box<Tree<Node, ID_LEN, BUCKET_SIZE>>>,
     // actual cached len might be zero, but recreating a zero length value
     // is a) rare and b) cheap.
     cached_len: AtomicUsize,
     depth: usize,
-}
-
-pub(crate) enum BranchType<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
-    Split {
-        left: Box<Tree<Node, ID_LEN, BUCKET_SIZE>>,
-        right: Box<Tree<Node, ID_LEN, BUCKET_SIZE>>,
-    },
-    Leaf(leaf::Leaf<Node, ID_LEN, BUCKET_SIZE>),
 }
 
 mod bucket;
@@ -37,34 +31,32 @@ pub use leaf::Bucket;
 use tracing::{instrument, trace};
 
 impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN, BUCKET_SIZE> {
-    pub fn new_right(depth: usize) -> Self {
+    pub fn new() -> Self {
+        Self::new_with_depth(0)
+    }
+
+    fn new_with_depth(depth: usize) -> Self {
         Self {
-            branch_type: BranchType::Leaf(leaf::Leaf::new(false)),
+            left: Leaf::new(),
+            right: None,
             cached_len: AtomicUsize::new(0),
             depth,
         }
     }
 
-    pub fn new_left(depth: usize) -> Self {
-        Self {
-            branch_type: BranchType::Leaf(leaf::Leaf::new(true)),
-            // makes sure it doesn't get merged instantly
-            cached_len: AtomicUsize::new(0),
-            depth,
-        }
-    }
-
-    pub(crate) fn from_leaf(leaf: Leaf<Node, ID_LEN, BUCKET_SIZE>, depth: usize) -> Self {
+    fn from_leaf(leaf: Leaf<Node, ID_LEN, BUCKET_SIZE>, depth: usize) -> Self {
         Tree {
-            branch_type: BranchType::Leaf(leaf),
+            left: leaf,
+            right: None,
             cached_len: AtomicUsize::new(0),
             depth,
         }
     }
 
-    fn from_split(left: Box<Self>, right: Box<Self>, depth: usize) -> Self {
+    fn from_split(left: Leaf<Node, ID_LEN, BUCKET_SIZE>, right: Box<Self>, depth: usize) -> Self {
         Self {
-            branch_type: BranchType::Split { left, right },
+            left,
+            right: Some(right),
             cached_len: AtomicUsize::new(0),
             depth,
         }
@@ -72,68 +64,44 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
 
     /// checks if the bucket should split and splits if it should.
     fn maybe_split(&mut self) {
-        let maybe_new_self = match &mut self.branch_type {
-            BranchType::Leaf(leaf) => leaf.maybe_split(self.depth),
-            _ => None,
-        };
-        if let Some(new_self) = maybe_new_self {
-            *self = new_self;
+        if self.left.is_full() && self.right.is_none() {
+            self.right = Some(Box::new(Tree::new_with_depth(self.depth + 1)));
+            let draining: Vec<_> = self.left.drain().collect();
+            for pair in draining {
+                let mut leaf = self.get_leaf_mut(pair.distance());
+                if let Err(_) = leaf.try_insert(pair) {
+                    cold_path();
+                    unreachable!("should not run out of space since new split was just made")
+                }
+            }
         }
     }
 
-    pub fn maybe_split_recursively(&mut self) {
+    fn maybe_split_recursively(&mut self) {
         self.maybe_split();
-        if let BranchType::Split { right, .. } = &mut self.branch_type {
+        if let Some(right) = &mut self.right {
             right.maybe_split_recursively();
         }
     }
 
-    pub fn maybe_merge_recursively(&mut self) {
-        if let BranchType::Split { right, .. } = &mut self.branch_type {
+    fn maybe_merge_recursively(&mut self) {
+        if let Some(right) = &mut self.right {
             right.maybe_merge_recursively();
         }
         self.maybe_merge();
     }
 
     fn maybe_merge(&mut self) {
-        let self_len = self.len();
-        let new_leaf_node = match &self.branch_type {
-            BranchType::Split { .. } if self_len < 1 => self.merge_into(),
-            // can't merge/isn't worth splitting yet
-            _ => return,
-        };
-        // intrinsically invalidates self len cache since a new node is created
-        // in the tree.
-        *self = Self::from_leaf(new_leaf_node, self.depth);
-    }
-
-    fn merge_into(&mut self) -> Leaf<Node, ID_LEN, BUCKET_SIZE> {
-        // perform merge
-        // replacement: we know that this is not a left node since left
-        // nodes are always leaf nodes.
-        trace!("merging");
-        let mut leaf = Leaf::new(false);
-        for value in self.drain() {
-            if leaf.try_insert(value).is_err() {
-                unreachable!()
-            }
+        if self.right.is_some() && self.len() < 1 {
+            self.right = None
         }
-        leaf
     }
 
     pub fn get_leaf(&self, distance: &Distance<ID_LEN>) -> &Leaf<Node, ID_LEN, BUCKET_SIZE> {
-        self.cached_len
-            .store(0, std::sync::atomic::Ordering::Release);
-        match &self.branch_type {
-            BranchType::Split { left, right } => {
-                let is_zero = bit_of_array::<ID_LEN>(distance, self.depth);
-                if is_zero {
-                    right.get_leaf(distance)
-                } else {
-                    left.get_leaf(distance)
-                }
-            }
-            BranchType::Leaf(leaf) => leaf,
+        let is_zero = bit_of_array::<ID_LEN>(distance, self.depth);
+        match &self.right {
+            Some(right) if is_zero => right.get_leaf(distance),
+            _ => &self.left,
         }
     }
 
@@ -152,16 +120,10 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
 
         self.cached_len
             .store(0, std::sync::atomic::Ordering::Release);
-        match &mut self.branch_type {
-            BranchType::Split { left, right } => {
-                let is_zero = bit_of_array::<ID_LEN>(distance, self.depth);
-                if is_zero {
-                    right.get_leaf_raw_mut(distance)
-                } else {
-                    left.get_leaf_raw_mut(distance)
-                }
-            }
-            BranchType::Leaf(leaf) => leaf,
+        let is_zero = bit_of_array::<ID_LEN>(distance, self.depth);
+        match &mut self.right {
+            Some(right) if is_zero => right.get_leaf_raw_mut(distance),
+            _ => &mut self.left,
         }
     }
 
@@ -173,31 +135,32 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
     where
         Node: HasId<N>,
     {
-        match &self.branch_type {
-            BranchType::Split { left, right } => {
-                let is_zero = bit_of_array::<ID_LEN>(dist, self.depth + 1);
+        match &self.right {
+            Some(right) => {
+                let is_zero = bit_of_array::<ID_LEN>(dist, self.depth);
                 // figure out which branch is taken next and check if taking the
                 // next branch would be less than the splitting factor.
-                let (next_branch, other_branch) = if is_zero {
-                    // go to the right
-                    (right, left)
+                let next_branch_len = if is_zero {
+                    right.len()
                 } else {
-                    (left, right)
+                    self.left.len()
                 };
-                if next_branch.len() < length {
+                if next_branch_len < length {
                     // should stop here since if we recursed farther we'd end up with an iterator
                     // less than that of length.
 
                     // should return iter for the one nearer to the target id, then the iter of the
                     // one farther from the target id
-                    Box::new(next_branch.iter().chain(other_branch.iter()).take(length))
+                    if is_zero {
+                        Box::new(right.iter().chain(self.left.iter()).take(length))
+                    } else {
+                        Box::new(self.left.iter().chain(right.iter()).take(length))
+                    }
                 } else {
-                    next_branch.nodes_near(dist, length)
+                    right.nodes_near(dist, length)
                 }
             }
-            // base case; either this node has enough to satisfy length or the entire tree does not
-            // have enough to satisfy length and the first node in the tree is a leaf node.
-            BranchType::Leaf(leaf) => Box::new(leaf.iter()),
+            _ => Box::new(self.left.iter()),
         }
     }
 
@@ -206,65 +169,59 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         dist: &Distance<N>,
         length: usize,
     ) -> Box<dyn Iterator<Item = &mut DistancePair<Node, ID_LEN>> + '_> {
-        match &mut self.branch_type {
-            BranchType::Split { left, right } => {
-                let is_zero = bit_of_array::<ID_LEN>(dist, self.depth + 1);
+        match &mut self.right {
+            Some(right) => {
+                let is_zero = bit_of_array::<ID_LEN>(dist, self.depth);
                 // figure out which branch is taken next and check if taking the
                 // next branch would be less than the splitting factor.
-                let (next_branch, other_branch) = if is_zero {
-                    // go to the right
-                    (right, left)
+                let next_branch_len = if is_zero {
+                    right.len()
                 } else {
-                    (left, right)
+                    self.left.len()
                 };
-                if next_branch.len() < length {
-                    // should stop recursion here since if we recursed farther we'd end up with an
-                    // iterator less than that of length.
+                if next_branch_len < length {
+                    // should stop here since if we recursed farther we'd end up with an iterator
+                    // less than that of length.
 
-                    // should return iter for the one nearer to the id, then the iter of the one
-                    // farther from the id
-                    Box::new(next_branch.iter_mut().chain(other_branch.iter_mut()))
+                    // should return iter for the one nearer to the target id, then the iter of the
+                    // one farther from the target id
+                    if is_zero {
+                        Box::new(right.iter_mut().chain(self.left.iter_mut()).take(length))
+                    } else {
+                        Box::new(self.left.iter_mut().chain(right.iter_mut()).take(length))
+                    }
                 } else {
-                    next_branch.nodes_near_mut(dist, length)
+                    right.nodes_near_mut(dist, length)
                 }
             }
-            // base case; either this node has enough to satisfy length or the entire tree does not
-            // have enough to satisfy length and the first node in the tree is a leaf node.
-            BranchType::Leaf(leaf) => Box::new(leaf.iter_mut()),
+            _ => Box::new(self.left.iter_mut()),
         }
     }
     /// Iterates by joining recursively, iterating roughly from right (closest)
     /// to left (furthest)
     pub fn iter(&self) -> Box<dyn Iterator<Item = &DistancePair<Node, ID_LEN>> + '_> {
-        match &self.branch_type {
-            BranchType::Split { left, right } => Box::new(right.iter().chain(left.iter())),
-            BranchType::Leaf(leaf) => Box::new(leaf.iter()),
+        match &self.right {
+            Some(right) => Box::new(right.iter().chain(self.left.iter())),
+            None => Box::new(self.left.iter()),
         }
     }
     #[instrument(skip_all)]
     pub fn leaves_iter(&self) -> Box<dyn Iterator<Item = &Leaf<Node, ID_LEN, BUCKET_SIZE>> + '_> {
-        match &self.branch_type {
-            BranchType::Split { left, right } => {
+        match &self.right {
+            Some(right) => {
                 trace!("split");
-                Box::new(right.leaves_iter().chain(left.leaves_iter()))
+                Box::new(LeafIterator::new(&self.left).chain(right.leaves_iter()))
             }
-            BranchType::Leaf(leaf) => Box::new(LeafIterator::new(leaf)),
+            _ => Box::new(LeafIterator::new(&self.left)),
         }
     }
 
     /// Iterates by joining recursively, iterating roughly from right (closest)
     /// to left (furthest)
     pub fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &mut DistancePair<Node, ID_LEN>> + '_> {
-        match &mut self.branch_type {
-            BranchType::Split { left, right } => Box::new(right.iter_mut().chain(left.iter_mut())),
-            BranchType::Leaf(leaf) => Box::new(leaf.iter_mut()),
-        }
-    }
-
-    fn drain(&mut self) -> Box<dyn Iterator<Item = DistancePair<Node, ID_LEN>> + '_> {
-        match &mut self.branch_type {
-            BranchType::Split { left, right } => Box::new(right.drain().chain(left.drain())),
-            BranchType::Leaf(leaf) => Box::new(leaf.drain()),
+        match &mut self.right {
+            Some(right) => Box::new(right.iter_mut().chain(self.left.iter_mut())),
+            None => Box::new(self.left.iter_mut()),
         }
     }
 
@@ -293,9 +250,9 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
             return cached;
         }
 
-        let len = match &self.branch_type {
-            BranchType::Split { left, right } => left.len() + right.len(),
-            BranchType::Leaf(leaf) => leaf.len(),
+        let len = match &self.right {
+            Some(right) => self.left.len() + right.len(),
+            None => self.left.len(),
         };
         self.cached_len
             .store(len, std::sync::atomic::Ordering::Release);
@@ -338,6 +295,9 @@ impl<'a, Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Drop
 {
     fn drop(&mut self) {
         self.0.maybe_merge_recursively();
+        self.0
+            .cached_len
+            .store(0, std::sync::atomic::Ordering::Release);
         self.0.maybe_split_recursively();
     }
 }
@@ -374,6 +334,7 @@ pub(crate) fn bit_of_array<const N: usize>(
 pub(crate) mod tests {
 
     use expect_test::expect;
+    use tracing::trace;
     use tracing_test::traced_test;
 
     use crate::{DistancePair, HasId, node::Node, routing_table::tree::Tree};
@@ -392,8 +353,29 @@ pub(crate) mod tests {
 
     #[test]
     #[traced_test]
+    pub fn test_lookups() {
+        let mut root = Tree::<Node, 32, 2>::new();
+        // create a bunch of nodes
+        let nodes: Vec<_> = (1..100)
+            .map(|i| Node::new(format!("127.0.0.1:{i}").parse().unwrap()))
+            .collect();
+        let main_node = Node::new(format!("127.0.0.1:0").parse().unwrap());
+        let main_id = main_node.id();
+        for node in nodes.iter() {
+            let mut leaf = root.get_leaf_mut(&(main_id ^ node.id()));
+            let _ = leaf.try_insert((node.clone(), main_id));
+        }
+        let buckets: Vec<_> = root
+            .leaves_iter()
+            .map(|leaf| leaf.iter().collect::<Vec<_>>())
+            .collect();
+        trace!(?buckets);
+    }
+
+    #[test]
+    #[traced_test]
     pub fn test_tree() {
-        let mut tree: Tree<Node, 32, 20> = Tree::new_right(0);
+        let mut tree: Tree<Node, 32, 20> = Tree::new();
         let local_node = Node::new("0.0.0.0:8000".parse().unwrap());
         let nodes = (0..100).map(|port| Node::new(format!("127.0.0.1:{port}").parse().unwrap()));
         for node in nodes {
@@ -403,215 +385,154 @@ pub(crate) mod tests {
         }
         let leaves: Vec<_> = tree
             .leaves_iter()
-            .map(|leaf| leaf.iter().collect::<Vec<_>>())
+            .map(|leaf| {
+                let mut out = leaf.iter().collect::<Vec<_>>();
+                out.sort();
+                out
+            })
             .collect();
         expect!["4"].assert_eq(&leaves.len().to_string());
         expect![[r#"
             [
                 [
                     DistancePair(
-                        E809...1DA3,
+                        7B9A...1F70,
                         Node {
-                            addr: 127.0.0.1:12,
-                            id: Id(835E...E52A),
+                            addr: 127.0.0.1:0,
+                            id: Id(10CD...E7F9),
                         },
                     ),
                     DistancePair(
-                        E153...BDBE,
+                        1886...AC3D,
                         Node {
-                            addr: 127.0.0.1:33,
-                            id: Id(8A04...4537),
+                            addr: 127.0.0.1:1,
+                            id: Id(73D1...54B4),
                         },
                     ),
                     DistancePair(
-                        F522...6BB7,
+                        0F9E...34DE,
                         Node {
-                            addr: 127.0.0.1:36,
-                            id: Id(9E75...933E),
+                            addr: 127.0.0.1:2,
+                            id: Id(64C9...CC57),
                         },
                     ),
                     DistancePair(
-                        EA93...D091,
+                        0E7B...145A,
                         Node {
-                            addr: 127.0.0.1:50,
-                            id: Id(81C4...2818),
+                            addr: 127.0.0.1:5,
+                            id: Id(652C...ECD3),
                         },
                     ),
                     DistancePair(
-                        E4D1...08AB,
+                        35BF...F877,
                         Node {
-                            addr: 127.0.0.1:56,
-                            id: Id(8F86...F022),
+                            addr: 127.0.0.1:6,
+                            id: Id(5EE8...00FE),
                         },
                     ),
                     DistancePair(
-                        FCD4...FE39,
+                        6D55...496E,
                         Node {
-                            addr: 127.0.0.1:63,
-                            id: Id(9783...06B0),
+                            addr: 127.0.0.1:8,
+                            id: Id(0602...B1E7),
                         },
                     ),
                     DistancePair(
-                        FB15...2668,
+                        0483...E94F,
                         Node {
-                            addr: 127.0.0.1:72,
-                            id: Id(9042...DEE1),
+                            addr: 127.0.0.1:10,
+                            id: Id(6FD4...11C6),
                         },
                     ),
                     DistancePair(
-                        E29B...B623,
+                        718F...B419,
                         Node {
-                            addr: 127.0.0.1:74,
-                            id: Id(89CC...4EAA),
+                            addr: 127.0.0.1:11,
+                            id: Id(1AD8...4C90),
                         },
                     ),
                     DistancePair(
-                        E211...F898,
+                        77A8...3DFB,
                         Node {
-                            addr: 127.0.0.1:76,
-                            id: Id(8946...0011),
+                            addr: 127.0.0.1:13,
+                            id: Id(1CFF...C572),
                         },
                     ),
                     DistancePair(
-                        F8C3...BDB6,
+                        11EB...A7D2,
                         Node {
-                            addr: 127.0.0.1:91,
-                            id: Id(9394...453F),
+                            addr: 127.0.0.1:14,
+                            id: Id(7ABC...5F5B),
                         },
                     ),
                     DistancePair(
-                        E1CB...1CE7,
+                        4398...D9DB,
                         Node {
-                            addr: 127.0.0.1:92,
-                            id: Id(8A9C...E46E),
+                            addr: 127.0.0.1:17,
+                            id: Id(28CF...2152),
                         },
                     ),
                     DistancePair(
-                        E964...7D4C,
+                        55FC...D9D1,
                         Node {
-                            addr: 127.0.0.1:99,
-                            id: Id(8233...85C5),
-                        },
-                    ),
-                ],
-                [
-                    DistancePair(
-                        D9F7...4EFA,
-                        Node {
-                            addr: 127.0.0.1:3,
-                            id: Id(B2A0...B673),
+                            addr: 127.0.0.1:20,
+                            id: Id(3EAB...2158),
                         },
                     ),
                     DistancePair(
-                        C7FA...B808,
+                        0B8F...67C5,
                         Node {
-                            addr: 127.0.0.1:9,
-                            id: Id(ACAD...4081),
+                            addr: 127.0.0.1:23,
+                            id: Id(60D8...9F4C),
                         },
                     ),
                     DistancePair(
-                        D339...3CEB,
+                        24BD...97D9,
                         Node {
-                            addr: 127.0.0.1:15,
-                            id: Id(B86E...C462),
+                            addr: 127.0.0.1:25,
+                            id: Id(4FEA...6F50),
                         },
                     ),
                     DistancePair(
-                        C93F...E878,
+                        7EE3...7489,
                         Node {
-                            addr: 127.0.0.1:16,
-                            id: Id(A268...10F1),
+                            addr: 127.0.0.1:28,
+                            id: Id(15B4...9A20),
                         },
                     ),
                     DistancePair(
-                        DACC...A5CE,
+                        5577...2F96,
                         Node {
-                            addr: 127.0.0.1:18,
-                            id: Id(B19B...5D47),
+                            addr: 127.0.0.1:29,
+                            id: Id(3E20...D71F),
                         },
                     ),
                     DistancePair(
-                        DF6A...35E4,
+                        1B65...F6BD,
                         Node {
-                            addr: 127.0.0.1:19,
-                            id: Id(B43D...CD6D),
+                            addr: 127.0.0.1:34,
+                            id: Id(7032...0E34),
                         },
                     ),
                     DistancePair(
-                        CEB7...1BDE,
+                        4326...F7AB,
                         Node {
-                            addr: 127.0.0.1:22,
-                            id: Id(A5E0...E357),
+                            addr: 127.0.0.1:35,
+                            id: Id(2871...0F22),
                         },
                     ),
                     DistancePair(
-                        C078...CED7,
+                        3879...B8AF,
                         Node {
-                            addr: 127.0.0.1:26,
-                            id: Id(AB2F...365E),
+                            addr: 127.0.0.1:38,
+                            id: Id(532E...4026),
                         },
                     ),
                     DistancePair(
-                        C485...E6A7,
+                        1FD8...18AD,
                         Node {
-                            addr: 127.0.0.1:37,
-                            id: Id(AFD2...1E2E),
-                        },
-                    ),
-                    DistancePair(
-                        C9E2...698F,
-                        Node {
-                            addr: 127.0.0.1:41,
-                            id: Id(A2B5...9106),
-                        },
-                    ),
-                    DistancePair(
-                        D883...3DF2,
-                        Node {
-                            addr: 127.0.0.1:46,
-                            id: Id(B3D4...C57B),
-                        },
-                    ),
-                    DistancePair(
-                        CFF5...9A14,
-                        Node {
-                            addr: 127.0.0.1:78,
-                            id: Id(A4A2...629D),
-                        },
-                    ),
-                    DistancePair(
-                        C55B...4A76,
-                        Node {
-                            addr: 127.0.0.1:86,
-                            id: Id(AE0C...B2FF),
-                        },
-                    ),
-                    DistancePair(
-                        C443...7C71,
-                        Node {
-                            addr: 127.0.0.1:90,
-                            id: Id(AF14...84F8),
-                        },
-                    ),
-                    DistancePair(
-                        C70D...3E37,
-                        Node {
-                            addr: 127.0.0.1:95,
-                            id: Id(AC5A...C6BE),
-                        },
-                    ),
-                    DistancePair(
-                        D23B...0FDD,
-                        Node {
-                            addr: 127.0.0.1:96,
-                            id: Id(B96C...F754),
-                        },
-                    ),
-                    DistancePair(
-                        C96E...FFB4,
-                        Node {
-                            addr: 127.0.0.1:98,
-                            id: Id(A239...073D),
+                            addr: 127.0.0.1:39,
+                            id: Id(748F...E024),
                         },
                     ),
                 ],
@@ -759,143 +680,208 @@ pub(crate) mod tests {
                 ],
                 [
                     DistancePair(
-                        7B9A...1F70,
+                        D9F7...4EFA,
                         Node {
-                            addr: 127.0.0.1:0,
-                            id: Id(10CD...E7F9),
+                            addr: 127.0.0.1:3,
+                            id: Id(B2A0...B673),
                         },
                     ),
                     DistancePair(
-                        1886...AC3D,
+                        C7FA...B808,
                         Node {
-                            addr: 127.0.0.1:1,
-                            id: Id(73D1...54B4),
+                            addr: 127.0.0.1:9,
+                            id: Id(ACAD...4081),
                         },
                     ),
                     DistancePair(
-                        0F9E...34DE,
+                        D339...3CEB,
                         Node {
-                            addr: 127.0.0.1:2,
-                            id: Id(64C9...CC57),
+                            addr: 127.0.0.1:15,
+                            id: Id(B86E...C462),
                         },
                     ),
                     DistancePair(
-                        0E7B...145A,
+                        C93F...E878,
                         Node {
-                            addr: 127.0.0.1:5,
-                            id: Id(652C...ECD3),
+                            addr: 127.0.0.1:16,
+                            id: Id(A268...10F1),
                         },
                     ),
                     DistancePair(
-                        35BF...F877,
+                        DACC...A5CE,
                         Node {
-                            addr: 127.0.0.1:6,
-                            id: Id(5EE8...00FE),
+                            addr: 127.0.0.1:18,
+                            id: Id(B19B...5D47),
                         },
                     ),
                     DistancePair(
-                        6D55...496E,
+                        DF6A...35E4,
                         Node {
-                            addr: 127.0.0.1:8,
-                            id: Id(0602...B1E7),
+                            addr: 127.0.0.1:19,
+                            id: Id(B43D...CD6D),
                         },
                     ),
                     DistancePair(
-                        0483...E94F,
+                        CEB7...1BDE,
                         Node {
-                            addr: 127.0.0.1:10,
-                            id: Id(6FD4...11C6),
+                            addr: 127.0.0.1:22,
+                            id: Id(A5E0...E357),
                         },
                     ),
                     DistancePair(
-                        718F...B419,
+                        C078...CED7,
                         Node {
-                            addr: 127.0.0.1:11,
-                            id: Id(1AD8...4C90),
+                            addr: 127.0.0.1:26,
+                            id: Id(AB2F...365E),
                         },
                     ),
                     DistancePair(
-                        77A8...3DFB,
+                        C485...E6A7,
                         Node {
-                            addr: 127.0.0.1:13,
-                            id: Id(1CFF...C572),
+                            addr: 127.0.0.1:37,
+                            id: Id(AFD2...1E2E),
                         },
                     ),
                     DistancePair(
-                        11EB...A7D2,
+                        C9E2...698F,
                         Node {
-                            addr: 127.0.0.1:14,
-                            id: Id(7ABC...5F5B),
+                            addr: 127.0.0.1:41,
+                            id: Id(A2B5...9106),
                         },
                     ),
                     DistancePair(
-                        4398...D9DB,
+                        D883...3DF2,
                         Node {
-                            addr: 127.0.0.1:17,
-                            id: Id(28CF...2152),
+                            addr: 127.0.0.1:46,
+                            id: Id(B3D4...C57B),
                         },
                     ),
                     DistancePair(
-                        55FC...D9D1,
+                        CFF5...9A14,
                         Node {
-                            addr: 127.0.0.1:20,
-                            id: Id(3EAB...2158),
+                            addr: 127.0.0.1:78,
+                            id: Id(A4A2...629D),
                         },
                     ),
                     DistancePair(
-                        0B8F...67C5,
+                        C55B...4A76,
                         Node {
-                            addr: 127.0.0.1:23,
-                            id: Id(60D8...9F4C),
+                            addr: 127.0.0.1:86,
+                            id: Id(AE0C...B2FF),
                         },
                     ),
                     DistancePair(
-                        24BD...97D9,
+                        C443...7C71,
                         Node {
-                            addr: 127.0.0.1:25,
-                            id: Id(4FEA...6F50),
+                            addr: 127.0.0.1:90,
+                            id: Id(AF14...84F8),
                         },
                     ),
                     DistancePair(
-                        7EE3...7489,
+                        C70D...3E37,
                         Node {
-                            addr: 127.0.0.1:28,
-                            id: Id(15B4...9A20),
+                            addr: 127.0.0.1:95,
+                            id: Id(AC5A...C6BE),
                         },
                     ),
                     DistancePair(
-                        5577...2F96,
+                        D23B...0FDD,
                         Node {
-                            addr: 127.0.0.1:29,
-                            id: Id(3E20...D71F),
+                            addr: 127.0.0.1:96,
+                            id: Id(B96C...F754),
                         },
                     ),
                     DistancePair(
-                        1B65...F6BD,
+                        C96E...FFB4,
                         Node {
-                            addr: 127.0.0.1:34,
-                            id: Id(7032...0E34),
+                            addr: 127.0.0.1:98,
+                            id: Id(A239...073D),
+                        },
+                    ),
+                ],
+                [
+                    DistancePair(
+                        E809...1DA3,
+                        Node {
+                            addr: 127.0.0.1:12,
+                            id: Id(835E...E52A),
                         },
                     ),
                     DistancePair(
-                        4326...F7AB,
+                        E153...BDBE,
                         Node {
-                            addr: 127.0.0.1:35,
-                            id: Id(2871...0F22),
+                            addr: 127.0.0.1:33,
+                            id: Id(8A04...4537),
                         },
                     ),
                     DistancePair(
-                        3879...B8AF,
+                        F522...6BB7,
                         Node {
-                            addr: 127.0.0.1:38,
-                            id: Id(532E...4026),
+                            addr: 127.0.0.1:36,
+                            id: Id(9E75...933E),
                         },
                     ),
                     DistancePair(
-                        1FD8...18AD,
+                        EA93...D091,
                         Node {
-                            addr: 127.0.0.1:39,
-                            id: Id(748F...E024),
+                            addr: 127.0.0.1:50,
+                            id: Id(81C4...2818),
+                        },
+                    ),
+                    DistancePair(
+                        E4D1...08AB,
+                        Node {
+                            addr: 127.0.0.1:56,
+                            id: Id(8F86...F022),
+                        },
+                    ),
+                    DistancePair(
+                        FCD4...FE39,
+                        Node {
+                            addr: 127.0.0.1:63,
+                            id: Id(9783...06B0),
+                        },
+                    ),
+                    DistancePair(
+                        FB15...2668,
+                        Node {
+                            addr: 127.0.0.1:72,
+                            id: Id(9042...DEE1),
+                        },
+                    ),
+                    DistancePair(
+                        E29B...B623,
+                        Node {
+                            addr: 127.0.0.1:74,
+                            id: Id(89CC...4EAA),
+                        },
+                    ),
+                    DistancePair(
+                        E211...F898,
+                        Node {
+                            addr: 127.0.0.1:76,
+                            id: Id(8946...0011),
+                        },
+                    ),
+                    DistancePair(
+                        F8C3...BDB6,
+                        Node {
+                            addr: 127.0.0.1:91,
+                            id: Id(9394...453F),
+                        },
+                    ),
+                    DistancePair(
+                        E1CB...1CE7,
+                        Node {
+                            addr: 127.0.0.1:92,
+                            id: Id(8A9C...E46E),
+                        },
+                    ),
+                    DistancePair(
+                        E964...7D4C,
+                        Node {
+                            addr: 127.0.0.1:99,
+                            id: Id(8233...85C5),
                         },
                     ),
                 ],
