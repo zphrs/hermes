@@ -9,6 +9,7 @@ use std::{
 };
 
 use futures::{StreamExt as _, future};
+use futures_time::time::Duration;
 use rand::seq::IndexedRandom as _;
 use sha2::Digest as _;
 use tokio_stream::wrappers::ReadDirStream;
@@ -288,7 +289,7 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
         let manager = net.manager(node).unwrap();
         tasks.spawn(async move {
             manager
-                .join_network()
+                .refresh_stale_buckets(&Duration::new(0, 0))
                 .with_subscriber(NoSubscriber::new())
                 .await;
         });
@@ -355,7 +356,7 @@ fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
 #[tokio::test(flavor = "multi_thread")]
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
-    let num_nodes = 101;
+    let num_nodes = 1000;
     let num_trials = 1;
 
     let net = NetworkState::default();
@@ -372,7 +373,7 @@ async fn find_nonexistent_peer_returns_closest() {
 
     // Experiment: arbitrarily generate a node and try to find it
     for _ in 0..num_trials {
-        let target_node = a.new_node();
+        let target_node = Node::new("node-1017");
         let mut closest_nodes: Vec<_> = nodes
             .iter()
             .cloned()
@@ -384,13 +385,19 @@ async fn find_nonexistent_peer_returns_closest() {
         let next_closest_manager = net.manager(&next_closest_node).unwrap();
         // next_closest_manager.join_network().await;
         let result = my_manager.node_lookup(target_node.id()).await;
-        trace!(?closest_nodes);
+        let result_pairs: Vec<DistancePair<_, _>> = result
+            .iter()
+            .cloned()
+            .map(|n| (n, target_node.id()).into())
+            .collect();
+        trace!(?result_pairs, ?closest_nodes);
         let dists_from_target = [
             DistancePair::from((result[0].clone(), target_node.id())),
             DistancePair::from((next_closest_node.clone(), target_node.id())),
         ];
 
         trace!(?dists_from_target);
+        trace!(?target_node);
         assert_ne!(result.len(), 0);
         assert_eq!(result[0], next_closest_node);
     }
