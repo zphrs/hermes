@@ -68,6 +68,8 @@ impl<
     /// refreshes all buckets which haven't been looked up within the past
     /// [duration](Duration).
     pub async fn refresh_stale_buckets(&self, duration: &Duration) {
+        self.node_lookup(self.local_node.id()).await;
+
         let futures: FuturesUnordered<_> = self
             .routing_table
             .read()
@@ -117,22 +119,36 @@ impl<
     // k-buckets as necessary.
     #[instrument(skip(self))]
     pub async fn join_network(&self) {
-        self.node_lookup(self.local_node.id()).await;
-        let closest_dist = {
+        let closest_dist_before = {
             let routing_table = self.routing_table.read().await;
-            routing_table
-                .find_node(&Distance::ZERO)
+            let min_in_siblings = routing_table.nearest_in_sibling_list(&Distance::ZERO).min();
+            let min_in_routing_table = routing_table.find_node(&Distance::ZERO).min();
+            let min_overall = [min_in_siblings, min_in_routing_table]
+                .iter()
+                .flatten()
+                .map(|v| v.distance().clone())
                 .min()
-                .or_else(|| routing_table.nearest_in_sibling_list(&Distance::ZERO).min())
-                .map(|v| v.distance())
-                .unwrap_or(&Distance::MAX)
-                .clone()
+                .unwrap_or(Distance::MAX);
+            min_overall
         };
-        if closest_dist == Distance::MAX {
+        self.node_lookup(self.local_node.id()).await;
+        let closest_dist_after = {
+            let routing_table = self.routing_table.read().await;
+            let min_in_siblings = routing_table.nearest_in_sibling_list(&Distance::ZERO).min();
+            let min_in_routing_table = routing_table.find_node(&Distance::ZERO).min();
+            let min_overall = [min_in_siblings, min_in_routing_table]
+                .iter()
+                .flatten()
+                .map(|v| v.distance().clone())
+                .min()
+                .unwrap_or(Distance::MAX);
+            min_overall
+        };
+        if closest_dist_after == Distance::MAX || closest_dist_before <= closest_dist_after {
             return;
         }
 
-        self.refresh_buckets_after(&closest_dist).await;
+        self.refresh_buckets_after(&closest_dist_after).await;
     }
 
     fn local_addr(&self) -> &Id<ID_LEN> {
@@ -222,11 +238,8 @@ impl<
         table_lock: &mut RwLockWriteGuard<'_, RoutingTable<Node, ID_LEN, BUCKET_SIZE>>,
     ) -> impl IntoIterator<Item = DistancePair<Node, ID_LEN>> {
         let local_addr = self.local_addr();
-        let nodes: Vec<DistancePair<_, _>> = nodes
-            .into_iter()
-            .map(move |node| (node, local_addr).into())
-            .collect();
-        table_lock.maybe_add_nodes_to_siblings_list(nodes)
+        let pairs = nodes.into_iter().map(move |node| (node, local_addr));
+        table_lock.maybe_add_nodes_to_siblings_list(pairs)
     }
 
     /// pipelines the three stages for the nodes which allows all to complete
@@ -241,7 +254,7 @@ impl<
         let nodes = nodes.into_iter().filter(|v| v.id() != self.local_addr());
 
         // now if there are any leftover, they are all alive nodes that
-        // oveflowed the siblings list
+        // overflowed the siblings list
 
         let leftover: Vec<_> = self
             .maybe_add_nodes_to_siblings_list(nodes, &mut write_lock)

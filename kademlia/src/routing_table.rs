@@ -1,7 +1,9 @@
 mod tree;
 use std::cmp::min;
+use std::collections::hash_map;
+use std::sync::LazyLock;
+use std::time::Instant;
 
-use futures_time::time::Instant;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -9,6 +11,8 @@ use thiserror::Error;
 
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
+use tracing::instrument;
+use tracing::trace;
 
 use crate::routing_table::tree::LeafMut;
 use crate::{
@@ -22,11 +26,10 @@ pub use tree::Bucket;
 
 const NEARBY_NODES_MULTIP: usize = 5;
 
-pub struct RoutingTable<Node, const ID_LEN: usize, const BUCKET_SIZE: usize = 20>
-where
-    Node: HasId<ID_LEN>,
-{
-    buckets: tree::Tree<Node, ID_LEN, BUCKET_SIZE>,
+static STARTUP_INSTANT: LazyLock<Instant> = LazyLock::new(|| Instant::now());
+
+pub struct RoutingTable<Node: HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize = 20> {
+    tree: tree::Tree<Node, ID_LEN, BUCKET_SIZE>,
     // buckets: buckets::Buckets<Node, ID_LEN, BUCKET_SIZE>,
     // the nearest 5*k nodes to me, binary searched & inserted
     // because of the likelihood of having poor rotating codes
@@ -37,6 +40,23 @@ where
 #[derive(Debug, Error)]
 pub enum Error<Node, const ID_LEN: usize> {
     OutOfRange(DistancePair<Node, ID_LEN>),
+}
+
+impl<Node: Debug + HasId<ID_LEN> + Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Debug
+    for RoutingTable<Node, ID_LEN, BUCKET_SIZE>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RoutingTable")
+            .field("nearest_siblings_list", &self.nearest_siblings_list)
+            .field_with("bucket_updated_at", |f| {
+                let mut dl = f.debug_list();
+                for leaf in self.tree.leaves_iter() {
+                    dl.entry_with(|f| f.debug_list().entries(leaf.iter()).finish());
+                }
+                dl.finish()
+            })
+            .finish()
+    }
 }
 
 impl<Node, const ID_LEN: usize> From<Error<Node, ID_LEN>> for DistancePair<Node, ID_LEN> {
@@ -52,11 +72,19 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 {
     fn default() -> Self {
         Self {
-            buckets: Tree::new(),
+            tree: Tree::new(),
             nearest_siblings_list: Vec::with_capacity(NEARBY_NODES_MULTIP * BUCKET_SIZE + 1),
             bucket_updated_at: Default::default(),
         }
     }
+}
+
+/// to only take the min ownership necessary over bucket_updated_at
+/// rather than taking ownership over all of `self`
+macro_rules! bucket_updated_at_entry {
+    ($owner:expr, $distance:expr) => {
+        Self::bucket_entry(&mut $owner.bucket_updated_at, $distance)
+    };
 }
 
 impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize>
@@ -64,7 +92,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 {
     pub fn new() -> Self {
         Self {
-            buckets: Tree::new(),
+            tree: Tree::new(),
             nearest_siblings_list: Vec::with_capacity(NEARBY_NODES_MULTIP * BUCKET_SIZE + 1),
             bucket_updated_at: Default::default(),
         }
@@ -81,7 +109,8 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     where
         Node: HasId<ID_LEN>,
     {
-        self.buckets.get_leaf_mut(distance)
+        bucket_updated_at_entry!(self, distance).or_insert(*STARTUP_INSTANT);
+        self.tree.get_leaf_mut(distance)
     }
 
     /// Gets a [leaf](Leaf) based on a provided [distance](Distance).
@@ -90,7 +119,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     where
         Node: HasId<ID_LEN>,
     {
-        self.buckets.get_leaf(distance)
+        self.tree.get_leaf(distance)
     }
 
     #[cfg(test)]
@@ -107,11 +136,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     {
         let mut out: Vec<DistancePair<Node, ID_LEN>> = Vec::new();
         out.extend(self.sibling_list().iter().cloned());
-        out.extend(
-            self.buckets
-                .nodes_near(&Distance::ZERO, usize::MAX)
-                .cloned(),
-        );
+        out.extend(self.tree.nodes_near(&Distance::ZERO, usize::MAX).cloned());
         out.sort();
         out
     }
@@ -119,7 +144,10 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     pub fn get_stale_buckets(&self, duration: &std::time::Duration) -> impl Iterator<Item = usize> {
         self.bucket_updated_at
             .iter()
-            .filter(|(_, at)| std::time::Instant::now().duration_since(***at) < *duration)
+            .filter(|(_, at)| {
+                std::time::Instant::now().duration_since(**at) < *duration
+                    || **at == *STARTUP_INSTANT
+            })
             .map(|(idx, _)| *idx)
     }
     /// tries to add nodes to the siblings list.
@@ -140,6 +168,11 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
             .into_iter()
             .map(DistancePair::from)
             .filter(|v| v.distance() < last_in_list);
+        // insert a new instant in the distant past to any newly seen bucket
+        let iter = iter.map(|pair| {
+            bucket_updated_at_entry!(self, pair.distance());
+            pair
+        });
         self.nearest_siblings_list.extend(iter);
         self.nearest_siblings_list.sort();
         self.nearest_siblings_list.dedup();
@@ -155,11 +188,19 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         self.nearest_siblings_list.iter()
     }
 
+    fn bucket_id(distance: &Distance<ID_LEN>) -> usize {
+        distance.leading_zeros()
+    }
+
+    fn bucket_entry<'a>(
+        bucket_updated_at: &'a mut HashMap<usize, Instant>,
+        distance: &Distance<ID_LEN>,
+    ) -> hash_map::Entry<'a, usize, std::time::Instant> {
+        bucket_updated_at.entry(Self::bucket_id(distance))
+    }
+
     pub(crate) fn mark_bucket_as_looked_up(&mut self, distance: &Distance<ID_LEN>) {
-        let bucket_idx = distance.leading_zeros();
-        self.bucket_updated_at
-            .entry(bucket_idx)
-            .insert_entry(Instant::now());
+        bucket_updated_at_entry!(self, distance).insert_entry(Instant::now());
     }
 
     pub async fn remove_unreachable_siblings_list_nodes(
@@ -195,7 +236,8 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
             .filter(|pair| !to_remove_set.contains(pair.node().id()))
             .collect();
     }
-
+    /// dist should be distance from the target to the local_node
+    #[instrument(skip_all)]
     pub fn nearest_in_sibling_list(
         &self,
         dist: &Distance<ID_LEN>,
@@ -203,14 +245,15 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         // maybe include some from sib list
         let nearest = self
             .nearest_siblings_list
-            .binary_search_by(|p| p.distance().cmp(dist))
+            .binary_search_by_key(&dist, |p| p.distance())
             .unwrap_or_else(|v| v);
+
         // get at least BUCKET_SIZE from nearest_in_sib_list
         Box::new(
             self.nearest_siblings_list
                 .iter()
                 .skip(min(
-                    nearest.saturating_sub(BUCKET_SIZE / 2),
+                    nearest.saturating_sub(BUCKET_SIZE),
                     self.nearest_siblings_list.len().saturating_sub(BUCKET_SIZE),
                 ))
                 .take(BUCKET_SIZE),
@@ -223,7 +266,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     ) -> Box<dyn Iterator<Item = &DistancePair<Node, ID_LEN>> + '_> {
         Box::new(
             self.nearest_in_sibling_list(dist)
-                .chain(self.buckets.nodes_near(dist, BUCKET_SIZE * 200)),
+                .chain(self.tree.nodes_near(dist, BUCKET_SIZE * 200)),
         )
     }
 
@@ -236,7 +279,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
             .ok()
             .map(|ind| &mut self.nearest_siblings_list[ind])
             .or_else(
-                || match self.buckets.nodes_near_mut(pair.distance(), 1).next() {
+                || match self.tree.nodes_near_mut(pair.distance(), 1).next() {
                     Some(out) if out == pair => Some(out),
                     _ => None,
                 },

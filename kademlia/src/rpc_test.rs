@@ -284,18 +284,24 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
     }
     // nodes.extend(tasks.join_all().await);
 
-    let mut tasks = tokio::task::JoinSet::new();
-    for node in nodes.iter() {
-        let manager = net.manager(node).unwrap();
-        tasks.spawn(async move {
-            manager
-                .refresh_stale_buckets(&Duration::new(0, 0))
-                .with_subscriber(NoSubscriber::new())
-                .await;
-        });
-    }
+    // let mut tasks = tokio::task::JoinSet::new();
+    // for node in nodes.iter() {
+    //     let manager = net.manager(node).unwrap();
+    //     tasks.spawn(
+    //         async move {
+    //             manager
+    //                 .join_network()
+    //                 .with_subscriber(NoSubscriber::new())
+    //                 .await;
+    //             manager
+    //                 .refresh_stale_buckets(&std::time::Duration::ZERO)
+    //                 .await;
+    //         }
+    //         .with_subscriber(NoSubscriber::new()),
+    //     );
+    // }
 
-    tasks.join_all().await;
+    // tasks.join_all().await;
     nodes
 }
 
@@ -373,7 +379,7 @@ async fn find_nonexistent_peer_returns_closest() {
 
     // Experiment: arbitrarily generate a node and try to find it
     for _ in 0..num_trials {
-        let target_node = Node::new("node-1017");
+        let target_node = Node::new("node-1033");
         let mut closest_nodes: Vec<_> = nodes
             .iter()
             .cloned()
@@ -383,14 +389,25 @@ async fn find_nonexistent_peer_returns_closest() {
         closest_nodes.truncate(BUCKET_SIZE * 5);
         let next_closest_node = find_closest_node(&nodes, &target_node);
         let next_closest_manager = net.manager(&next_closest_node).unwrap();
-        // next_closest_manager.join_network().await;
         let result = my_manager.node_lookup(target_node.id()).await;
         let result_pairs: Vec<DistancePair<_, _>> = result
             .iter()
             .cloned()
             .map(|n| (n, target_node.id()).into())
             .collect();
-        trace!(?result_pairs, ?closest_nodes);
+
+        trace!(
+            ncm_table =? next_closest_manager
+                .routing_table
+                .read()
+                .await,
+            result_table =? net
+                .manager(&result[0])
+                .unwrap()
+                .routing_table
+                .read()
+                .await
+        );
         let dists_from_target = [
             DistancePair::from((result[0].clone(), target_node.id())),
             DistancePair::from((next_closest_node.clone(), target_node.id())),
@@ -398,6 +415,7 @@ async fn find_nonexistent_peer_returns_closest() {
 
         trace!(?dists_from_target);
         trace!(?target_node);
+
         assert_ne!(result.len(), 0);
         assert_eq!(result[0], next_closest_node);
     }
