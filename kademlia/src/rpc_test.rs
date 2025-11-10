@@ -12,13 +12,13 @@ use futures::{StreamExt as _, future};
 use rand::seq::IndexedRandom as _;
 use sha2::Digest as _;
 use tokio_stream::wrappers::ReadDirStream;
-use tracing::{debug, instrument::WithSubscriber as _, subscriber::NoSubscriber};
+use tracing::{debug, instrument::WithSubscriber as _, subscriber::NoSubscriber, trace};
 use tracing_test::traced_test;
 
-use crate::{HasId, Id, RequestHandler};
+use crate::{DistancePair, HasId, Id, RequestHandler};
 
 const ID_LEN: usize = 32;
-const BUCKET_SIZE: usize = 5;
+const BUCKET_SIZE: usize = 3;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Node {
@@ -263,31 +263,46 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
     bootstrap_and_join(&net.add_node(bootstrap_node.clone()), []).await;
     nodes.push(bootstrap_node.clone());
 
-    let mut tasks = tokio::task::JoinSet::new();
+    // let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..size {
-        tasks.spawn({
-            let net = net.clone();
-            let a = a.clone();
-            let bootstrap_node = bootstrap_node.clone();
-            async move {
-                let node = a.new_node();
-                let manager = net.add_node(node.clone());
-                bootstrap_and_join(&manager, vec![bootstrap_node.clone()])
-                    .with_subscriber(NoSubscriber::new())
-                    .await;
-                node
-            }
+        // tasks.spawn({
+        let net = net.clone();
+        let a = a.clone();
+        let bootstrap_node = bootstrap_node.clone();
+        let new_node = async move {
+            let node = a.new_node();
+            let manager = net.add_node(node.clone());
+            bootstrap_and_join(&manager, vec![bootstrap_node.clone()])
+                .with_subscriber(NoSubscriber::new())
+                .await;
+            node
+        }
+        .await;
+        nodes.push(new_node);
+        // });
+    }
+    // nodes.extend(tasks.join_all().await);
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for node in nodes.iter() {
+        let manager = net.manager(node).unwrap();
+        tasks.spawn(async move {
+            manager
+                .join_network()
+                .with_subscriber(NoSubscriber::new())
+                .await;
         });
     }
-    nodes.extend(tasks.join_all().await);
+
+    tasks.join_all().await;
     nodes
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[traced_test]
 async fn find_peer_large_network() {
-    let num_nodes = 100;
-    let num_trials = 10;
+    let num_nodes = 1000;
+    let num_trials = 1000;
 
     let net = NetworkState::default();
     let a = NodeAllocator::default();
@@ -340,26 +355,42 @@ fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
 #[tokio::test(flavor = "multi_thread")]
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
-    let num_nodes = 100;
-    let num_trials = 20;
+    let num_nodes = 101;
+    let num_trials = 1;
 
     let net = NetworkState::default();
     let a = NodeAllocator::default();
 
     let nodes = create_large_network(net.clone(), a.clone(), num_nodes).await;
 
-    let my_node = a.new_node();
-    let my_manager = net.add_node(my_node.clone());
-    bootstrap_and_join(&my_manager, vec![nodes[0].clone()]).await;
+    let my_node = nodes[0].clone();
+    let my_manager = net.manager(&my_node).unwrap();
+    // my_manager.join_network().await;
+    // bootstrap_and_join(&my_manager, vec![nodes[0].clone()]).await;
 
     let nodes = net.all_nodes();
 
     // Experiment: arbitrarily generate a node and try to find it
     for _ in 0..num_trials {
         let target_node = a.new_node();
-
+        let mut closest_nodes: Vec<_> = nodes
+            .iter()
+            .cloned()
+            .map::<DistancePair<_, _>, _>(|n| (n, target_node.id()).into())
+            .collect();
+        closest_nodes.sort();
+        closest_nodes.truncate(BUCKET_SIZE * 5);
         let next_closest_node = find_closest_node(&nodes, &target_node);
+        let next_closest_manager = net.manager(&next_closest_node).unwrap();
+        // next_closest_manager.join_network().await;
         let result = my_manager.node_lookup(target_node.id()).await;
+        trace!(?closest_nodes);
+        let dists_from_target = [
+            DistancePair::from((result[0].clone(), target_node.id())),
+            DistancePair::from((next_closest_node.clone(), target_node.id())),
+        ];
+
+        trace!(?dists_from_target);
         assert_ne!(result.len(), 0);
         assert_eq!(result[0], next_closest_node);
     }
@@ -460,9 +491,12 @@ async fn large_network_find_exact_node() {
 
     let my_node = Node::new("my-node");
     let my_manager = net.add_node(my_node.clone());
-    bootstrap_and_join(&my_manager, vec![nodes[0].clone()])
-        .with_subscriber(NoSubscriber::new())
-        .await;
+    bootstrap_and_join(
+        &my_manager,
+        vec![nodes.choose(&mut rand::rng()).unwrap().clone()],
+    )
+    .with_subscriber(NoSubscriber::new())
+    .await;
 
     future::join_all(
         iter::repeat_with(async || {
