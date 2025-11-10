@@ -81,6 +81,13 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         }
     }
 
+    pub fn maybe_split_recursively(&mut self) {
+        self.maybe_split();
+        if let BranchType::Split { right, .. } = &mut self.branch_type {
+            right.maybe_split_recursively();
+        }
+    }
+
     pub fn maybe_merge_recursively(&mut self) {
         if let BranchType::Split { right, .. } = &mut self.branch_type {
             right.maybe_merge_recursively();
@@ -331,6 +338,7 @@ impl<'a, Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Drop
 {
     fn drop(&mut self) {
         self.0.maybe_merge_recursively();
+        self.0.maybe_split_recursively();
     }
 }
 
