@@ -9,7 +9,6 @@ use std::{
 };
 
 use futures::{StreamExt as _, future};
-use futures_time::time::Duration;
 use rand::seq::IndexedRandom as _;
 use sha2::Digest as _;
 use tokio_stream::wrappers::ReadDirStream;
@@ -264,44 +263,41 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
     bootstrap_and_join(&net.add_node(bootstrap_node.clone()), []).await;
     nodes.push(bootstrap_node.clone());
 
-    // let mut tasks = tokio::task::JoinSet::new();
+    let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..size {
-        // tasks.spawn({
-        let net = net.clone();
-        let a = a.clone();
-        let bootstrap_node = bootstrap_node.clone();
-        let new_node = async move {
-            let node = a.new_node();
-            let manager = net.add_node(node.clone());
-            bootstrap_and_join(&manager, vec![bootstrap_node.clone()])
-                .with_subscriber(NoSubscriber::new())
-                .await;
-            node
-        }
-        .await;
-        nodes.push(new_node);
-        // });
+        tasks.spawn({
+            let net = net.clone();
+            let a = a.clone();
+            let bootstrap_node = bootstrap_node.clone();
+            // let new_node =
+            async move {
+                let node = a.new_node();
+                let manager = net.add_node(node.clone());
+                bootstrap_and_join(&manager, vec![bootstrap_node.clone()])
+                    .with_subscriber(NoSubscriber::new())
+                    .await;
+                node
+            }
+            // .await;
+            // nodes.push(new_node);
+        });
     }
-    // nodes.extend(tasks.join_all().await);
+    nodes.extend(tasks.join_all().await);
 
-    // let mut tasks = tokio::task::JoinSet::new();
-    // for node in nodes.iter() {
-    //     let manager = net.manager(node).unwrap();
-    //     tasks.spawn(
-    //         async move {
-    //             manager
-    //                 .join_network()
-    //                 .with_subscriber(NoSubscriber::new())
-    //                 .await;
-    //             manager
-    //                 .refresh_stale_buckets(&std::time::Duration::ZERO)
-    //                 .await;
-    //         }
-    //         .with_subscriber(NoSubscriber::new()),
-    //     );
-    // }
+    let mut tasks = tokio::task::JoinSet::new();
+    for node in nodes.iter() {
+        let manager = net.manager(node).unwrap();
+        tasks.spawn(
+            async move {
+                manager
+                    .refresh_stale_buckets(&std::time::Duration::ZERO)
+                    .await;
+            }
+            .with_subscriber(NoSubscriber::new()),
+        );
+    }
 
-    // tasks.join_all().await;
+    tasks.join_all().await;
     nodes
 }
 
@@ -363,7 +359,7 @@ fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
     let num_nodes = 1000;
-    let num_trials = 1;
+    let num_trials = 1000;
 
     let net = NetworkState::default();
     let a = NodeAllocator::default();
@@ -379,7 +375,7 @@ async fn find_nonexistent_peer_returns_closest() {
 
     // Experiment: arbitrarily generate a node and try to find it
     for _ in 0..num_trials {
-        let target_node = Node::new("node-1033");
+        let target_node = a.new_node();
         let mut closest_nodes: Vec<_> = nodes
             .iter()
             .cloned()
@@ -395,7 +391,7 @@ async fn find_nonexistent_peer_returns_closest() {
             .cloned()
             .map(|n| (n, target_node.id()).into())
             .collect();
-
+        trace!(?result_pairs);
         trace!(
             ncm_table =? next_closest_manager
                 .routing_table

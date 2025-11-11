@@ -249,14 +249,13 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
             .unwrap_or_else(|v| v);
 
         // get at least BUCKET_SIZE from nearest_in_sib_list
+        // since either the ones less than dist or the ones greater than dist
+        // might be closer, we should just return BUCKET_SIZE on both sides.
         Box::new(
             self.nearest_siblings_list
                 .iter()
-                .skip(min(
-                    nearest.saturating_sub(BUCKET_SIZE),
-                    self.nearest_siblings_list.len().saturating_sub(BUCKET_SIZE),
-                ))
-                .take(BUCKET_SIZE),
+                .skip(nearest.saturating_sub(BUCKET_SIZE))
+                .take(BUCKET_SIZE * 2),
         )
     }
 

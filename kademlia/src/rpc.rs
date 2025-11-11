@@ -449,11 +449,11 @@ impl<
             None => return false,
         };
 
+        trace!(?k_closest_lock);
+
         if !out {
             return false;
         }
-
-        trace!(?k_closest_lock);
 
         let mut queried_node_ids_lock = queried_node_ids.write().await;
         let next_to_query = k_closest_lock
@@ -503,13 +503,14 @@ impl<
 
         // try to add all these nodes
         self.add_nodes(closest_nodes.clone()).await;
-
         let mut k_closest = k_closest.write().await;
+
         let init_len = k_closest.len();
 
-        let farthest_k_dist = k_closest[init_len - 1].distance().clone();
+        let farthest_k_dist = k_closest[k_closest.len() - 1].distance().clone();
 
         let closest_nodes = closest_nodes
+            .clone()
             .into_iter()
             .map(|node| DistancePair::from((node, target_id)))
             .filter(|pair| pair.distance() < &farthest_k_dist);
