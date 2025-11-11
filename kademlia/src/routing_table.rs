@@ -240,23 +240,10 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     #[instrument(skip_all)]
     pub fn nearest_in_sibling_list(
         &self,
-        dist: &Distance<ID_LEN>,
     ) -> Box<dyn Iterator<Item = &DistancePair<Node, ID_LEN>> + '_> {
-        // maybe include some from sib list
-        let nearest = self
-            .nearest_siblings_list
-            .binary_search_by_key(&dist, |p| p.distance())
-            .unwrap_or_else(|v| v);
-
-        // get at least BUCKET_SIZE from nearest_in_sib_list
-        // since either the ones less than dist or the ones greater than dist
-        // might be closer, we should just return BUCKET_SIZE on both sides.
-        Box::new(
-            self.nearest_siblings_list
-                .iter()
-                .skip(nearest.saturating_sub(BUCKET_SIZE))
-                .take(BUCKET_SIZE * 2),
-        )
+        // returns all nearest_siblings because the dist between us and the target
+        // will not align with which nearby siblings are directly nearest to the target
+        Box::new(self.nearest_siblings_list.iter())
     }
 
     pub fn find_node(
@@ -264,8 +251,8 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         dist: &Distance<ID_LEN>,
     ) -> Box<dyn Iterator<Item = &DistancePair<Node, ID_LEN>> + '_> {
         Box::new(
-            self.nearest_in_sibling_list(dist)
-                .chain(self.tree.nodes_near(dist, BUCKET_SIZE * 200)),
+            self.nearest_in_sibling_list()
+                .chain(self.tree.nodes_near(dist, BUCKET_SIZE * 2)),
         )
     }
 

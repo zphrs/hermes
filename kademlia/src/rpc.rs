@@ -121,7 +121,7 @@ impl<
     pub async fn join_network(&self) {
         let closest_dist_before = {
             let routing_table = self.routing_table.read().await;
-            let min_in_siblings = routing_table.nearest_in_sibling_list(&Distance::ZERO).min();
+            let min_in_siblings = routing_table.nearest_in_sibling_list().min();
             let min_in_routing_table = routing_table.find_node(&Distance::ZERO).min();
             let min_overall = [min_in_siblings, min_in_routing_table]
                 .iter()
@@ -134,15 +134,12 @@ impl<
         self.node_lookup(self.local_node.id()).await;
         let closest_dist_after = {
             let routing_table = self.routing_table.read().await;
-            let min_in_siblings = routing_table.nearest_in_sibling_list(&Distance::ZERO).min();
-            let min_in_routing_table = routing_table.find_node(&Distance::ZERO).min();
-            let min_overall = [min_in_siblings, min_in_routing_table]
-                .iter()
-                .flatten()
-                .map(|v| v.distance().clone())
+            routing_table
+                .find_node(&Distance::ZERO)
                 .min()
-                .unwrap_or(Distance::MAX);
-            min_overall
+                .map(|v| v.distance().clone())
+                .unwrap_or(Distance::MAX)
+                .clone()
         };
         if closest_dist_after == Distance::MAX || closest_dist_before <= closest_dist_after {
             return;
@@ -354,18 +351,20 @@ impl<
             .collect();
         let k_closest = RwLock::new(closest_nodes);
         let querying = FuturesUnordered::new();
+        let queried: Vec<_> = alpha_closest.iter().map(HasId::id).cloned().collect();
         for node in alpha_closest {
-            queried_ids.write().await.insert(node.id().clone());
             querying.push(self.node_lookup_inner(node, id, &k_closest, &queried_ids));
         }
         // wait for all to finish, don't care about result
         trace!("awaiting query");
         querying.count().await;
         trace!("query finished");
+        let mut write_lock = queried_ids.write().await;
+        write_lock.extend(queried);
         // stage 2 where we continously query all k remaining which haven't been
         // queried until all k remaining have been queried
         let mut remaining: Vec<_> = {
-            let queried_ids_lock = queried_ids.read().await;
+            let queried_ids_lock = write_lock.downgrade();
 
             k_closest
                 .read()
@@ -441,13 +440,9 @@ impl<
         k_closest: &RwLock<Vec<DistancePair<Node, ID_LEN>>>,
         queried_node_ids: &RwLock<HashSet<Id<ID_LEN>>>,
     ) -> bool {
-        let (k_closest_lock, out) = match self
+        let (k_closest_lock, out) = self
             .update_k_closest_nodes(node, target_id, k_closest)
-            .await
-        {
-            Some(v) => v,
-            None => return false,
-        };
+            .await;
 
         trace!(?k_closest_lock);
 
@@ -455,7 +450,7 @@ impl<
             return false;
         }
 
-        let mut queried_node_ids_lock = queried_node_ids.write().await;
+        let queried_node_ids_lock = queried_node_ids.read().await;
         let next_to_query = k_closest_lock
             .downgrade()
             .iter()
@@ -468,8 +463,13 @@ impl<
             // Either way, recursive call is now over since there are no more nodes to query
             return out;
         }
+
+        let queried_ids: Vec<_> = next_to_query
+            .iter()
+            .map(|node| node.id())
+            .cloned()
+            .collect();
         trace!(querying=?next_to_query.iter().map(|n| DistancePair::from((n.clone(), target_id))).collect::<Vec<_>>());
-        queried_node_ids_lock.extend(next_to_query.iter().map(|node| node.id()).cloned());
         drop(queried_node_ids_lock);
         let querying = FuturesUnordered::from_iter(
             next_to_query
@@ -480,6 +480,9 @@ impl<
         trace!("querying");
         let round_succeeded = querying.any(|b| async move { b }).await;
         trace!("finished querying");
+
+        queried_node_ids.write().await.extend(queried_ids);
+
         if !round_succeeded {
             out // even if the sub-queries didn't, we still might have succeeded
         } else {
@@ -492,7 +495,10 @@ impl<
         node: Node,
         target_id: &Id<ID_LEN>,
         k_closest: &'a RwLock<Vec<DistancePair<Node, ID_LEN>>>,
-    ) -> Option<(RwLockWriteGuard<'a, Vec<DistancePair<Node, ID_LEN>>>, bool)> {
+    ) -> (
+        tokio::sync::RwLockWriteGuard<'a, Vec<DistancePair<Node, ID_LEN>>>,
+        bool,
+    ) {
         trace!("finding nearest nodes");
         let closest_nodes = self
             .handler
@@ -520,7 +526,7 @@ impl<
         let out = k_closest.len() > init_len;
         k_closest.truncate(BUCKET_SIZE);
 
-        Some((k_closest, out))
+        (k_closest, out)
     }
 
     fn find_node_with_lock<'a>(

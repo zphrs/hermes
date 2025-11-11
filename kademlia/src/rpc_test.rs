@@ -6,11 +6,13 @@ use std::{
         Arc, Mutex, RwLock,
         atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
-use futures::{StreamExt as _, future};
+use futures::{StreamExt as _, future, stream::FuturesUnordered};
 use rand::seq::IndexedRandom as _;
 use sha2::Digest as _;
+use tokio::task::JoinSet;
 use tokio_stream::wrappers::ReadDirStream;
 use tracing::{debug, instrument::WithSubscriber as _, subscriber::NoSubscriber, trace};
 use tracing_test::traced_test;
@@ -18,7 +20,7 @@ use tracing_test::traced_test;
 use crate::{DistancePair, HasId, Id, RequestHandler};
 
 const ID_LEN: usize = 32;
-const BUCKET_SIZE: usize = 3;
+const BUCKET_SIZE: usize = 20;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Node {
@@ -86,7 +88,7 @@ impl RequestHandler<Node, ID_LEN> for RpcAdapter {
     #[tracing::instrument(skip_all, fields(from=_from.addr))]
     async fn ping(&self, _from: &Node, to: &Node) -> bool {
         self.num_rpcs.fetch_add(1, Ordering::Relaxed);
-        tracing::debug!(num_rpcs = self.num_rpcs.load(Ordering::Relaxed));
+        // tracing::debug!(num_rpcs = self.num_rpcs.load(Ordering::Relaxed));
         // tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         self.network.manager(to).is_some()
     }
@@ -94,7 +96,7 @@ impl RequestHandler<Node, ID_LEN> for RpcAdapter {
     #[tracing::instrument(skip_all, fields(from=from.addr))]
     async fn find_node(&self, from: &Node, to: &Node, id: &Id<ID_LEN>) -> Vec<Node> {
         self.num_rpcs.fetch_add(1, Ordering::Relaxed);
-        tracing::debug!(num_rpcs = self.num_rpcs.load(Ordering::Relaxed));
+        // tracing::debug!(num_rpcs = self.num_rpcs.load(Ordering::Relaxed));
         let Some(manager) = self.network.manager(to) else {
             return vec![];
         };
@@ -358,63 +360,69 @@ fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
 #[tokio::test(flavor = "multi_thread")]
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
-    let num_nodes = 1000;
-    let num_trials = 1000;
+    let num_nodes = 10_000;
+    let num_trials = 100_000;
 
     let net = NetworkState::default();
     let a = NodeAllocator::default();
 
     let nodes = create_large_network(net.clone(), a.clone(), num_nodes).await;
 
-    let my_node = nodes[0].clone();
-    let my_manager = net.manager(&my_node).unwrap();
     // my_manager.join_network().await;
     // bootstrap_and_join(&my_manager, vec![nodes[0].clone()]).await;
 
-    let nodes = net.all_nodes();
-
     // Experiment: arbitrarily generate a node and try to find it
+    let mut js = JoinSet::new();
     for _ in 0..num_trials {
         let target_node = a.new_node();
-        let mut closest_nodes: Vec<_> = nodes
-            .iter()
-            .cloned()
-            .map::<DistancePair<_, _>, _>(|n| (n, target_node.id()).into())
-            .collect();
-        closest_nodes.sort();
-        closest_nodes.truncate(BUCKET_SIZE * 5);
-        let next_closest_node = find_closest_node(&nodes, &target_node);
-        let next_closest_manager = net.manager(&next_closest_node).unwrap();
-        let result = my_manager.node_lookup(target_node.id()).await;
-        let result_pairs: Vec<DistancePair<_, _>> = result
-            .iter()
-            .cloned()
-            .map(|n| (n, target_node.id()).into())
-            .collect();
-        trace!(?result_pairs);
-        trace!(
-            ncm_table =? next_closest_manager
-                .routing_table
-                .read()
-                .await,
-            result_table =? net
-                .manager(&result[0])
-                .unwrap()
-                .routing_table
-                .read()
-                .await
-        );
-        let dists_from_target = [
-            DistancePair::from((result[0].clone(), target_node.id())),
-            DistancePair::from((next_closest_node.clone(), target_node.id())),
-        ];
+        let net = net.clone();
+        let nodes = nodes.clone();
 
-        trace!(?dists_from_target);
-        trace!(?target_node);
+        js.spawn(async move {
+            let mut closest_nodes: Vec<_> = nodes
+                .iter()
+                .cloned()
+                .map::<DistancePair<_, _>, _>(|n| (n, target_node.id()).into())
+                .collect();
+            closest_nodes.sort();
+            closest_nodes.truncate(BUCKET_SIZE * 5);
+            let next_closest_node = find_closest_node(&nodes, &target_node);
+            let my_manager = net
+                .manager(nodes.choose(&mut rand::rng()).unwrap())
+                .unwrap();
+            let result = my_manager.node_lookup(target_node.id()).await;
+            // let next_closest_manager = net.manager(&next_closest_node).unwrap();
+            // let result_pairs: Vec<DistancePair<_, _>> = result
+            //     .iter()
+            //     .cloned()
+            //     .map(|n| (n, target_node.id()).into())
+            //     .collect();
+            let dists_from_target = [
+                DistancePair::from((result[0].clone(), target_node.id())),
+                DistancePair::from((next_closest_node.clone(), target_node.id())),
+            ];
 
-        assert_ne!(result.len(), 0);
-        assert_eq!(result[0], next_closest_node);
+            trace!(?dists_from_target);
+            trace!(?target_node);
+
+            assert_ne!(result.len(), 0);
+            assert_eq!(result[0], next_closest_node);
+        });
+        // trace!(?result_pairs);
+        // trace!(
+        //     ncm_table =? next_closest_manager
+        //         .routing_table
+        //         .read()
+        //         .await,
+        //     result_table =? net
+        //         .manager(&result[0])
+        //         .unwrap()
+        //         .routing_table
+        //         .read()
+        //         .await
+        // );
     }
+    js.join_all().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

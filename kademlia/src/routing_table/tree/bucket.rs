@@ -89,13 +89,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Bucket<Node, ID_LE
         self.0.iter_mut()
     }
     /// Removes all nodes which match the predicate and returns the removed
-    /// nodes. For example:
-    /// ```
-    /// # use kademlia::{Node, Bucket};
-    /// pub fn remove_node(bucket: &mut Bucket, node: &Node) {
-    ///   bucket.remove_nodes_where(|n| n == node);
-    /// }
-    /// ```
+    /// nodes.
     pub fn remove_nodes_where<F: FnMut(&DistancePair<Node, ID_LEN>) -> bool>(
         &mut self,
         mut predicate: F,
