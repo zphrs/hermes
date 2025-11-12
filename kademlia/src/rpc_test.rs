@@ -106,6 +106,7 @@ impl RequestHandler<Node, ID_LEN> for RpcAdapter {
 
 type RpcManager = crate::RpcManager<Node, RpcAdapter, ID_LEN, BUCKET_SIZE>;
 
+#[derive(Clone)]
 struct ManagerState {
     manager: RpcManager,
     connected: bool,
@@ -153,21 +154,18 @@ impl NetworkState {
     }
 
     fn all_nodes(&self) -> Vec<Node> {
-        self.nodes
-            .read()
-            .unwrap()
-            .keys()
-            .map(|addr| Node::new(addr))
-            .collect()
+        self.nodes.read().unwrap().keys().map(Node::new).collect()
     }
 
     async fn to_serializable(&self) -> Vec<(Node, Vec<Node>)> {
+        let values: Vec<_> = {
+            let guard = self.nodes.read().unwrap();
+            guard.values().cloned().collect()
+        };
         future::join_all(
-            self.nodes
-                .read()
-                .unwrap()
-                .values()
-                .map(|state| state.manager.to_parts()),
+            values
+                .into_iter()
+                .map(async move |state| state.manager.to_parts().await),
         )
         .await
     }
@@ -348,7 +346,7 @@ async fn find_peer_large_network() {
             )
         })
         .map(async |(bootstrap_node, target_node)| {
-            bootstrap_and_find_peer(&net, &a, bootstrap_node, target_node)
+            bootstrap_and_find_peer(&net, &a, bootstrap_node, target_node).await
         })
         .take(num_trials),
     )
@@ -380,75 +378,57 @@ async fn find_nonexistent_peer_returns_closest() {
     // bootstrap_and_join(&my_manager, vec![nodes[0].clone()]).await;
 
     // Experiment: arbitrarily generate a node and try to find it
-    for i in 0..num_trials {
-        // if i % num_nodes == 0 {
-        //     trace!("refreshing stale buckets");
-        //     let mut nodes = nodes.clone();
-        //     nodes.shuffle(&mut rand::rng());
-        //     let total_chunks = num_nodes / 10_000;
-        //     for (i, nodes) in nodes.iter().array_chunks::<10_000>().enumerate() {
-        //         let mut js = JoinSet::new();
-        //         for node in nodes.iter() {
-        //             let manager = net.manager(node).unwrap();
-        //             js.spawn(async move {
-        //                 manager
-        //                     .refresh_stale_buckets(&Duration::new(200, 0))
-        //                     .with_subscriber(NoSubscriber::new())
-        //                     .await;
-        //             });
-        //         }
-        //         js.join_all().await;
-        //         trace!("{i}/{total_chunks}");
-        //     }
-        //     trace!("refreshed stale buckets");
-        // }
-        let target_node = a.new_node();
-        let net = net.clone();
-        let nodes = nodes.clone();
-        async move {
-            let mut closest_nodes: Vec<_> = nodes
-                .iter()
-                .cloned()
-                .map::<DistancePair<_, _>, _>(|n| (n, target_node.id()).into())
-                .collect();
-            closest_nodes.sort();
-            closest_nodes.truncate(BUCKET_SIZE * 5);
-            let next_closest_node = find_closest_node(&nodes, &target_node);
-            let my_manager = net
-                .manager(nodes.choose(&mut rand::rng()).unwrap())
-                .unwrap();
-            let result = my_manager.node_lookup(target_node.id()).await;
-            let next_closest_manager = net.manager(&next_closest_node).unwrap();
-            let result_pairs: Vec<DistancePair<_, _>> = result
-                .iter()
-                .cloned()
-                .map(|n| (n, target_node.id()).into())
-                .collect();
-            let dists_from_target = [
-                DistancePair::from((result[0].clone(), target_node.id())),
-                DistancePair::from((next_closest_node.clone(), target_node.id())),
-            ];
+    for _ in 0..num_trials / 1000 {
+        let mut js = JoinSet::new();
+        for _ in 0..1000 {
+            let target_node = a.new_node();
+            let net = net.clone();
+            let nodes = nodes.clone();
 
-            trace!(?result_pairs);
-            trace!(
-                ncm_table =? next_closest_manager
-                    .routing_table
-                    .read()
-                    .await,
-                result_table =? net
-                    .manager(&result[0])
-                    .unwrap()
-                    .routing_table
-                    .read()
-                    .await
-            );
-            trace!(?dists_from_target);
-            trace!(?target_node);
+            js.spawn(async move {
+                let mut closest_nodes: Vec<_> = nodes
+                    .iter()
+                    .cloned()
+                    .map::<DistancePair<_, _>, _>(|n| (n, target_node.id()).into())
+                    .collect();
+                closest_nodes.sort();
+                closest_nodes.truncate(BUCKET_SIZE * 5);
+                let next_closest_node = find_closest_node(&nodes, &target_node);
+                let my_manager = net
+                    .manager(nodes.choose(&mut rand::rng()).unwrap())
+                    .unwrap();
+                let result = my_manager.node_lookup(target_node.id()).await;
+                let next_closest_manager = net.manager(&next_closest_node).unwrap();
+                let result_pairs: Vec<DistancePair<_, _>> = result
+                    .iter()
+                    .cloned()
+                    .map(|n| (n, target_node.id()).into())
+                    .collect();
+                let dists_from_target = [
+                    DistancePair::from((result[0].clone(), target_node.id())),
+                    DistancePair::from((next_closest_node.clone(), target_node.id())),
+                ];
 
-            assert_ne!(result.len(), 0);
-            assert_eq!(result[0], next_closest_node);
+                trace!(?result_pairs);
+                {
+                    let result_manager = net.manager(&result[0]).unwrap();
+                    let result_table = result_manager.routing_table.read().await;
+                    trace!(
+                        ncm_table =? next_closest_manager
+                            .routing_table
+                            .read()
+                            .await,
+                        ?result_table
+                    );
+                }
+                trace!(?dists_from_target);
+                trace!(?target_node);
+
+                assert_ne!(result.len(), 0);
+                assert_eq!(result[0], next_closest_node);
+            });
         }
-        .await;
+        js.join_all().await;
     }
 }
 

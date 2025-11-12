@@ -119,20 +119,8 @@ impl<
     // k-buckets as necessary.
     #[instrument(skip(self))]
     pub async fn join_network(&self) {
-        let closest_dist_before = {
-            let routing_table = self.routing_table.read().await;
-            let min_in_siblings = routing_table.nearest_in_sibling_list().min();
-            let min_in_routing_table = routing_table.find_node(&Distance::ZERO).min();
-            let min_overall = [min_in_siblings, min_in_routing_table]
-                .iter()
-                .flatten()
-                .map(|v| v.distance().clone())
-                .min()
-                .unwrap_or(Distance::MAX);
-            min_overall
-        };
         self.node_lookup(self.local_node.id()).await;
-        let closest_dist_after = {
+        let closest_dist = {
             let routing_table = self.routing_table.read().await;
             routing_table
                 .find_node(&Distance::ZERO)
@@ -141,11 +129,11 @@ impl<
                 .unwrap_or(Distance::MAX)
                 .clone()
         };
-        if closest_dist_after == Distance::MAX {
+        if closest_dist == Distance::MAX {
             return;
         }
 
-        self.refresh_buckets_after(&closest_dist_after).await;
+        self.refresh_buckets_after(&closest_dist).await;
     }
 
     fn local_addr(&self) -> &Id<ID_LEN> {
@@ -253,7 +241,7 @@ impl<
             .filter(|v| v.id() != self.local_addr())
             .filter(|n| {
                 let dist_pair: DistancePair<Node, ID_LEN> = (n.clone(), self.local_addr()).into();
-                let leaf = write_lock.get_leaf(&dist_pair.distance());
+                let leaf = write_lock.get_leaf(dist_pair.distance());
                 !leaf.contains(&dist_pair)
             })
             .collect();
@@ -305,7 +293,7 @@ impl<
             .filter(|n| {
                 let dist_pair: DistancePair<Node, ID_LEN> = (n.clone(), self.local_addr()).into();
                 write_lock.mark_bucket_as_looked_up(dist_pair.distance());
-                let leaf = write_lock.get_leaf(&dist_pair.distance());
+                let leaf = write_lock.get_leaf(dist_pair.distance());
                 !leaf.contains(&dist_pair)
             })
             .collect();
@@ -798,11 +786,8 @@ mod tests {
                         last_changed.duration_since(last_changed).as_millis_f64();
                     // otherwise, update cache
 
-                    let chance_of_changing_online_status = if node_is_online {
-                        0.5 + 0.5 * (1. - 1. / (0.001 * (dur_since_change) + 1.))
-                    } else {
-                        0.5 + 0.5 * (1. - 1. / (0.001 * (dur_since_change) + 1.))
-                    };
+                    let chance_of_changing_online_status =
+                        0.5 + 0.5 * (1. - 1. / (0.001 * (dur_since_change) + 1.));
                     let changed_status = rand::random_bool(chance_of_changing_online_status);
                     if changed_status {
                         node_is_online = !node_is_online;

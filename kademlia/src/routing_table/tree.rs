@@ -51,7 +51,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
             let draining: Vec<_> = self.left.drain().collect();
             for pair in draining {
                 let mut leaf = self.get_leaf_mut(pair.distance());
-                if let Err(_) = leaf.try_insert(pair) {
+                if leaf.try_insert(pair).is_err() {
                     cold_path();
                     unreachable!("should not run out of space since new split was just made")
                 }
@@ -340,7 +340,7 @@ pub(crate) mod tests {
         let nodes: Vec<_> = (1..100)
             .map(|i| Node::new(format!("127.0.0.1:{i}").parse().unwrap()))
             .collect();
-        let main_node = Node::new(format!("127.0.0.1:0").parse().unwrap());
+        let main_node = Node::new("127.0.0.1:0".parse().unwrap());
         let main_id = main_node.id();
         for node in nodes.iter() {
             let mut leaf = root.get_leaf_mut(&(main_id ^ node.id()));

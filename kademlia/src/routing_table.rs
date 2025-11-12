@@ -1,4 +1,5 @@
 mod tree;
+use core::fmt;
 use std::cmp::min;
 use std::collections::hash_map;
 use std::sync::LazyLock;
@@ -12,7 +13,6 @@ use thiserror::Error;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use tracing::instrument;
-use tracing::trace;
 
 use crate::routing_table::tree::LeafMut;
 use crate::{
@@ -26,7 +26,7 @@ pub use tree::Bucket;
 
 const NEARBY_NODES_MULTIP: usize = 5;
 
-static STARTUP_INSTANT: LazyLock<Instant> = LazyLock::new(|| Instant::now());
+static STARTUP_INSTANT: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 pub struct RoutingTable<Node: HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize = 20> {
     tree: tree::Tree<Node, ID_LEN, BUCKET_SIZE>,
@@ -48,13 +48,18 @@ impl<Node: Debug + HasId<ID_LEN> + Eq, const ID_LEN: usize, const BUCKET_SIZE: u
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RoutingTable")
             .field("nearest_siblings_list", &self.nearest_siblings_list)
-            .field_with("bucket_updated_at", |f| {
-                let mut dl = f.debug_list();
-                for leaf in self.tree.leaves_iter() {
-                    dl.entry_with(|f| f.debug_list().entries(leaf.iter()).finish());
-                }
-                dl.finish()
-            })
+            .field(
+                "bucket_updated_at",
+                &fmt::from_fn(|f| {
+                    let mut dl = f.debug_list();
+                    for leaf in self.tree.leaves_iter() {
+                        dl.entry(&fmt::from_fn(|f| {
+                            f.debug_list().entries(leaf.iter()).finish()
+                        }));
+                    }
+                    dl.finish()
+                }),
+            )
             .finish()
     }
 }
@@ -169,9 +174,8 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
             .map(DistancePair::from)
             .filter(|v| v.distance() < last_in_list);
         // insert a new instant in the distant past to any newly seen bucket
-        let iter = iter.map(|pair| {
+        let iter = iter.inspect(|pair| {
             bucket_updated_at_entry!(self, pair.distance()).or_insert(*STARTUP_INSTANT);
-            pair
         });
         self.nearest_siblings_list.extend(iter);
         self.nearest_siblings_list.sort();
