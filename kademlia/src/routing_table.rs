@@ -170,7 +170,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
             .filter(|v| v.distance() < last_in_list);
         // insert a new instant in the distant past to any newly seen bucket
         let iter = iter.map(|pair| {
-            bucket_updated_at_entry!(self, pair.distance());
+            bucket_updated_at_entry!(self, pair.distance()).or_insert(*STARTUP_INSTANT);
             pair
         });
         self.nearest_siblings_list.extend(iter);
