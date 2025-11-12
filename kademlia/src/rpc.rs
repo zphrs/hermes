@@ -141,7 +141,7 @@ impl<
                 .unwrap_or(Distance::MAX)
                 .clone()
         };
-        if closest_dist_after == Distance::MAX || closest_dist_before <= closest_dist_after {
+        if closest_dist_after == Distance::MAX {
             return;
         }
 
@@ -248,7 +248,15 @@ impl<
         write_lock
             .remove_unreachable_siblings_list_nodes(&self.local_node, &self.handler)
             .await;
-        let nodes = nodes.into_iter().filter(|v| v.id() != self.local_addr());
+        let nodes: Vec<_> = nodes
+            .into_iter()
+            .filter(|v| v.id() != self.local_addr())
+            .filter(|n| {
+                let dist_pair: DistancePair<Node, ID_LEN> = (n.clone(), self.local_addr()).into();
+                let leaf = write_lock.get_leaf(&dist_pair.distance());
+                !leaf.contains(&dist_pair)
+            })
+            .collect();
 
         // now if there are any leftover, they are all alive nodes that
         // overflowed the siblings list
@@ -296,6 +304,7 @@ impl<
             .filter(|v| v.id() != self.local_node.id())
             .filter(|n| {
                 let dist_pair: DistancePair<Node, ID_LEN> = (n.clone(), self.local_addr()).into();
+                write_lock.mark_bucket_as_looked_up(dist_pair.distance());
                 let leaf = write_lock.get_leaf(&dist_pair.distance());
                 !leaf.contains(&dist_pair)
             })
