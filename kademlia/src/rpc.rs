@@ -68,7 +68,14 @@ impl<
     /// refreshes all buckets which haven't been looked up within the past
     /// [duration](Duration).
     pub async fn refresh_stale_buckets(&self, duration: &Duration) {
+        let dist_before = self.dist_to_closest_neighbor().await;
         self.node_lookup(self.local_node.id()).await;
+        let dist_after = self.dist_to_closest_neighbor().await;
+
+        if dist_after < dist_before {
+            self.refresh_buckets_between(&dist_before, &dist_after)
+                .await;
+        }
 
         let futures: FuturesUnordered<_> = self
             .routing_table
@@ -91,11 +98,11 @@ impl<
     // 2.3: Refreshing means picking a random ID (just gonna do halfway) in the
     // bucket's range and performing a node search for that ID.
     // Run internally when joining network
-    async fn refresh_buckets_after(&self, after: &Distance<ID_LEN>) {
+    async fn refresh_buckets_between(&self, left: &Distance<ID_LEN>, right: &Distance<ID_LEN>) {
         // perform node_lookup on the bucket directly after the input distance.
         // could also simply do a left shift instead
-        let lz_count = after.leading_zeros();
-        let shift_by = ID_LEN * 8 - lz_count;
+        let lz_count = left.leading_zeros();
+        let shift_by = ID_LEN * 8 - right.leading_zeros() - lz_count;
         let lookups = FuturesUnordered::new();
         trace!("refreshing {} buckets", lz_count);
         for shift_by in shift_by..(shift_by + lz_count) {
@@ -111,6 +118,9 @@ impl<
             // .timeout(futures_time::time::Duration::from_secs(10))
             .await;
     }
+    async fn refresh_buckets_after(&self, after: &Distance<ID_LEN>) {
+        self.refresh_buckets_between(after, &Distance::MAX).await
+    }
     // 2.3: To join the network, a node u must have a contact to an already
     // participating node w. u inserts w into the appropriate k-bucket. u then
     // performs a node lookup for its own node ID. Finally, u refreshes all
@@ -120,20 +130,22 @@ impl<
     #[instrument(skip(self))]
     pub async fn join_network(&self) {
         self.node_lookup(self.local_node.id()).await;
-        let closest_dist = {
-            let routing_table = self.routing_table.read().await;
-            routing_table
-                .find_node(&Distance::ZERO)
-                .min()
-                .map(|v| v.distance().clone())
-                .unwrap_or(Distance::MAX)
-                .clone()
-        };
+        let closest_dist = self.dist_to_closest_neighbor().await;
         if closest_dist == Distance::MAX {
             return;
         }
 
         self.refresh_buckets_after(&closest_dist).await;
+    }
+
+    async fn dist_to_closest_neighbor(&self) -> Distance<ID_LEN> {
+        let routing_table = self.routing_table.read().await;
+        routing_table
+            .find_node(&Distance::ZERO)
+            .min()
+            .map(|v| v.distance().clone())
+            .unwrap_or(Distance::MAX)
+            .clone()
     }
 
     fn local_addr(&self) -> &Id<ID_LEN> {
@@ -292,11 +304,29 @@ impl<
             .filter(|v| v.id() != self.local_node.id())
             .filter(|n| {
                 let dist_pair: DistancePair<Node, ID_LEN> = (n.clone(), self.local_addr()).into();
-                write_lock.mark_bucket_as_looked_up(dist_pair.distance());
                 let leaf = write_lock.get_leaf(dist_pair.distance());
                 !leaf.contains(&dist_pair)
             })
             .collect();
+
+        // now if there are any leftover, they are all alive nodes that
+        // oveflowed the siblings list
+        let leftover: Vec<_> = self
+            .maybe_add_nodes_to_siblings_list(nodes, &mut write_lock)
+            .into_iter()
+            .collect();
+
+        for pair in leftover {
+            self.insert_without_removal(pair, &mut write_lock);
+        }
+    }
+
+    /// pipelines the three stages for the nodes which allows all to complete
+    /// their write, read, write stages in synchronicity when inserting.
+    #[instrument(skip_all)]
+    #[cfg(test)]
+    pub(crate) async fn load_nodes_in(&self, nodes: impl IntoIterator<Item = Node>) {
+        let mut write_lock = self.routing_table.write().await;
 
         // now if there are any leftover, they are all alive nodes that
         // oveflowed the siblings list
@@ -556,7 +586,7 @@ impl<
         nodes: impl IntoIterator<Item = Node>,
     ) -> Self {
         let manager = Self::new(handler, local_node);
-        manager.add_nodes_without_removing(nodes).await;
+        manager.load_nodes_in(nodes).await;
         manager
     }
 }

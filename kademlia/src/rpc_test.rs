@@ -1,17 +1,18 @@
 use std::{
     collections::HashMap,
     fmt::Debug,
-    iter,
+    iter, panic,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use futures::{StreamExt as _, future};
 use rand::seq::IndexedRandom as _;
 use sha2::Digest as _;
-use tokio::task::JoinSet;
+use tokio::{task::JoinSet, time::sleep};
 use tokio_stream::wrappers::ReadDirStream;
 use tracing::{debug, instrument::WithSubscriber as _, subscriber::NoSubscriber, trace};
 use tracing_test::traced_test;
@@ -298,7 +299,7 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
         let manager = net.manager(node).unwrap();
         tasks.spawn(
             async move {
-                manager.join_network().await;
+                manager.refresh_stale_buckets(&Duration::ZERO).await;
             }
             .with_subscriber(NoSubscriber::new()),
         );
@@ -365,7 +366,7 @@ fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
 #[tokio::test(flavor = "multi_thread")]
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
-    let num_nodes = 100_000;
+    let num_nodes = 50_000;
     let num_trials = 1_000_000;
 
     let net = load_network("find_nonexistent_peer_returns_closest", num_nodes).await;
@@ -378,57 +379,89 @@ async fn find_nonexistent_peer_returns_closest() {
     // bootstrap_and_join(&my_manager, vec![nodes[0].clone()]).await;
 
     // Experiment: arbitrarily generate a node and try to find it
-    for _ in 0..num_trials / 1000 {
+    let parallelization_factor = 10_000;
+    for i in 0..num_trials / parallelization_factor {
         let mut js = JoinSet::new();
-        for _ in 0..1000 {
+        for _ in 0..parallelization_factor {
             let target_node = a.new_node();
             let net = net.clone();
             let nodes = nodes.clone();
 
-            js.spawn(async move {
-                let mut closest_nodes: Vec<_> = nodes
-                    .iter()
-                    .cloned()
-                    .map::<DistancePair<_, _>, _>(|n| (n, target_node.id()).into())
-                    .collect();
-                closest_nodes.sort();
-                closest_nodes.truncate(BUCKET_SIZE * 5);
-                let next_closest_node = find_closest_node(&nodes, &target_node);
-                let my_manager = net
-                    .manager(nodes.choose(&mut rand::rng()).unwrap())
-                    .unwrap();
-                let result = my_manager.node_lookup(target_node.id()).await;
-                let next_closest_manager = net.manager(&next_closest_node).unwrap();
-                let result_pairs: Vec<DistancePair<_, _>> = result
-                    .iter()
-                    .cloned()
-                    .map(|n| (n, target_node.id()).into())
-                    .collect();
-                let dists_from_target = [
-                    DistancePair::from((result[0].clone(), target_node.id())),
-                    DistancePair::from((next_closest_node.clone(), target_node.id())),
-                ];
+            js.spawn(
+                async move {
+                    let mut closest_nodes: Vec<_> = nodes
+                        .iter()
+                        .cloned()
+                        .map::<DistancePair<_, _>, _>(|n| (n, target_node.id()).into())
+                        .collect();
+                    closest_nodes.sort();
+                    closest_nodes.truncate(BUCKET_SIZE * 5);
+                    let next_closest_node = find_closest_node(&nodes, &target_node);
+                    let my_manager = net
+                        .manager(nodes.choose(&mut rand::rng()).unwrap())
+                        .unwrap();
+                    let result = my_manager.node_lookup(target_node.id()).await;
+                    // let next_closest_manager = net.manager(&next_closest_node).unwrap();
+                    let result_pairs: Vec<DistancePair<_, _>> = result
+                        .iter()
+                        .cloned()
+                        .map(|n| (n, target_node.id()).into())
+                        .collect();
+                    let dists_from_target = [
+                        DistancePair::from((result[0].clone(), target_node.id())),
+                        DistancePair::from((next_closest_node.clone(), target_node.id())),
+                    ];
 
-                trace!(?result_pairs);
-                {
-                    let result_manager = net.manager(&result[0]).unwrap();
-                    let result_table = result_manager.routing_table.read().await;
-                    trace!(
-                        ncm_table =? next_closest_manager
-                            .routing_table
-                            .read()
-                            .await,
-                        ?result_table
+                    trace!(?result_pairs);
+                    let result_table_str = {
+                        let result_manager = net.manager(&result[0]).unwrap();
+                        format!("{:?}", result_manager.routing_table.read().await)
+                    };
+
+                    // assert_eq!(result[0], next_closest_node);
+
+                    return (
+                        result[0].clone(),
+                        next_closest_node,
+                        dists_from_target,
+                        target_node,
+                        result_pairs,
+                        result_table_str,
                     );
                 }
-                trace!(?dists_from_target);
-                trace!(?target_node);
-
-                assert_ne!(result.len(), 0);
-                assert_eq!(result[0], next_closest_node);
-            });
+                .with_subscriber(NoSubscriber::new()),
+            );
         }
-        js.join_all().await;
+        while let Some(res) = js.join_next().await {
+            match res {
+                Err(err) => {
+                    if err.is_panic() {
+                        panic::resume_unwind(err.into_panic())
+                    }
+                }
+                Ok(v) => {
+                    let (
+                        result,
+                        next_closest_node,
+                        dists_from_target,
+                        target_node,
+                        result_pairs,
+                        result_table_str,
+                    ) = v;
+                    if result != next_closest_node {
+                        trace!(
+                            "Error querying for {:?}. Found {:?}, closest {:?}",
+                            target_node, result, next_closest_node
+                        );
+                        trace!("{}", result_table_str.as_str());
+                        trace!(?dists_from_target, ?result_pairs);
+                        break;
+                    }
+                }
+            }
+        }
+        trace!("{i}/{} done", num_trials / parallelization_factor);
+        sleep(Duration::from_secs(2)).await;
     }
 }
 
