@@ -44,24 +44,6 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         }
     }
 
-    fn from_leaf(leaf: Leaf<Node, ID_LEN, BUCKET_SIZE>, depth: usize) -> Self {
-        Tree {
-            left: leaf,
-            right: None,
-            cached_len: AtomicUsize::new(0),
-            depth,
-        }
-    }
-
-    fn from_split(left: Leaf<Node, ID_LEN, BUCKET_SIZE>, right: Box<Self>, depth: usize) -> Self {
-        Self {
-            left,
-            right: Some(right),
-            cached_len: AtomicUsize::new(0),
-            depth,
-        }
-    }
-
     /// checks if the bucket should split and splits if it should.
     fn maybe_split(&mut self) {
         if self.left.is_full() && self.right.is_none() {
@@ -481,7 +463,8 @@ pub(crate) mod tests {
                     ),
                 ],
             ]
-        "#]].assert_debug_eq(&buckets);
+        "#]]
+        .assert_debug_eq(&buckets);
     }
 
     #[test]
