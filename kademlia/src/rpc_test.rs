@@ -6,10 +6,9 @@ use std::{
         Arc, Mutex, RwLock,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 
-use futures::{StreamExt as _, future, stream::FuturesUnordered};
+use futures::{StreamExt as _, future};
 use rand::seq::IndexedRandom as _;
 use sha2::Digest as _;
 use tokio::task::JoinSet;
@@ -174,20 +173,25 @@ impl NetworkState {
     }
 
     async fn load_data(&self, data: Vec<(Node, Vec<Node>)>) {
+        let mut js = JoinSet::new();
         for (node, peers) in data {
             let addr = node.addr.clone();
             let handler = RpcAdapter {
                 network: self.clone(),
                 num_rpcs: Arc::new(AtomicUsize::new(0)),
             };
-            let manager = RpcManager::from_parts_unchecked(handler, node, peers).await;
-            let state = ManagerState {
-                manager: manager.clone(),
-                connected: true,
-            };
-            let mut nodes = self.nodes.write().unwrap();
-            nodes.insert(addr.to_string(), state);
+            let this = self.clone();
+            js.spawn(async move {
+                let manager = RpcManager::from_parts_unchecked(handler, node, peers).await;
+                let state = ManagerState {
+                    manager: manager.clone(),
+                    connected: true,
+                };
+                let mut nodes = this.nodes.write().unwrap();
+                nodes.insert(addr.to_string(), state);
+            });
         }
+        js.join_all().await;
     }
 }
 
@@ -197,6 +201,11 @@ struct NodeAllocator {
 }
 
 impl NodeAllocator {
+    fn new(count: usize) -> Self {
+        Self {
+            count: Arc::new(count.into()),
+        }
+    }
     fn new_node(&self) -> Node {
         let mut count = self.count.lock().unwrap();
         let addr = format!("node-{count}");
@@ -291,9 +300,7 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
         let manager = net.manager(node).unwrap();
         tasks.spawn(
             async move {
-                manager
-                    .refresh_stale_buckets(&std::time::Duration::ZERO)
-                    .await;
+                manager.join_network().await;
             }
             .with_subscriber(NoSubscriber::new()),
         );
@@ -360,25 +367,45 @@ fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
 #[tokio::test(flavor = "multi_thread")]
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
-    let num_nodes = 10_000;
-    let num_trials = 100_000;
+    let num_nodes = 100_000;
+    let num_trials = 1_000_000;
 
-    let net = NetworkState::default();
-    let a = NodeAllocator::default();
+    let net = load_network("find_nonexistent_peer_returns_closest", num_nodes).await;
 
-    let nodes = create_large_network(net.clone(), a.clone(), num_nodes).await;
+    let a = NodeAllocator::new(num_nodes + 1);
+
+    let nodes = net.all_nodes();
 
     // my_manager.join_network().await;
     // bootstrap_and_join(&my_manager, vec![nodes[0].clone()]).await;
 
     // Experiment: arbitrarily generate a node and try to find it
-    let mut js = JoinSet::new();
-    for _ in 0..num_trials {
+    for i in 0..num_trials {
+        // if i % num_nodes == 0 {
+        //     trace!("refreshing stale buckets");
+        //     let mut nodes = nodes.clone();
+        //     nodes.shuffle(&mut rand::rng());
+        //     let total_chunks = num_nodes / 10_000;
+        //     for (i, nodes) in nodes.iter().array_chunks::<10_000>().enumerate() {
+        //         let mut js = JoinSet::new();
+        //         for node in nodes.iter() {
+        //             let manager = net.manager(node).unwrap();
+        //             js.spawn(async move {
+        //                 manager
+        //                     .refresh_stale_buckets(&Duration::new(200, 0))
+        //                     .with_subscriber(NoSubscriber::new())
+        //                     .await;
+        //             });
+        //         }
+        //         js.join_all().await;
+        //         trace!("{i}/{total_chunks}");
+        //     }
+        //     trace!("refreshed stale buckets");
+        // }
         let target_node = a.new_node();
         let net = net.clone();
         let nodes = nodes.clone();
-
-        js.spawn(async move {
+        async move {
             let mut closest_nodes: Vec<_> = nodes
                 .iter()
                 .cloned()
@@ -391,38 +418,38 @@ async fn find_nonexistent_peer_returns_closest() {
                 .manager(nodes.choose(&mut rand::rng()).unwrap())
                 .unwrap();
             let result = my_manager.node_lookup(target_node.id()).await;
-            // let next_closest_manager = net.manager(&next_closest_node).unwrap();
-            // let result_pairs: Vec<DistancePair<_, _>> = result
-            //     .iter()
-            //     .cloned()
-            //     .map(|n| (n, target_node.id()).into())
-            //     .collect();
+            let next_closest_manager = net.manager(&next_closest_node).unwrap();
+            let result_pairs: Vec<DistancePair<_, _>> = result
+                .iter()
+                .cloned()
+                .map(|n| (n, target_node.id()).into())
+                .collect();
             let dists_from_target = [
                 DistancePair::from((result[0].clone(), target_node.id())),
                 DistancePair::from((next_closest_node.clone(), target_node.id())),
             ];
 
+            trace!(?result_pairs);
+            trace!(
+                ncm_table =? next_closest_manager
+                    .routing_table
+                    .read()
+                    .await,
+                result_table =? net
+                    .manager(&result[0])
+                    .unwrap()
+                    .routing_table
+                    .read()
+                    .await
+            );
             trace!(?dists_from_target);
             trace!(?target_node);
 
             assert_ne!(result.len(), 0);
             assert_eq!(result[0], next_closest_node);
-        });
-        // trace!(?result_pairs);
-        // trace!(
-        //     ncm_table =? next_closest_manager
-        //         .routing_table
-        //         .read()
-        //         .await,
-        //     result_table =? net
-        //         .manager(&result[0])
-        //         .unwrap()
-        //         .routing_table
-        //         .read()
-        //         .await
-        // );
+        }
+        .await;
     }
-    js.join_all().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -486,7 +513,6 @@ async fn load_network(test_name: &str, num_nodes: usize) -> NetworkState {
             .with_subscriber(NoSubscriber::new())
             .await;
         save_network(&net, test_name, num_nodes).await;
-
         return net;
     }
 
@@ -507,7 +533,7 @@ async fn load_network(test_name: &str, num_nodes: usize) -> NetworkState {
 
     let data = tasks.join_all().await;
     net.load_data(data).await;
-
+    trace!("loaded network from disk");
     net
 }
 
