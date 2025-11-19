@@ -21,6 +21,19 @@ impl<const N: usize> HasId<N> for &Id<N> {
         self
     }
 }
+
+impl<const N: usize> From<&[u8]> for Id<N> {
+    fn from(value: &[u8]) -> Self {
+        let m = value.len();
+        assert!(
+            m <= N,
+            "invalid id length of {m}, must be <= {N} bytes long",
+        );
+        let mut out = [0u8; N];
+        out.copy_from_slice(value);
+        Id(out)
+    }
+}
 impl<const M: usize, const N: usize> From<[u8; M]> for Id<N> {
     fn from(value: [u8; M]) -> Self {
         assert!(

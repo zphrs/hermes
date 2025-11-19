@@ -1,5 +1,4 @@
 mod tree;
-use core::fmt;
 use std::cmp::min;
 use std::collections::hash_map;
 use std::sync::LazyLock;
@@ -34,7 +33,7 @@ pub struct RoutingTable<Node: HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_S
     // the nearest 5*k nodes to me, binary searched & inserted
     // because of the likelihood of having poor rotating codes
     nearest_siblings_list: Vec<id::DistancePair<Node, ID_LEN>>,
-    // when each bucket has been updated
+    // when each bucket has last been looked_up
     bucket_updated_at: HashMap<usize, Instant>,
 }
 #[derive(Debug, Error)]
@@ -48,18 +47,8 @@ impl<Node: Debug + HasId<ID_LEN> + Eq, const ID_LEN: usize, const BUCKET_SIZE: u
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RoutingTable")
             .field("nearest_siblings_list", &self.nearest_siblings_list)
-            .field(
-                "bucket_updated_at",
-                &fmt::from_fn(|f| {
-                    let mut dl = f.debug_list();
-                    for leaf in self.tree.leaves_iter() {
-                        dl.entry(&fmt::from_fn(|f| {
-                            f.debug_list().entries(leaf.iter()).finish()
-                        }));
-                    }
-                    dl.finish()
-                }),
-            )
+            .field("tree", &self.tree)
+            .field("bucket_updated_at", &self.bucket_updated_at)
             .finish()
     }
 }

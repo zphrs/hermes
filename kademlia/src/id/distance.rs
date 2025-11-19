@@ -1,4 +1,5 @@
-use std::fmt::{Debug, Display, from_fn};
+use crate::helpers::from_fn;
+use std::fmt::{Debug, Display};
 use std::ops::{Add, BitXor, Index, Shl, Shr};
 
 use crate::HasId;

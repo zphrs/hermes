@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use std::fmt::from_fn;
+use crate::helpers::from_fn;
 
 use std::fmt::Debug;
 
@@ -45,10 +45,7 @@ impl<const N: usize> Id<N> {
         let mut chunks_left = first_zero_offset / 8;
         let first_zero_chunk_offset = chunks_left * 8;
 
-        for word in self.bytes()[..first_zero_chunk_offset]
-            .iter()
-            .array_chunks::<8>()
-        {
+        for word in self.bytes()[..first_zero_chunk_offset].chunks(8) {
             // print each word (64 bits) together
             for byte in word {
                 write!(f, "{:02X?}", byte)?;

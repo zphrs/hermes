@@ -9,10 +9,17 @@ use std::{
     time::Duration,
 };
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use futures::{StreamExt as _, future};
 use rand::seq::IndexedRandom as _;
 use sha2::Digest as _;
-use tokio::{task::JoinSet, time::sleep};
+use tokio::task::JoinSet;
 use tokio_stream::wrappers::ReadDirStream;
 use tracing::{debug, instrument::WithSubscriber as _, subscriber::NoSubscriber, trace};
 use tracing_test::traced_test;
@@ -51,8 +58,8 @@ impl Node {
     pub fn new(addr: impl AsRef<str>) -> Self {
         let mut hasher = sha2::Sha256::new();
         hasher.update(addr.as_ref().as_bytes());
-        let hash: [u8; 32] = *hasher.finalize().as_array().unwrap();
-        let id = Id::from(hash);
+
+        let id = Id::from(hasher.finalize().as_slice());
         Self {
             addr: addr.as_ref().into(),
             id,
@@ -179,18 +186,21 @@ impl NetworkState {
                 network: self.clone(),
                 num_rpcs: Arc::new(AtomicUsize::new(0)),
             };
-            let this = self.clone();
             js.spawn(async move {
                 let manager = RpcManager::from_parts_unchecked(handler, node, peers).await;
                 let state = ManagerState {
-                    manager: manager.clone(),
+                    manager,
                     connected: true,
                 };
-                let mut nodes = this.nodes.write().unwrap();
-                nodes.insert(addr.to_string(), state);
+                (addr, state)
             });
         }
-        js.join_all().await;
+        let states = js.join_all().await;
+        trace!("made all managers");
+        let mut nodes = self.nodes.write().unwrap();
+        for (addr, state) in states {
+            nodes.insert(addr, state);
+        }
     }
 }
 
@@ -273,26 +283,51 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
     bootstrap_and_join(&net.add_node(bootstrap_node.clone()), []).await;
     nodes.push(bootstrap_node.clone());
 
-    let mut tasks = tokio::task::JoinSet::new();
-    for _ in 0..size {
-        tasks.spawn({
-            let net = net.clone();
-            let a = a.clone();
-            let bootstrap_node = bootstrap_node.clone();
-            // let new_node =
-            async move {
-                let node = a.new_node();
-                let manager = net.add_node(node.clone());
-                bootstrap_and_join(&manager, vec![bootstrap_node.clone()])
-                    .with_subscriber(NoSubscriber::new())
-                    .await;
-                node
-            }
-            // .await;
-            // nodes.push(new_node);
+    trace!("bootstrapped first node");
+
+    let mut bootstrap_nodes: Vec<_> = (0..size.ilog2()).map(|_| a.new_node()).collect();
+    let mut js = JoinSet::new();
+    for node in bootstrap_nodes.iter().cloned() {
+        let bootstrap_node = bootstrap_node.clone();
+        let net = net.clone();
+        js.spawn(async move {
+            bootstrap_and_join(&net.add_node(node), [bootstrap_node.clone()])
+                .with_subscriber(NoSubscriber::new())
+                .await
         });
     }
-    nodes.extend(tasks.join_all().await);
+
+    js.join_all().await;
+
+    trace!("bootstrapped bootstrap nodes");
+
+    let leftover_nodes = size - (size.ilog2() as usize) - 1;
+
+    const SPAWN_CHUNK_SIZE: usize = 10_000;
+
+    for outer in 0..(leftover_nodes / SPAWN_CHUNK_SIZE) {
+        let mut tasks = tokio::task::JoinSet::new();
+        for inner in 0..SPAWN_CHUNK_SIZE {
+            let i = outer * SPAWN_CHUNK_SIZE + inner;
+            tasks.spawn({
+                let net = net.clone();
+                let a = a.clone();
+                let bootstrap_node = bootstrap_nodes[i % bootstrap_nodes.len()].clone();
+                let node = a.new_node();
+                async move {
+                    let manager = net.add_node(node.clone());
+                    bootstrap_and_join(&manager, vec![bootstrap_node])
+                        .with_subscriber(NoSubscriber::new())
+                        .await;
+                    node
+                }
+            });
+        }
+        trace!("spawned {outer}/{}", leftover_nodes / SPAWN_CHUNK_SIZE);
+        nodes.append(&mut tasks.join_all().await);
+    }
+    trace!("spawned all bootstraps");
+    nodes.append(&mut bootstrap_nodes);
 
     let mut tasks = tokio::task::JoinSet::new();
     for node in nodes.iter() {
@@ -306,6 +341,7 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
     }
 
     tasks.join_all().await;
+    trace!("finished spawning all nodes");
     nodes
 }
 
@@ -363,14 +399,14 @@ fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
         .clone()
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
-    let num_nodes = 50_000;
+    let num_nodes = 1_000_000;
     let num_trials = 1_000_000;
 
     let net = load_network("find_nonexistent_peer_returns_closest", num_nodes).await;
-
+    trace!("fully loaded network");
     let a = NodeAllocator::new(num_nodes + 1);
 
     let nodes = net.all_nodes();
@@ -379,8 +415,8 @@ async fn find_nonexistent_peer_returns_closest() {
     // bootstrap_and_join(&my_manager, vec![nodes[0].clone()]).await;
 
     // Experiment: arbitrarily generate a node and try to find it
-    let parallelization_factor = 10_000;
-    for i in 0..num_trials / parallelization_factor {
+    let parallelization_factor = 20_000;
+    'outer: for i in 0..(num_trials / parallelization_factor) {
         let mut js = JoinSet::new();
         for _ in 0..parallelization_factor {
             let target_node = a.new_node();
@@ -420,14 +456,14 @@ async fn find_nonexistent_peer_returns_closest() {
 
                     // assert_eq!(result[0], next_closest_node);
 
-                    return (
+                    (
                         result[0].clone(),
                         next_closest_node,
                         dists_from_target,
                         target_node,
                         result_pairs,
                         result_table_str,
-                    );
+                    )
                 }
                 .with_subscriber(NoSubscriber::new()),
             );
@@ -455,13 +491,14 @@ async fn find_nonexistent_peer_returns_closest() {
                         );
                         trace!("{}", result_table_str.as_str());
                         trace!(?dists_from_target, ?result_pairs);
-                        break;
+                        break 'outer;
                     }
                 }
             }
         }
+        js.abort_all();
         trace!("{i}/{} done", num_trials / parallelization_factor);
-        sleep(Duration::from_secs(2)).await;
+        // sleep(Duration::from_secs(2)).await;
     }
 }
 
@@ -522,9 +559,7 @@ async fn load_network(test_name: &str, num_nodes: usize) -> NetworkState {
 
         let net = NetworkState::default();
         let a = NodeAllocator::default();
-        create_large_network(net.clone(), a.clone(), num_nodes)
-            .with_subscriber(NoSubscriber::new())
-            .await;
+        create_large_network(net.clone(), a.clone(), num_nodes).await;
         save_network(&net, test_name, num_nodes).await;
         return net;
     }
@@ -545,8 +580,9 @@ async fn load_network(test_name: &str, num_nodes: usize) -> NetworkState {
     }
 
     let data = tasks.join_all().await;
+    trace!("loaded data from disk");
     net.load_data(data).await;
-    trace!("loaded network from disk");
+    trace!("loaded disk data into the network");
     net
 }
 

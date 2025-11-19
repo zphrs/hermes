@@ -1,13 +1,11 @@
-use std::fmt::{Debug, from_fn};
+use std::fmt::Debug;
 
-use ringbuffer::{ConstGenericRingBuffer, RingBuffer as _};
+use crate::helpers::from_fn;
 
-use crate::{RequestHandler, id::DistancePair};
-use futures::stream::FuturesUnordered;
-use futures::stream::StreamExt;
+use crate::id::DistancePair;
 
 pub struct Bucket<Node, const ID_LEN: usize, const BUCKET_SIZE: usize>(
-    ConstGenericRingBuffer<DistancePair<Node, ID_LEN>, BUCKET_SIZE>,
+    arrayvec::ArrayVec<DistancePair<Node, ID_LEN>, BUCKET_SIZE>,
 );
 
 impl<Node: Debug + Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Debug
@@ -21,28 +19,6 @@ impl<Node: Debug + Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Debug
 }
 
 impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Bucket<Node, ID_LEN, BUCKET_SIZE> {
-    /// moves the used_node (if found) to the start of the new buffer
-    /// otherwise is a no-op.
-    #[cfg(test)]
-    pub fn mark_as_used(&mut self, node: &DistancePair<Node, ID_LEN>) {
-        let bucket_dump = self.0.drain();
-        let mut new_self = Self(Default::default());
-
-        let mut used_node = None;
-        let node_ref = node;
-        for node in bucket_dump {
-            if node == *node_ref {
-                used_node = Some(node);
-                continue;
-            }
-            new_self.add(node);
-        }
-        if let Some(used_node) = used_node {
-            new_self.add(used_node);
-        }
-
-        *self = new_self
-    }
     /// Instance of [Self::remove_nodes_where]. Removes a single node from
     /// the Bucket. Ideally, it is better to remove multiple nodes at once
     /// since each removal call requires a new allocation of a buffer.
@@ -54,10 +30,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Bucket<Node, ID_LE
 
 impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Bucket<Node, ID_LEN, BUCKET_SIZE> {
     pub(crate) fn new() -> Self {
-        Self(ConstGenericRingBuffer::<
-            DistancePair<Node, ID_LEN>,
-            BUCKET_SIZE,
-        >::new())
+        Self(Default::default())
     }
     pub fn is_full(&self) -> bool {
         self.0.is_full()
@@ -71,15 +44,14 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Bucket<Node, ID_LE
         self.len() == 0
     }
 
-    /// adds the new node in, potentially overwriting the least recently queued
-    /// node from the bucket.
+    /// adds the new pair in if there is space available, otherwise does nothing
     pub fn add(&mut self, value: impl Into<DistancePair<Node, ID_LEN>>) {
-        self.0.enqueue(value.into());
+        let _ = self.0.try_push(value.into());
     }
     /// Returns an iterator over the elements in the ringbuffer,
     /// removing [nodes](Node) as they are iterated over.
     pub(crate) fn drain(&mut self) -> impl Iterator<Item = DistancePair<Node, ID_LEN>> {
-        self.0.drain()
+        self.0.drain(..)
     }
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &DistancePair<Node, ID_LEN>> {
         self.0.iter()
@@ -88,47 +60,12 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Bucket<Node, ID_LE
     pub fn iter_mut(&mut self) -> impl ExactSizeIterator<Item = &mut DistancePair<Node, ID_LEN>> {
         self.0.iter_mut()
     }
-    /// Removes all nodes which match the predicate and returns the removed
-    /// nodes.
+    /// Removes all nodes which match the predicate.
     pub fn remove_nodes_where<F: FnMut(&DistancePair<Node, ID_LEN>) -> bool>(
         &mut self,
         mut predicate: F,
-    ) -> Vec<DistancePair<Node, ID_LEN>> {
-        let mut new_self = Self::new();
-        let mut removed = Vec::new();
-        for node in self.0.drain() {
-            if (predicate)(&node) {
-                // removed
-                removed.push(node);
-            } else {
-                new_self.add(node);
-            }
-        }
-        *self = new_self;
-        removed
-    }
-    /// Removes all unreachable nodes in this bucket by pinging each node using
-    /// the provided handler.
-    pub async fn remove_unreachable_nodes(
-        &mut self,
-        local_node: &Node,
-        handler: &impl RequestHandler<Node, ID_LEN>,
     ) {
-        // Ping all nodes concurrently and keep only reachable ones.
-        let mut new_self = Self::new();
-        let mut futures: FuturesUnordered<_> = self
-            .0
-            .drain()
-            .map(|node| async move { handler.ping(local_node, node.node()).await.then_some(node) })
-            .collect();
-
-        while let Some(maybe_node) = futures.next().await {
-            if let Some(node) = maybe_node {
-                new_self.add(node);
-            }
-        }
-
-        *self = new_self;
+        self.0.retain(|v| !predicate(v));
     }
 }
 
@@ -183,29 +120,6 @@ mod tests {
                         Node {
                             addr: 0.0.0.0:8080,
                             id: Id(197A...086E),
-                        },
-                    ),
-                ],
-            )
-        "#]]
-        .assert_debug_eq(&bucket);
-
-        bucket.mark_as_used(&n1_pair);
-        expect![[r#"
-            Bucket(
-                [
-                    DistancePair(
-                        0AD0...F026,
-                        Node {
-                            addr: 0.0.0.0:8080,
-                            id: Id(197A...086E),
-                        },
-                    ),
-                    DistancePair(
-                        03B3...9EC4,
-                        Node {
-                            addr: 127.0.0.1:8080,
-                            id: Id(1019...668C),
                         },
                     ),
                 ],

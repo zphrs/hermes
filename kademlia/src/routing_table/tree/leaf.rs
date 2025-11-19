@@ -62,10 +62,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
         self.bucket.drain()
     }
 
-    pub fn remove_where<F: FnMut(&DistancePair<Node, ID_LEN>) -> bool>(
-        &mut self,
-        predicate: F,
-    ) -> Vec<DistancePair<Node, ID_LEN>> {
+    pub fn remove_where<F: FnMut(&DistancePair<Node, ID_LEN>) -> bool>(&mut self, predicate: F) {
         self.bucket.remove_nodes_where(predicate)
     }
 

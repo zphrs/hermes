@@ -1,11 +1,3 @@
-#![feature(ip_as_octets)]
-#![feature(slice_as_array)]
-#![feature(debug_closure_helpers)]
-#![feature(iter_array_chunks)]
-#![feature(cold_path)]
-#![feature(trait_alias)]
-#![feature(duration_millis_float)]
-
 mod id;
 pub mod prelude;
 mod routing_table;
@@ -14,6 +6,7 @@ mod traits;
 
 #[cfg(test)]
 mod rpc_test;
+mod helpers;
 
 pub use rpc::RpcManager;
 
@@ -27,7 +20,7 @@ pub const BUCKET_SIZE: usize = 20;
 
 #[cfg(test)]
 mod node {
-    use std::{fmt::from_fn, net::SocketAddr};
+    use std::net::SocketAddr;
 
     use sha2::{Digest as _, Sha256};
 
@@ -50,7 +43,7 @@ mod node {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("Node")
                 .field("addr", &self.addr)
-                .field("id", &from_fn(|f| write!(f, "{}", self.id)))
+                .field("id", &self.id.to_string())
                 .finish()
         }
     }
@@ -65,12 +58,12 @@ mod node {
     impl Node {
         pub fn new(addr: SocketAddr) -> Self {
             let mut hasher = Sha256::new();
-            hasher.update(addr.ip().as_octets());
+            hasher.update(addr.ip().to_string());
             hasher.update(addr.port().to_be_bytes());
             let hash = hasher.finalize();
             Self {
                 addr,
-                id: hash.as_slice().as_array::<32>().unwrap().to_owned().into(),
+                id: hash.as_slice().into(),
             }
         }
     }
