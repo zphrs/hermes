@@ -87,10 +87,10 @@ mod tests {
             Bucket(
                 [
                     DistancePair(
-                        03B3...9EC4,
+                        FCBE...E762,
                         Node {
                             addr: 127.0.0.1:8080,
-                            id: Id(1019...668C),
+                            id: "Id(07D4...182D)",
                         },
                     ),
                 ],
@@ -109,17 +109,17 @@ mod tests {
             Bucket(
                 [
                     DistancePair(
-                        03B3...9EC4,
+                        FCBE...E762,
                         Node {
                             addr: 127.0.0.1:8080,
-                            id: Id(1019...668C),
+                            id: "Id(07D4...182D)",
                         },
                     ),
                     DistancePair(
-                        0AD0...F026,
+                        65F7...A5BC,
                         Node {
                             addr: 0.0.0.0:8080,
-                            id: Id(197A...086E),
+                            id: "Id(9E9D...5AF3)",
                         },
                     ),
                 ],
@@ -132,17 +132,17 @@ mod tests {
             Bucket(
                 [
                     DistancePair(
-                        03B3...9EC4,
+                        FCBE...E762,
                         Node {
                             addr: 127.0.0.1:8080,
-                            id: Id(1019...668C),
+                            id: "Id(07D4...182D)",
                         },
                     ),
                     DistancePair(
-                        0AD0...F026,
+                        65F7...A5BC,
                         Node {
                             addr: 0.0.0.0:8080,
-                            id: Id(197A...086E),
+                            id: "Id(9E9D...5AF3)",
                         },
                     ),
                 ],
@@ -155,17 +155,17 @@ mod tests {
             Bucket(
                 [
                     DistancePair(
-                        0AD0...F026,
+                        FCBE...E762,
                         Node {
-                            addr: 0.0.0.0:8080,
-                            id: Id(197A...086E),
+                            addr: 127.0.0.1:8080,
+                            id: "Id(07D4...182D)",
                         },
                     ),
                     DistancePair(
-                        0AD0...F026,
+                        65F7...A5BC,
                         Node {
                             addr: 0.0.0.0:8080,
-                            id: Id(197A...086E),
+                            id: "Id(9E9D...5AF3)",
                         },
                     ),
                 ],
@@ -174,23 +174,23 @@ mod tests {
         .assert_debug_eq(&bucket);
 
         bucket.remove_nodes_where(|n| *n == n2_pair);
-        expect!["Bucket([])"].assert_eq(&format!("{:?}", bucket));
+        expect![[r#"Bucket([DistancePair(FCBE...E762, Node { addr: 127.0.0.1:8080, id: "Id(07D4...182D)" })])"#]].assert_eq(&format!("{:?}", bucket));
         bucket.add(n1_pair);
         bucket.add(n2_pair);
         expect![[r#"
             [
                 DistancePair(
-                    03B3...9EC4,
+                    FCBE...E762,
                     Node {
                         addr: 127.0.0.1:8080,
-                        id: Id(1019...668C),
+                        id: "Id(07D4...182D)",
                     },
                 ),
                 DistancePair(
-                    0AD0...F026,
+                    FCBE...E762,
                     Node {
-                        addr: 0.0.0.0:8080,
-                        id: Id(197A...086E),
+                        addr: 127.0.0.1:8080,
+                        id: "Id(07D4...182D)",
                     },
                 ),
             ]

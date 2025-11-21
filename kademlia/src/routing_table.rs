@@ -291,38 +291,38 @@ mod tests {
         expect![[r#"
             [
                 DistancePair(
-                    002C...DDD7,
+                    0035...8F8D,
                     Node {
-                        addr: 127.0.0.1:673,
-                        id: Id(B0DA...C093),
+                        addr: 127.0.0.1:833,
+                        id: "Id(90C2...7074)",
                     },
                 ),
                 DistancePair(
-                    0108...8658,
+                    0040...AA40,
                     Node {
-                        addr: 127.0.0.1:358,
-                        id: Id(B1FE...9B1C),
+                        addr: 127.0.0.1:351,
+                        id: "Id(90B7...55B9)",
                     },
                 ),
                 DistancePair(
-                    016D...4003,
+                    005B...50E1,
                     Node {
-                        addr: 127.0.0.1:18,
-                        id: Id(B19B...5D47),
+                        addr: 127.0.0.1:221,
+                        id: "Id(90AC...AF18)",
                     },
                 ),
                 DistancePair(
-                    01AA...CB9B,
+                    00BA...83A4,
                     Node {
-                        addr: 127.0.0.1:597,
-                        id: Id(B15C...D6DF),
+                        addr: 127.0.0.1:345,
+                        id: "Id(904D...7C5D)",
                     },
                 ),
                 DistancePair(
-                    0204...6D32,
+                    00D1...156A,
                     Node {
-                        addr: 127.0.0.1:642,
-                        id: Id(B2F2...7076),
+                        addr: 127.0.0.1:789,
+                        id: "Id(9026...EA93)",
                     },
                 ),
             ]
