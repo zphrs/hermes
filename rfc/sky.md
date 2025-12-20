@@ -19,9 +19,9 @@ id because the ratcheting algorithm requires a secret piece of data.
 Since different users connect to different sky servers based on their current
 id, unless a user gets incredibly unlucky with their ratcheted ids, consistently
 ending up with the same node operator, the times they are online will be
-anonymized and the list of devices they specifically are messaging will be
+anonymized and the list of devices they specifically are connecting with will be
 untrackable, assuming that the majority of sky nodes do not store and publish
-the IP addresses of those who connect to the sky.
+the IP addresses of those who connect to them.
 
 This can further be anonymized by having the user randomly report that they are
 online even when inactive while the program is running in the background through
@@ -36,14 +36,11 @@ are consistently ratcheting forward.
 
 ## Address Reset Handling
 
-This works until you have a former friend who a user wants to remove from their
+This works until a user has a former friend who they want to remove from their
 friend list and furthermore prevent that friend from being able to track their
 online status. When a friend is removed from a friend list, a user can reliably
-broadcast a total change of address to all of their friends. To prevent losing
-friends from a total address change, a user can repeatedly broadcast messages to
-their old friends who have not acknowledged their address change yet. This
-broadcasting only needs to be repeated at around the interval at which messages
-expire in the earth cache.
+broadcast a total change of address to all of their friends. The underworld
+handles the retry logic of the reliable broadcast.
 
 ## Architecture: Sky Node DHT Distribution
 

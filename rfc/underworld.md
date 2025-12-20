@@ -18,7 +18,32 @@ Underworld nodes are clients' end machines (metered or unmetered) that know the
 client's encryption keys and contact list, making them the only nodes that can
 determine where, when, and how to send messages to their intended recipients.
 
+## Address Management
+
+Each peer will give each of their friends a tuple of (root_addr, secret,
+creation_date, ratcheting_frequency) which allows friends to derive future
+addresses with the following algorithm:
+
+```python
+running_addr = root_addr
+for _ in range((Date.now() - creation_date) / ratcheting_frequency):
+    running_addr = hash(running_addr + secret)
+```
+
+If a peer removes a friend from their friend list (or wants PCS from their
+friends being hacked) they can create a new tuple and send that new tuple to all
+their old friends.
+
 ## Handling Group Chats
+
+Sending one message to many (n) peers should only be done through unicast where
+the sender sends the one message n times because the underlying internet only
+supports unicast. This might unduly burden one peer so to mitigate this burden
+epidemic broadcast trees can be used. Additionally, peers who intermittently
+check a popular room might send a message to peers in the room when they
+sporadically check that room in order to fetch messages from the popular chat,
+i.e. peers might pull messages from their peers rather than having messages in
+the room pushed to them.
 
 Each group has its own ratcheting virtual address consisting of the usual
 (root_addr, secret, creation_date, ratcheting_frequency) tuple which allows
