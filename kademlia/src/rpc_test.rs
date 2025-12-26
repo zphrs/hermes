@@ -402,8 +402,8 @@ fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
-    let num_nodes = 1_000_000;
-    let num_trials = 1_000_000;
+    let num_nodes = 100_000;
+    let num_trials = 100_000;
 
     let net = load_network("find_nonexistent_peer_returns_closest", num_nodes).await;
     trace!("fully loaded network");

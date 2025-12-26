@@ -4,9 +4,9 @@ mod routing_table;
 mod rpc;
 mod traits;
 
+mod helpers;
 #[cfg(test)]
 mod rpc_test;
-mod helpers;
 
 pub use rpc::RpcManager;
 

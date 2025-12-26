@@ -6,11 +6,7 @@ use futures::{prelude::*, stream::FuturesUnordered};
 use tokio::sync::{RwLock, RwLockWriteGuard};
 use tracing::{Instrument, instrument, trace, trace_span};
 
-use crate::{
-    HasId, RoutingTable,
-    id::{Distance, DistancePair, Id},
-    traits::RequestHandler,
-};
+use crate::{Distance, DistancePair, HasId, Id, RequestHandler, RoutingTable};
 
 const ALPHA: usize = 3;
 
