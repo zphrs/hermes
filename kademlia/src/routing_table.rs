@@ -1,3 +1,5 @@
+mod bucket_list;
+mod leaf;
 mod tree;
 use std::cmp::min;
 use std::collections::hash_map;
@@ -13,20 +15,20 @@ use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use tracing::instrument;
 
-use crate::routing_table::tree::LeafMut;
+use crate::routing_table::leaf::Leaf;
 use crate::{
     HasId, RequestHandler,
     id::{self, Distance, DistancePair},
 };
 
-use tree::{Leaf, Tree};
+use bucket_list::{BucketList, LeafMut};
 
 const NEARBY_NODES_MULTIP: usize = 5;
 
 static STARTUP_INSTANT: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 pub struct RoutingTable<Node: HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize = 20> {
-    tree: tree::Tree<Node, ID_LEN, BUCKET_SIZE>,
+    tree: BucketList<Node, ID_LEN, BUCKET_SIZE>,
     // buckets: buckets::Buckets<Node, ID_LEN, BUCKET_SIZE>,
     // the nearest 5*k nodes to me, binary searched & inserted
     // because of the likelihood of having poor rotating codes
@@ -64,7 +66,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 {
     fn default() -> Self {
         Self {
-            tree: Tree::new(),
+            tree: BucketList::new(),
             nearest_siblings_list: Vec::with_capacity(NEARBY_NODES_MULTIP * BUCKET_SIZE + 1),
             bucket_updated_at: Default::default(),
         }
@@ -84,7 +86,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 {
     pub fn new() -> Self {
         Self {
-            tree: Tree::new(),
+            tree: BucketList::new(),
             nearest_siblings_list: Vec::with_capacity(NEARBY_NODES_MULTIP * BUCKET_SIZE + 1),
             bucket_updated_at: Default::default(),
         }
@@ -237,10 +239,10 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         Box::new(self.nearest_siblings_list.iter())
     }
 
-    pub fn find_node(
-        &self,
+    pub fn find_node<'a>(
+        &'a self,
         dist: &Distance<ID_LEN>,
-    ) -> Box<dyn Iterator<Item = &DistancePair<Node, ID_LEN>> + '_> {
+    ) -> Box<dyn Iterator<Item = &'a DistancePair<Node, ID_LEN>> + 'a> {
         Box::new(
             self.nearest_in_sibling_list()
                 .chain(self.tree.nodes_near(dist, BUCKET_SIZE * 2)),

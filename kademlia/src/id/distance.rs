@@ -196,7 +196,7 @@ impl<const N: usize> Display for Distance<N> {
 #[derive(Clone)]
 pub struct Pair<Node, const ID_LEN: usize>(Distance<ID_LEN>, Node);
 
-impl<Node: Eq, const ID_LEN: usize> Pair<Node, ID_LEN> {
+impl<Node, const ID_LEN: usize> Pair<Node, ID_LEN> {
     pub fn distance(&self) -> &Distance<ID_LEN> {
         &self.0
     }

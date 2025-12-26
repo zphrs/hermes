@@ -402,8 +402,8 @@ fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
-    let num_nodes = 100_000;
-    let num_trials = 100_000;
+    let num_nodes = 200_000;
+    let num_trials = 1_000_000;
 
     let net = load_network("find_nonexistent_peer_returns_closest", num_nodes).await;
     trace!("fully loaded network");
@@ -415,7 +415,7 @@ async fn find_nonexistent_peer_returns_closest() {
     // bootstrap_and_join(&my_manager, vec![nodes[0].clone()]).await;
 
     // Experiment: arbitrarily generate a node and try to find it
-    let parallelization_factor = 20_000;
+    let parallelization_factor = 50_000;
     'outer: for i in 0..(num_trials / parallelization_factor) {
         let mut js = JoinSet::new();
         for _ in 0..parallelization_factor {

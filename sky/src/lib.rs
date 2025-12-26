@@ -1,5 +1,4 @@
 #![feature(ip_as_octets)]
-#![feature(slice_as_array)]
 #![feature(iter_array_chunks)]
 
 mod capnp_types;

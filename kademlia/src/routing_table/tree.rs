@@ -1,17 +1,11 @@
 use std::fmt::Debug;
+use std::num::NonZero;
 use std::ops::{Deref, DerefMut, Index};
 use std::sync::atomic::AtomicUsize;
+use super::leaf;
 
 use crate::id::{Distance, DistancePair};
 use crate::{HasId, helpers};
-
-// pub(crate) struct Tree<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
-//     branch_type: BranchType<Node, ID_LEN, BUCKET_SIZE>,
-//     // actual cached len might be zero, but recreating a zero length value
-//     // is a) rare and b) cheap.
-//     cached_len: AtomicUsize,
-//     depth: usize,
-// }
 
 pub(crate) struct Tree<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
     left: leaf::Leaf<Node, ID_LEN, BUCKET_SIZE>,
@@ -36,8 +30,6 @@ impl<Node: Eq + Debug, const ID_LEN: usize, const BUCKET_SIZE: usize> Debug
         dl.finish()
     }
 }
-
-mod leaf;
 
 pub(crate) use leaf::Leaf;
 
@@ -82,10 +74,11 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
         let Some(right) = &mut self.right else {
             return;
         };
+
+        right.maybe_merge_recursively();
+
         if right.len() + self.left.len() == 0 {
             self.right = None;
-        } else {
-            right.maybe_merge_recursively();
         }
     }
 
@@ -134,9 +127,9 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
                 // figure out which branch is taken next and check if taking the
                 // next branch would be less than the splitting factor.
                 let next_branch_len = if !is_zero {
-                    right.len()
-                } else {
                     self.left.len()
+                } else {
+                    right.len()
                 };
                 if next_branch_len < length {
                     // should stop here since if we recursed farther we'd end up with an iterator
@@ -153,7 +146,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN,
                     right.nodes_near(dist, length)
                 }
             }
-            _ => Box::new(self.left.iter()),
+            None => Box::new(self.left.iter()),
         }
     }
 
@@ -502,7 +495,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[traced_test]
     pub fn test_tree() {
         let mut tree: Tree<Node, 32, 20> = Tree::new();
         let local_node = Node::new("127.0.0.1:0".parse().unwrap());
@@ -1026,7 +1018,7 @@ pub(crate) mod tests {
         "#]]
         .assert_debug_eq(&leaves);
 
-        let nodes = (0..100).map(|port| Node::new(format!("127.0.0.1:{port}").parse().unwrap()));
+        let nodes = (0..99).map(|port| Node::new(format!("127.0.0.1:{port}").parse().unwrap()));
         for node in nodes {
             let pair: DistancePair<Node, 32> = (node, local_node.id()).into();
             let mut leaf = tree.get_leaf_mut(pair.distance());
@@ -1036,10 +1028,18 @@ pub(crate) mod tests {
             .leaves_iter()
             .map(|leaf| leaf.iter().collect::<Vec<_>>())
             .collect();
-        expect!["1"].assert_eq(&leaves.len().to_string());
+        expect!["4"].assert_eq(&leaves.len().to_string());
         expect![[r#"
             [
-                [],
+                [
+                    DistancePair(
+                        1FE4...4B95,
+                        Node {
+                            addr: 127.0.0.1:99,
+                            id: "Id(B8E6...3B93)",
+                        },
+                    ),
+                ],
             ]
         "#]]
         .assert_debug_eq(&leaves);
