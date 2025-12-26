@@ -21,8 +21,6 @@ use crate::{
 
 use tree::{Leaf, Tree};
 
-pub use tree::Bucket;
-
 const NEARBY_NODES_MULTIP: usize = 5;
 
 static STARTUP_INSTANT: LazyLock<Instant> = LazyLock::new(Instant::now);

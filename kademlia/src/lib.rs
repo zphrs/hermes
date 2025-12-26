@@ -14,7 +14,7 @@ pub use traits::{HasId, RequestHandler};
 
 pub use id::{Distance, DistancePair, Id};
 
-pub use routing_table::{Bucket, RoutingTable};
+pub use routing_table::RoutingTable;
 
 pub const BUCKET_SIZE: usize = 20;
 

@@ -1,9 +1,17 @@
 use crate::id::DistancePair;
 
-pub use super::bucket::Bucket;
-
 pub struct Leaf<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> {
-    bucket: Bucket<Node, ID_LEN, BUCKET_SIZE>,
+    bucket: arrayvec::ArrayVec<DistancePair<Node, ID_LEN>, BUCKET_SIZE>,
+}
+
+impl<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> Default
+    for Leaf<Node, ID_LEN, BUCKET_SIZE>
+{
+    fn default() -> Self {
+        Self {
+            bucket: Default::default(),
+        }
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -14,9 +22,7 @@ pub enum Error {
 
 impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN, BUCKET_SIZE> {
     pub(crate) fn new() -> Self {
-        Self {
-            bucket: Bucket::new(),
-        }
+        Default::default()
     }
 
     /// Whether this leaf node is full (either will split on the next get_leaf
@@ -26,7 +32,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
     }
 
     pub fn contains(&self, pair: &DistancePair<Node, ID_LEN>) -> bool {
-        self.iter().any(|other| other.node() == pair.node())
+        self.bucket.contains(pair)
     }
 
     /// Errors if this leaf is full. Remove any unresponsive nodes in this
@@ -43,7 +49,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
         }
 
         if !self.is_full() {
-            self.bucket.add(pair);
+            let _ = self.bucket.try_push(pair);
             Ok(())
         } else {
             Err(Error::FullLeaf)
@@ -59,11 +65,14 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
     }
 
     pub(super) fn drain(&mut self) -> impl Iterator<Item = DistancePair<Node, ID_LEN>> {
-        self.bucket.drain()
+        self.bucket.drain(..)
     }
 
-    pub fn remove_where<F: FnMut(&DistancePair<Node, ID_LEN>) -> bool>(&mut self, predicate: F) {
-        self.bucket.remove_nodes_where(predicate)
+    pub fn remove_where<F: FnMut(&mut DistancePair<Node, ID_LEN>) -> bool>(
+        &mut self,
+        mut predicate: F,
+    ) {
+        self.bucket.retain(|n| !predicate(n));
     }
 
     pub fn len(&self) -> usize {

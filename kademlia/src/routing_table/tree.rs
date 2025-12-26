@@ -37,12 +37,10 @@ impl<Node: Eq + Debug, const ID_LEN: usize, const BUCKET_SIZE: usize> Debug
     }
 }
 
-mod bucket;
 mod leaf;
 
 pub(crate) use leaf::Leaf;
 
-pub use leaf::Bucket;
 use tracing::{instrument, trace};
 
 impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Tree<Node, ID_LEN, BUCKET_SIZE> {
