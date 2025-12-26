@@ -20,8 +20,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize>
             .len()
             .checked_sub(1)
             .expect("BucketList should always have at least one bucket")]
-        .len()
-            >= BUCKET_SIZE / 2 + 1
+        .len() > BUCKET_SIZE / 2
         {
             let last_index = self.leaves.len() - 1;
             let mut last_leaf = &mut self.leaves[last_index];
@@ -69,7 +68,7 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize>
         let leading_zeros = distance.leading_zeros();
         // get nth bucket or the last bucket, whichever is less
         let index = min(leading_zeros, self.leaves.len() - 1);
-        return &mut self.leaves[index];
+        &mut self.leaves[index]
     }
 }
 
@@ -111,8 +110,8 @@ impl<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> BucketList<Node, ID_LE
         Node: HasId<N>,
     {
         let leading_zero_count = dist.leading_zeros();
-        let mut current_subtree_length: usize = (&self.leaves
-            [..min(leading_zero_count + 1, self.leaves.len() - 1)])
+        let mut current_subtree_length: usize = self.leaves
+            [..min(leading_zero_count + 1, self.leaves.len() - 1)]
             .iter()
             .map(Leaf::len)
             .sum();
@@ -153,8 +152,8 @@ impl<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> BucketList<Node, ID_LE
         Node: HasId<N>,
     {
         let leading_zero_count = dist.leading_zeros();
-        let mut current_subtree_length: usize = (&self.leaves
-            [..min(leading_zero_count + 1, self.leaves.len() - 1)])
+        let mut current_subtree_length: usize = self.leaves
+            [..min(leading_zero_count + 1, self.leaves.len() - 1)]
             .iter()
             .map(Leaf::len)
             .sum();
@@ -186,7 +185,7 @@ impl<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> BucketList<Node, ID_LE
         let leading_zeros = distance.leading_zeros();
         // get nth bucket or the last bucket, whichever is less
         let index = min(leading_zeros, self.leaves.len() - 1);
-        return &self.leaves[index];
+        &self.leaves[index]
     }
 
     pub fn leaves_iter(&self) -> impl DoubleEndedIterator<Item = &Leaf<Node, ID_LEN, BUCKET_SIZE>> {

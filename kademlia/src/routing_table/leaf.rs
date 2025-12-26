@@ -88,7 +88,7 @@ impl<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN, BUC
     /// This method uses debug assertions to check that the arrayvec is not
     /// full.
     pub(super) unsafe fn insert_unchecked(&mut self, element: DistancePair<Node, ID_LEN>) {
-        let _ = unsafe { self.bucket.push_unchecked(element) };
+        unsafe { self.bucket.push_unchecked(element) };
     }
 }
 pub(super) mod private {
