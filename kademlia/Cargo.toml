@@ -29,8 +29,7 @@ tokio = { version = "1.47.1", features = [
 tokio-stream = { version = "0.1.17", features = ["fs"] }
 tracing-test = "0.2.5"
 
-[target.'cfg(not(target_env = "msvc"))'.dev-dependencies]
-tikv-jemallocator = "0.5"
+
 
 [profile.release]
 debug = true

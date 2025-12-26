@@ -9,13 +9,6 @@ use std::{
     time::Duration,
 };
 
-#[cfg(not(target_env = "msvc"))]
-use tikv_jemallocator::Jemalloc;
-
-#[cfg(not(target_env = "msvc"))]
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
-
 use futures::{StreamExt as _, future};
 use rand::seq::IndexedRandom as _;
 use sha2::Digest as _;
@@ -303,7 +296,7 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
 
     let leftover_nodes = size - (size.ilog2() as usize) - 1;
 
-    const SPAWN_CHUNK_SIZE: usize = 10_000;
+    const SPAWN_CHUNK_SIZE: usize = 100;
 
     for outer in 0..(leftover_nodes / SPAWN_CHUNK_SIZE) {
         let mut tasks = tokio::task::JoinSet::new();
@@ -312,11 +305,11 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
             tasks.spawn({
                 let net = net.clone();
                 let a = a.clone();
-                let bootstrap_node = bootstrap_nodes[i % bootstrap_nodes.len()].clone();
+                let bootstrap_nodes = bootstrap_nodes.clone();
                 let node = a.new_node();
                 async move {
                     let manager = net.add_node(node.clone());
-                    bootstrap_and_join(&manager, vec![bootstrap_node])
+                    bootstrap_and_join(&manager, bootstrap_nodes)
                         .with_subscriber(NoSubscriber::new())
                         .await;
                     node
@@ -402,17 +395,14 @@ fn find_closest_node(nodes: &[Node], target: &Node) -> Node {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[traced_test]
 async fn find_nonexistent_peer_returns_closest() {
-    let num_nodes = 200_000;
-    let num_trials = 1_000_000;
+    let num_nodes = 100_000;
+    let num_trials = 100_000;
 
     let net = load_network("find_nonexistent_peer_returns_closest", num_nodes).await;
     trace!("fully loaded network");
     let a = NodeAllocator::new(num_nodes + 1);
 
     let nodes = net.all_nodes();
-
-    // my_manager.join_network().await;
-    // bootstrap_and_join(&my_manager, vec![nodes[0].clone()]).await;
 
     // Experiment: arbitrarily generate a node and try to find it
     let parallelization_factor = 50_000;
@@ -425,13 +415,6 @@ async fn find_nonexistent_peer_returns_closest() {
 
             js.spawn(
                 async move {
-                    let mut closest_nodes: Vec<_> = nodes
-                        .iter()
-                        .cloned()
-                        .map::<DistancePair<_, _>, _>(|n| (n, target_node.id()).into())
-                        .collect();
-                    closest_nodes.sort();
-                    closest_nodes.truncate(BUCKET_SIZE * 5);
                     let next_closest_node = find_closest_node(&nodes, &target_node);
                     let my_manager = net
                         .manager(nodes.choose(&mut rand::rng()).unwrap())
@@ -497,7 +480,7 @@ async fn find_nonexistent_peer_returns_closest() {
             }
         }
         js.abort_all();
-        trace!("{i}/{} done", num_trials / parallelization_factor);
+        trace!("{}/{} done", i + 1, num_trials / parallelization_factor);
         // sleep(Duration::from_secs(2)).await;
     }
 }
@@ -589,7 +572,7 @@ async fn load_network(test_name: &str, num_nodes: usize) -> NetworkState {
 #[tokio::test(flavor = "multi_thread")]
 #[traced_test]
 async fn large_network_find_exact_node() {
-    let net = load_network("10000_nodes", 10000).await;
+    let net = load_network("large_network_find_exact_node", 100_000).await;
 
     let nodes = net.all_nodes();
 

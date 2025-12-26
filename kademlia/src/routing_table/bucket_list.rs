@@ -1,10 +1,6 @@
 use arrayvec::ArrayVec;
-use tracing::instrument;
 
-use crate::{
-    Distance, DistancePair, HasId, helpers,
-    routing_table::{leaf::Leaf, tree::bit_of_array},
-};
+use crate::{Distance, DistancePair, HasId, helpers, routing_table::leaf::Leaf};
 use std::{
     cmp::min,
     fmt::Debug,
@@ -108,9 +104,9 @@ impl<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> BucketList<Node, ID_LE
 
     pub fn nodes_near<const N: usize>(
         &self,
-        dist: &Distance<N>,
+        dist: Distance<N>,
         length: usize,
-    ) -> Box<dyn Iterator<Item = &DistancePair<Node, ID_LEN>> + '_>
+    ) -> impl Iterator<Item = &DistancePair<Node, ID_LEN>>
     where
         Node: HasId<N>,
     {
@@ -143,11 +139,9 @@ impl<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> BucketList<Node, ID_LE
             depth += 1;
         }
 
-        Box::new(
-            (self.leaves[depth..tree_traversal_len])
-                .iter()
-                .flat_map(|leaf| leaf.iter()),
-        )
+        (self.leaves[depth..tree_traversal_len])
+            .iter()
+            .flat_map(|leaf| leaf.iter())
     }
 
     pub fn nodes_near_mut<const N: usize>(

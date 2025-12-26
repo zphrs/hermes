@@ -1,6 +1,6 @@
 mod bucket_list;
 mod leaf;
-mod tree;
+
 use std::cmp::min;
 use std::collections::hash_map;
 use std::sync::LazyLock;
@@ -130,7 +130,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     {
         let mut out: Vec<DistancePair<Node, ID_LEN>> = Vec::new();
         out.extend(self.sibling_list().iter().cloned());
-        out.extend(self.tree.nodes_near(&Distance::ZERO, usize::MAX).cloned());
+        out.extend(self.tree.nodes_near(Distance::ZERO, usize::MAX).cloned());
         out.sort();
         out
     }
@@ -153,7 +153,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     where
         DistancePair<Node, ID_LEN>: From<DP>,
     {
-        let last_in_list = &self
+        let last_in_list: &Distance<_> = &self
             .nearest_siblings_list
             .get(NEARBY_NODES_MULTIP * BUCKET_SIZE)
             .map(|p| p.distance().clone())
@@ -233,20 +233,28 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     #[instrument(skip_all)]
     pub fn nearest_in_sibling_list(
         &self,
-    ) -> Box<dyn Iterator<Item = &DistancePair<Node, ID_LEN>> + '_> {
-        // returns all nearest_siblings because the dist between us and the target
-        // will not align with which nearby siblings are directly nearest to the target
-        Box::new(self.nearest_siblings_list.iter())
+        dist: &Distance<ID_LEN>,
+        count: usize,
+    ) -> std::slice::Iter<'_, DistancePair<Node, ID_LEN>> {
+        let nearest_index = self
+            .nearest_siblings_list
+            .binary_search_by_key(&dist, |pair| pair.distance())
+            .unwrap_or_else(|err| err);
+
+        let start_of_range = nearest_index.saturating_sub(count / 2);
+        let end_of_range = min(nearest_index + count / 2, self.nearest_siblings_list.len()); // returns all nearest_siblings
+        self.nearest_siblings_list[start_of_range..end_of_range].iter()
     }
 
-    pub fn find_node<'a>(
+    pub fn find_node<'a, 'b>(
         &'a self,
-        dist: &Distance<ID_LEN>,
-    ) -> Box<dyn Iterator<Item = &'a DistancePair<Node, ID_LEN>> + 'a> {
-        Box::new(
-            self.nearest_in_sibling_list()
-                .chain(self.tree.nodes_near(dist, BUCKET_SIZE * 2)),
-        )
+        dist: Distance<ID_LEN>,
+    ) -> impl Iterator<Item = &'a DistancePair<Node, ID_LEN>> + 'a
+    where
+        'a: 'b,
+    {
+        self.nearest_in_sibling_list(&dist, BUCKET_SIZE)
+            .chain(self.tree.nodes_near(dist, BUCKET_SIZE))
     }
 
     pub fn find_node_mut(

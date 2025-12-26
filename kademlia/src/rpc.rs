@@ -122,7 +122,7 @@ impl<
     async fn dist_to_closest_neighbor(&self) -> Distance<ID_LEN> {
         let routing_table = self.routing_table.read().await;
         routing_table
-            .find_node(&Distance::ZERO)
+            .find_node(Distance::ZERO)
             .min()
             .map(|v| v.distance().clone())
             .unwrap_or(Distance::MAX)
@@ -548,9 +548,12 @@ impl<
         &self,
         id: &Id<ID_LEN>,
         lock: &'a impl Deref<Target = RoutingTable<Node, ID_LEN, BUCKET_SIZE>>,
-    ) -> Box<dyn Iterator<Item = &'a DistancePair<Node, ID_LEN>> + 'a> {
+    ) -> impl Iterator<Item = &'a DistancePair<Node, ID_LEN>>
+    where
+        Node: 'a,
+    {
         let dist = self.local_addr().xor_distance(id);
-        lock.find_node(&dist)
+        lock.find_node(dist)
     }
 
     #[cfg(test)]
