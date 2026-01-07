@@ -246,13 +246,10 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         self.nearest_siblings_list[start_of_range..end_of_range].iter()
     }
 
-    pub fn find_node<'a, 'b>(
-        &'a self,
+    pub fn find_node(
+        &self,
         dist: Distance<ID_LEN>,
-    ) -> impl Iterator<Item = &'a DistancePair<Node, ID_LEN>> + 'a
-    where
-        'a: 'b,
-    {
+    ) -> impl Iterator<Item = &DistancePair<Node, ID_LEN>> + '_ {
         self.nearest_in_sibling_list(&dist, BUCKET_SIZE)
             .chain(self.tree.nodes_near(dist, BUCKET_SIZE))
     }

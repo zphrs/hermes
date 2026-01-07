@@ -20,7 +20,8 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize>
             .len()
             .checked_sub(1)
             .expect("BucketList should always have at least one bucket")]
-        .len() > BUCKET_SIZE / 2
+        .len()
+            > BUCKET_SIZE / 2
         {
             let last_index = self.leaves.len() - 1;
             let mut last_leaf = &mut self.leaves[last_index];
@@ -42,13 +43,17 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize>
     }
 
     fn maybe_merge(&mut self) {
-        while self.leaves.len() >= 2
-            && self.leaves[self.leaves.len() - 1].len() + self.leaves[self.leaves.len() - 2].len()
-                < BUCKET_SIZE / 4
+        if self.leaves.len() < 2 {
+            return; // makes sure we never have less than 1 leaf by never
+            // merging if we have less than 2 leaves
+        }
+        let last_leaf_ind = self.leaves.len() - 1;
+        let second_last_leaf_ind = self.leaves.len() - 2;
+        while self.leaves[last_leaf_ind].len() + self.leaves[second_last_leaf_ind].len()
+            < BUCKET_SIZE / 4
         {
             let mut last_leaf = self.leaves.pop().unwrap();
-            let new_last_index = self.leaves.len() - 1;
-            let new_last_leaf = &mut self.leaves[new_last_index];
+            let new_last_leaf = &mut self.leaves[second_last_leaf_ind];
             new_last_leaf.extend(last_leaf.drain());
         }
     }
