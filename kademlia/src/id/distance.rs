@@ -7,30 +7,50 @@ use crate::HasId;
 use super::Id;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct Distance<const N: usize>([u8; N]);
+pub struct Distance<const N: usize> {
+    array: [u8; N],
+    leading_zeros: usize,
+}
 
 impl<const N: usize> Distance<N> {
+    pub const fn new(array: [u8; N]) -> Self {
+        let leading_zeros = Self::calculate_leading_zeros(&array);
+        Distance {
+            leading_zeros,
+            array,
+        }
+    }
     pub const ONE: Distance<N> = {
         let mut arr = [0u8; N];
         if N > 0 {
             arr[N - 1] = 1;
         }
-        Distance(arr)
+        Distance::new(arr)
     };
-    pub const ZERO: Distance<N> = Distance([0u8; N]);
-    pub const MAX: Distance<N> = Distance([u8::MAX; N]);
+    pub const ZERO: Distance<N> = Distance::new([0u8; N]);
+    pub const MAX: Distance<N> = Distance::new([u8::MAX; N]);
 
-    pub fn leading_zeros(&self) -> usize {
+    const fn calculate_leading_zeros(array: &[u8; N]) -> usize {
         let mut count = 0;
-        for &byte in &self.0 {
+        let mut i = 0;
+        loop {
+            if i >= N {
+                break;
+            }
+            let byte = array[i];
             if byte == 0 {
                 count += 8;
             } else {
                 count += byte.leading_zeros() as usize;
                 break;
             }
+            i += 1;
         }
         count
+    }
+
+    pub fn leading_zeros(&self) -> usize {
+        self.leading_zeros
     }
 }
 
@@ -42,12 +62,12 @@ impl<const N: usize> Add for &Distance<N> {
         let mut carry = 0u8;
 
         for i in (0..N).rev() {
-            let sum = self.0[i] as u16 + rhs.0[i] as u16 + carry as u16;
+            let sum = self.array[i] as u16 + rhs.array[i] as u16 + carry as u16;
             out[i] = sum as u8;
             carry = (sum >> 8) as u8;
         }
 
-        Distance(out)
+        Distance::new(out)
     }
 }
 
@@ -59,12 +79,12 @@ impl<const N: usize> Add<&[u8]> for &Distance<N> {
         let mut carry = 0u8;
 
         for i in (0..N).rev() {
-            let sum = self.0[i] as u16 + *rhs.get(i).unwrap_or(&0) as u16 + carry as u16;
+            let sum = self.array[i] as u16 + *rhs.get(i).unwrap_or(&0) as u16 + carry as u16;
             out[i] = sum as u8;
             carry = (sum >> 8) as u8;
         }
 
-        Distance(out)
+        Distance::new(out)
     }
 }
 
@@ -76,7 +96,7 @@ impl<const N: usize> BitXor for &Id<N> {
         for (i, (left, right)) in self.0.iter().zip(rhs.0.iter()).enumerate() {
             out[i] = *left ^ *right;
         }
-        Distance(out)
+        Distance::new(out)
     }
 }
 
@@ -88,13 +108,13 @@ impl<const N: usize> Shl<usize> for Distance<N> {
         let bit_shift = rhs % 8;
 
         if byte_shift >= N {
-            return Distance([0u8; N]);
+            return Distance::new([0u8; N]);
         }
 
         let mut out = [0u8; N];
 
         // Shift bytes
-        out[0..(N - byte_shift)].copy_from_slice(&self.0[byte_shift..N]);
+        out[0..(N - byte_shift)].copy_from_slice(&self.array[byte_shift..N]);
 
         // Shift bits within bytes
         if bit_shift > 0 {
@@ -106,7 +126,7 @@ impl<const N: usize> Shl<usize> for Distance<N> {
             }
         }
 
-        Distance(out)
+        Distance::new(out)
     }
 }
 
@@ -118,13 +138,13 @@ impl<const N: usize> Shr<usize> for Distance<N> {
         let bit_shift = rhs % 8;
 
         if byte_shift >= N {
-            return Distance([0u8; N]);
+            return Distance::new([0u8; N]);
         }
 
         let mut out = [0u8; N];
 
         // Shift bytes
-        out[byte_shift..N].copy_from_slice(&self.0[..(N - byte_shift)]);
+        out[byte_shift..N].copy_from_slice(&self.array[..(N - byte_shift)]);
 
         // Shift bits within bytes
         if bit_shift > 0 {
@@ -136,7 +156,7 @@ impl<const N: usize> Shr<usize> for Distance<N> {
             }
         }
 
-        Distance(out)
+        Distance::new(out)
     }
 }
 
@@ -145,7 +165,7 @@ impl<const N: usize> BitXor<&Distance<N>> for &Id<N> {
 
     fn bitxor(self, rhs: &Distance<N>) -> Self::Output {
         let mut out = [0u8; N];
-        for (i, (left, right)) in self.0.iter().zip(rhs.0.iter()).enumerate() {
+        for (i, (left, right)) in self.0.iter().zip(rhs.array.iter()).enumerate() {
             out[i] = *left ^ *right;
         }
         Id(out)
@@ -157,7 +177,7 @@ impl<const N: usize> BitXor<&Id<N>> for &Distance<N> {
 
     fn bitxor(self, rhs: &Id<N>) -> Self::Output {
         let mut out = [0u8; N];
-        for (i, (left, right)) in self.0.iter().zip(rhs.0.iter()).enumerate() {
+        for (i, (left, right)) in self.array.iter().zip(rhs.0.iter()).enumerate() {
             out[i] = *left ^ *right;
         }
         Id(out)
@@ -168,13 +188,13 @@ impl<const N: usize> Index<usize> for Distance<N> {
     type Output = u8;
 
     fn index(&self, index: usize) -> &Self::Output {
-        self.0.index(index)
+        self.array.index(index)
     }
 }
 
 impl<const N: usize> Debug for Distance<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let as_id: Id<N> = self.0.into();
+        let as_id: Id<N> = self.array.into();
         let first_zero_offset = as_id.get_first_zero_byte();
         if first_zero_offset == 0 {
             return write!(f, "Distance()");
@@ -187,7 +207,7 @@ impl<const N: usize> Debug for Distance<N> {
 
 impl<const N: usize> Display for Distance<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let as_id: Id<N> = self.0.into();
+        let as_id: Id<N> = self.array.into();
 
         as_id.display_id_bytes(f)
     }
