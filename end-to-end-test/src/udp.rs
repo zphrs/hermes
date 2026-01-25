@@ -108,7 +108,7 @@ impl Packet {
                 had: bytes.len(),
             })?
         }
-        let data = bytes.slice(0 as usize..header.payload_length as usize);
+        let data = bytes.slice(0usize..header.payload_length as usize);
         Ok(Self { header, data })
     }
 }
@@ -165,6 +165,11 @@ impl IpAddrs {
 
 impl Header {
     pub const PROTOCOL: u8 = 0x11;
+    pub const IPV6_HEADER_LEN: usize = 10 * 4;
+    pub const IPV4_HEADER_LEN: usize = 5 * 4;
+    pub const UDP_HEADER_LEN: usize = 2 * 4;
+
+    pub const MAX_HEADER_LEN: usize = Self::IPV6_HEADER_LEN + Self::UDP_HEADER_LEN;
 
     /// Returns (source, destination) socket addresses.
     pub fn get_socket_addrs(&self) -> (SocketAddr, SocketAddr) {
@@ -176,9 +181,9 @@ impl Header {
     }
     #[inline]
     fn calculate_checksum(&self, data: &[u8]) -> u16 {
-        let mut bytes = [0u8; { 4 * 10 + 4 * 2 }];
+        let mut bytes = [0u8; Self::MAX_HEADER_LEN];
         let mut full_buf: &mut [u8] = &mut bytes;
-        UdpPseudoHeader::new_from_header(self).into_buf(&mut full_buf);
+        UdpPseudoHeader::new_from_header(self).write_into_buf(&mut full_buf);
         full_buf.put_u16(self.src_port);
         full_buf.put_u16(self.dst_port);
         full_buf.put_u16(self.udp_length());
@@ -186,18 +191,18 @@ impl Header {
 
         let headers_checksum = wrapping_sum(
             headers_chunks
-                .into_iter()
+                .iter()
                 .map(|bytes: &[u8; 2]| u16::from_be_bytes(*bytes)),
         );
         assert_eq!(remainder.len(), 0); // we set bytes size to an even number
         let (data_chunks, remainder) = data.as_chunks::<2>();
         let data_checksum = wrapping_sum(
             data_chunks
-                .into_iter()
+                .iter()
                 .map(|bytes: &[u8; 2]| u16::from_be_bytes(*bytes)),
         )
-        .wrapping_add((*remainder.get(0).unwrap_or(&0) as u16) << 8);
-        return headers_checksum.wrapping_add(data_checksum);
+        .wrapping_add((*remainder.first().unwrap_or(&0) as u16) << 8);
+        headers_checksum.wrapping_add(data_checksum)
     }
 
     pub fn set_checksum(&mut self, data: &[u8]) {
@@ -209,13 +214,13 @@ impl Header {
     }
 
     fn udp_length(&self) -> u16 {
-        self.payload_length + 4 * 2
+        self.payload_length + Self::UDP_HEADER_LEN as u16
     }
     #[inline]
     pub fn to_bytes(&self, into: &mut impl BufMut) {
         match self.ip_addrs {
             IpAddrs::V4 { src, dst } => {
-                let mut header = [0u8; 4 * 5];
+                let mut header = [0u8; Self::IPV4_HEADER_LEN];
 
                 let mut buf: &mut [u8] = &mut header;
                 let version = 4; // 4 bits
@@ -226,12 +231,12 @@ impl Header {
 
                 let differentiated_services_code_point = 0; // 6 bits
                 let explicit_congestion_notification =
-                    self.ecn.map(|v| v as u8).unwrap_or_default() as u8; // 2 bits
+                    self.ecn.map(|v| v as u8).unwrap_or_default(); // 2 bits
                 let byte =
                     (differentiated_services_code_point << 2) | explicit_congestion_notification;
                 buf.put_u8(byte);
 
-                buf.put_u16(self.udp_length() + 4 * 5);
+                buf.put_u16(self.udp_length() + Self::IPV4_HEADER_LEN as u16);
 
                 let identification = 0; // 16 bits
                 buf.put_u16(identification);
@@ -262,7 +267,7 @@ impl Header {
                 into.put_slice(&header);
             }
             IpAddrs::V6 { src, dst } => {
-                let mut header = [0u8; 4 * 10];
+                let mut header = [0u8; Self::IPV6_HEADER_LEN];
                 let mut buf: &mut [u8] = &mut header;
                 let version = 4; // 4 bits
                 let differentiated_services = 0; // 6 bits
@@ -292,7 +297,7 @@ impl Header {
                 into.put_slice(&header);
             }
         };
-        let mut udp_header = [0u8; 2 * 4];
+        let mut udp_header = [0u8; Self::UDP_HEADER_LEN];
         let mut buf: &mut [u8] = &mut udp_header;
         buf.put_u16(self.src_port);
         buf.put_u16(self.dst_port);
@@ -314,9 +319,9 @@ impl Header {
                 if ihl != 5 {
                     Err(ParseError::InvalidIhl(ihl))?;
                 }
-                if from.len() < 5 * 4 - 1 {
+                if from.len() < Self::IPV4_HEADER_LEN - 1 {
                     Err(ParseError::NotEnoughForHeaders {
-                        expected: 5 * 4,
+                        expected: Self::IPV4_HEADER_LEN as u16,
                         had: from.len() + 1,
                     })?
                 }
@@ -334,14 +339,18 @@ impl Header {
                 let _ipv4_checksum = from.get_u16();
                 let src = Ipv4Addr::from_bits(from.get_u32());
                 let dst = Ipv4Addr::from_bits(from.get_u32());
-                (ecn, IpAddrs::V4 { src, dst }, total_length - 4 * 5 - 4 * 2)
+                (
+                    ecn,
+                    IpAddrs::V4 { src, dst },
+                    total_length - (Self::IPV4_HEADER_LEN + Self::UDP_HEADER_LEN) as u16,
+                )
             }
             6 => {
                 // can ignore DS field
                 // shift over 4 bits bc half of second byte is flow label
-                if from.len() <= 10 * 4 - 1 {
+                if from.len() < Self::IPV6_HEADER_LEN - 1 {
                     Err(ParseError::NotEnoughForHeaders {
-                        expected: 10 * 4,
+                        expected: Self::IPV6_HEADER_LEN as u16,
                         had: from.len() + 1,
                     })?
                 }
@@ -371,7 +380,7 @@ impl Header {
         let src_port = from.get_u16();
         let dst_port = from.get_u16();
         let udp_length = from.get_u16();
-        assert_eq!(udp_length - 4 * 2, payload_length);
+        assert_eq!(udp_length - Self::UDP_HEADER_LEN as u16, payload_length);
         let checksum = NonZero::new(from.get_u16());
 
         Ok(Self {
@@ -418,7 +427,7 @@ fn wrapping_sum(nums: impl IntoIterator<Item = u16>) -> u16 {
 }
 
 fn checksum_arr<const LEN: usize>(arr: &[u8; LEN]) -> u16 {
-    assert!(LEN % 2 == 0, "len is not a multiple of 2");
+    assert!(LEN.is_multiple_of(2));
     wrapping_sum(
         arr.chunks_exact(2)
             .map(|arr| u16::from_be_bytes([arr[0], arr[1]])),
@@ -447,7 +456,7 @@ impl UdpPseudoHeader {
         }
     }
 
-    pub fn into_buf(&self, buf: &mut impl BufMut) {
+    pub fn write_into_buf(&self, buf: &mut impl BufMut) {
         match self {
             UdpPseudoHeader::V4(header) => buf.put_slice(&header.to_bytes()),
             UdpPseudoHeader::V6(header) => buf.put_slice(&header.to_bytes()),
