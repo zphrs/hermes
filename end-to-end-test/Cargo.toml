@@ -1,0 +1,13 @@
+[package]
+name = "end-to-end-test"
+version = "0.1.0"
+edition = "2024"
+
+
+[dependencies]
+arrayvec = "0.7.6"
+binary_serde = { version = "1.0.25", features = ["std"] }
+bytes = "1.11.0"
+quinn-udp = "0.5.14"
+thiserror = "2.0.18"
+turmoil = "0.7.0"
