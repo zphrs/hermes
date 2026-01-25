@@ -1,12 +1,11 @@
 use std::{
-    mem::MaybeUninit,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZero, NonZeroU16},
 };
 
 use quinn_udp::{EcnCodepoint, RecvMeta, Transmit};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes};
 
 pub struct Packet {
     header: Header,
