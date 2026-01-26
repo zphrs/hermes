@@ -269,7 +269,7 @@ impl Header {
             IpAddrs::V6 { src, dst } => {
                 let mut header = [0u8; Self::IPV6_HEADER_LEN];
                 let mut buf: &mut [u8] = &mut header;
-                let version = 4; // 4 bits
+                let version = 6; // 4 bits
                 let differentiated_services = 0; // 6 bits
                 let explicit_congestion_notification =
                     self.ecn.map(|v| v as u8).unwrap_or_default(); // 2 bits
@@ -466,11 +466,12 @@ impl UdpPseudoHeader {
 
 impl Udpv4PseudoHeader {
     #[inline]
-    pub fn to_bytes(&self) -> [u8; 11] {
-        let mut arr = [0u8; 11];
+    pub fn to_bytes(&self) -> [u8; 12] {
+        let mut arr = [0u8; 12];
         let mut buf: &mut [u8] = &mut arr;
         buf.put_slice(&self.src_addr);
         buf.put_slice(&self.dst_addr);
+        buf.put_u8(0);
         buf.put_u8(Header::PROTOCOL);
         buf.put_u16(self.udp_length);
         arr
@@ -479,11 +480,12 @@ impl Udpv4PseudoHeader {
 
 impl Udpv6PseudoHeader {
     #[inline]
-    pub fn to_bytes(&self) -> [u8; 35] {
-        let mut arr = [0u8; 35];
+    pub fn to_bytes(&self) -> [u8; 36] {
+        let mut arr = [0u8; 36];
         let mut buf: &mut [u8] = &mut arr;
         buf.put_slice(&self.src_addr);
         buf.put_slice(&self.dst_addr);
+        buf.put_u8(0);
         buf.put_u8(Header::PROTOCOL);
         buf.put_u16(self.udp_length);
         arr
@@ -510,5 +512,18 @@ mod tests {
         val.into_bytes(&mut bytes);
         let val2 = Packet::try_from_bytes(&mut bytes.freeze()).unwrap();
         assert!(val2.check_checksum());
+
+        let val_ipv6 = Packet::new(
+            "[2001:db8:85a3::8a2e:370:7334]:8080".parse().unwrap(),
+            "[2001:db8:85a3::8a2e:370:7334]:3000".parse().unwrap(),
+            b"hello world!",
+            None,
+        ); // ipv6 makes udp checksum mandatory
+        assert!(val_ipv6.check_checksum());
+
+        let mut bytes = BytesMut::new();
+        val_ipv6.into_bytes(&mut bytes);
+        let from_bytes = Packet::try_from_bytes(&mut bytes.freeze()).unwrap();
+        assert!(from_bytes.check_checksum());
     }
 }
