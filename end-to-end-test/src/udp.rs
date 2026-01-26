@@ -1,6 +1,6 @@
 use std::{
     hint::unreachable_unchecked,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     num::{NonZero, NonZeroU16},
 };
 
