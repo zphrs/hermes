@@ -1,9 +1,16 @@
+mod generator;
+mod network;
+pub(crate) use generator::Generator;
+pub use network::Network;
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use bytes::{Buf, BufMut};
 use quinn_udp::EcnCodepoint;
 
-use crate::udp::{ParseError, checksum_arr};
+use super::checksum::{VALID_CHECKSUM, checksum_arr};
+
+use super::error::ParseError;
 
 #[derive(Clone)]
 pub enum Header {
@@ -264,7 +271,7 @@ impl Header {
         checksum_buf.put_u8(first_byte);
         from.copy_to_slice(&mut checksum_array[1..]);
         let ipv4_checksum = checksum_arr(&checksum_array);
-        if ipv4_checksum != 0xffff {
+        if ipv4_checksum != VALID_CHECKSUM {
             Err(ParseError::InvalidChecksum(ipv4_checksum))?;
         }
         // already read first byte

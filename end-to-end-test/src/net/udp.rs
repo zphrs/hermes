@@ -8,7 +8,12 @@ use quinn_udp::{EcnCodepoint, RecvMeta, Transmit};
 
 use bytes::{Buf, BufMut, Bytes};
 
-use crate::ip;
+use super::{
+    checksum::{VALID_CHECKSUM, wrapping_sum},
+    error::ParseError,
+};
+
+use super::ip;
 
 pub struct Packet {
     header: Header,
@@ -101,6 +106,10 @@ impl Packet {
         let data = bytes.slice(0usize..header.payload_length() as usize);
         Ok(Self { header, data })
     }
+
+    pub fn body(&self) -> Bytes {
+        self.data.clone()
+    }
 }
 #[derive(Clone)]
 pub(crate) struct Header {
@@ -108,24 +117,6 @@ pub(crate) struct Header {
     src_port: u16,
     dst_port: u16,
     checksum: Option<NonZeroU16>,
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum ParseError {
-    #[error("invalid IP version: {0}")]
-    InvalidVersion(u8),
-    #[error("invalid IHL: {0}. Might indicate presence of options field")]
-    InvalidIhl(u8),
-    #[error("invalid protocol number: {0}")]
-    InvalidProtocolNumber(u8),
-    #[error("invalid checksum: {0}")]
-    InvalidChecksum(u16),
-    #[error("unexpected next header: {0}. Might indicate IPV6 extension")]
-    UnexpectedNextHeader(u8),
-    #[error("not enough bytes for headers. Expected {expected} and found {had}")]
-    NotEnoughForHeaders { expected: u16, had: usize },
-    #[error("not enough bytes for body content. Expected {expected} and found {had}")]
-    NotEnoughForData { expected: u16, had: usize },
 }
 
 impl Header {
@@ -155,12 +146,10 @@ impl Header {
         full_buf.put_u16(self.dst_port);
         full_buf.put_u16(self.udp_length());
         let (headers_chunks, remainder) = bytes.as_chunks::<2>();
-
-        let headers_checksum = wrapping_sum(
-            headers_chunks
-                .iter()
-                .map(|bytes: &[u8; 2]| u16::from_be_bytes(*bytes)),
-        );
+        let mapped_chunks = headers_chunks
+            .iter()
+            .map(|bytes: &[u8; 2]| u16::from_be_bytes(*bytes));
+        let headers_checksum = wrapping_sum(mapped_chunks);
         assert_eq!(remainder.len(), 0); // we set bytes size to an even number
         let (data_chunks, remainder) = data.as_chunks::<2>();
         let data_checksum = wrapping_sum(
@@ -190,7 +179,6 @@ impl Header {
         let mut buf: &mut [u8] = &mut udp_header;
         buf.put_u16(self.src_port);
         buf.put_u16(self.dst_port);
-        println!("UDP length {}", self.udp_length());
         buf.put_u16(self.udp_length());
         buf.put_u16(self.checksum.map(Into::into).unwrap_or_default());
         into.put_slice(&udp_header);
@@ -215,7 +203,7 @@ impl Header {
         let Some(checksum) = self.checksum else {
             return true; // we skip the check
         };
-        self.calculate_checksum(data) + u16::from(checksum) == 0xffff
+        self.calculate_checksum(data) + u16::from(checksum) == VALID_CHECKSUM
     }
 }
 
@@ -231,26 +219,9 @@ pub struct Udpv4PseudoHeader {
     udp_length: u16,
 }
 
-pub enum UdpPseudoHeader {
+pub(super) enum UdpPseudoHeader {
     V4(Udpv4PseudoHeader),
     V6(Udpv6PseudoHeader),
-}
-
-#[inline]
-fn wrapping_sum(nums: impl IntoIterator<Item = u16>) -> u16 {
-    let mut out: u16 = 0;
-    for num in nums {
-        out = out.wrapping_add(num);
-    }
-    out
-}
-
-pub(crate) fn checksum_arr<const LEN: usize>(arr: &[u8; LEN]) -> u16 {
-    assert!(LEN.is_multiple_of(2));
-    wrapping_sum(
-        arr.chunks_exact(2)
-            .map(|arr| u16::from_be_bytes([arr[0], arr[1]])),
-    )
 }
 
 impl UdpPseudoHeader {
@@ -318,7 +289,7 @@ impl Udpv6PseudoHeader {
 mod tests {
     use bytes::BytesMut;
 
-    use crate::Packet;
+    use super::Packet;
 
     #[test]
     fn checksum() {
