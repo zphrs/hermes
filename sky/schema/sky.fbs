@@ -1,0 +1,42 @@
+struct U256 {
+    v: [uint64:4];
+}
+
+struct U128 {
+    v: [uint64:2];
+}
+
+table Id {
+    v: U256;
+}
+
+table Ipv4 {
+    addr: uint32;
+}
+
+table Ipv6 {
+    addr: U128;
+}
+
+union Ip {
+    V4:Ipv4,
+    V6:Ipv6,
+}
+
+table Addr {
+    ip: Ip;
+    port: uint16;
+}
+
+table PingRequest {}
+
+table FindNodeRequest {
+    id: &Id;
+}
+
+union Request {
+    Ping: PingRequest;
+    FindNode: FindNodeRequest;
+}
+
+

@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::{SocketAddr};
 
 use kademlia::{HasId, Id};
 use sha2::{Digest, Sha256};
