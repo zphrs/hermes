@@ -1,5 +1,4 @@
 use std::{
-    any::Any,
     fmt::{Debug, Display},
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,

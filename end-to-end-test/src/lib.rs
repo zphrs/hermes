@@ -1,3 +1,4 @@
+#![allow(dead_code)] // TODO: remove this line to check for dead code
 //! based on the [api of simgrid](https://simgrid.org/doc/latest/app_s4u.html)
 pub(crate) mod config;
 mod error;
@@ -8,7 +9,6 @@ pub mod sim;
 pub use net::udp::Packet;
 
 /// hosts can belong to multiple networks
-
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -23,8 +23,7 @@ mod tests {
         },
     };
     use bytes::BytesMut;
-    use std::{cell::RefCell, collections::HashMap, mem::MaybeUninit, rc::Rc, time::Duration};
-    use tracing::trace;
+    use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 
     #[test]
     fn quinn() {}
@@ -32,7 +31,7 @@ mod tests {
     #[test]
     fn os() {
         let mut sim = Sim::new();
-        let host = sim.add_machine(OsShim::new(Host::new(10, || async { Ok(()) })));
+        let _host = sim.add_machine(OsShim::new(Host::new(10, || async { Ok(()) })));
     }
 
     #[test]
@@ -44,6 +43,7 @@ mod tests {
         let host_store2 = host_store.clone();
         let host = sim.borrow_mut().add_machine(Host::new(10, move || {
             let host_store2 = host_store2.clone();
+            #[allow(clippy::await_holding_refcell_ref)]
             async move {
                 let host_id = ACTIVE_MACHINE_ID.with(|host| *host);
                 let borrowed_store = host_store2.borrow();

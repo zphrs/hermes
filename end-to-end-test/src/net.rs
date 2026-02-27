@@ -12,7 +12,7 @@ use crate::{
 };
 use bytes::Bytes;
 use rand::Rng;
-use std::{cell::RefCell, collections::HashMap, io::ErrorKind, ops::Deref, time::Duration};
+use std::{cell::RefCell, collections::HashMap, io::ErrorKind, time::Duration};
 use tokio::{runtime::Runtime, task::LocalSet};
 use tracing::{trace, warn};
 
@@ -45,7 +45,7 @@ impl Network {
         }
     }
     pub fn add_machine(&mut self, host: &dyn HasNic) {
-        self.hosts.insert(host.id().clone(), host.nic());
+        self.hosts.insert(*host.id(), host.nic());
     }
 
     pub fn add_machines<'a>(&mut self, hosts: impl IntoIterator<Item = &'a dyn HasNic>) {
@@ -61,7 +61,7 @@ impl Network {
         });
         let nic = self
             .hosts
-            .get(&id)
+            .get(id)
             .ok_or(ErrorKind::HostUnreachable)?
             .clone();
 
@@ -81,16 +81,19 @@ impl Machine for Network {
                 warn!("dropped message: {:?}", posting);
                 continue;
             }
-            let _handle = self.rt.block_on(async {
-                self.local
-                    .run_until(async {
-                        tokio::task::spawn_local(async move {
-                            tokio::time::sleep(rand_dur).await;
-                            nic.try_post(posting).await
+            #[allow(clippy::async_yields_async)]
+            {
+                let _handle = self.rt.block_on(async {
+                    self.local
+                        .run_until(async {
+                            tokio::task::spawn_local(async move {
+                                tokio::time::sleep(rand_dur).await;
+                                nic.try_post(posting).await
+                            })
                         })
-                    })
-                    .await
-            });
+                        .await
+                });
+            }
         }
         self.rt.block_on(async {
             self.local

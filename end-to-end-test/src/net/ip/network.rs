@@ -1,7 +1,7 @@
 use bytes::Bytes;
 pub use ip_network::IpNetwork as IpPrefix;
 use ip_network_table::IpNetworkTable;
-use std::{collections::HashMap, io::ErrorKind, ops::Deref};
+use std::{collections::HashMap, io::ErrorKind};
 
 use crate::{
     error::Error,

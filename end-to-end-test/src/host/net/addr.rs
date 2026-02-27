@@ -130,7 +130,7 @@ impl ToSocketAddrs for &[SocketAddr] {}
 impl sealed::ToSocketAddrsPriv for &[SocketAddr] {
     type Iter = std::vec::IntoIter<SocketAddr>;
 
-    fn to_socket_addrs(&self, dns: &mut Dns) -> io::Result<Self::Iter> {
+    fn to_socket_addrs(&self, _dns: &mut Dns) -> io::Result<Self::Iter> {
         #[inline]
         fn slice_to_vec(addrs: &[SocketAddr]) -> Vec<SocketAddr> {
             addrs.to_vec()

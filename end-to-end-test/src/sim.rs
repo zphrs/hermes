@@ -2,23 +2,19 @@ pub mod machine;
 
 use crate::{
     config::{CONFIG, Config},
-    host::{self, Result, net::dns::Dns},
-    net,
+    host::{Result, net::dns::Dns},
     sim::machine::{Machine, MachineId},
 };
-use bytes::Bytes;
+
 use rand::{SeedableRng as _, rngs::SmallRng};
 use scoped_tls::scoped_thread_local;
-use std::{any::Any, borrow::Borrow};
 use std::{
     cell::RefCell,
     collections::HashMap,
     hash::{BuildHasherDefault, DefaultHasher},
-    ops::{Deref, DerefMut},
+    ops::DerefMut,
     rc::Rc,
-    time::Duration,
 };
-use tokio::sync::mpsc::Sender;
 
 scoped_thread_local!(pub(crate) static RNG: RefCell<SmallRng>);
 scoped_thread_local!(pub(crate) static ACTIVE_MACHINE_ID: MachineId);

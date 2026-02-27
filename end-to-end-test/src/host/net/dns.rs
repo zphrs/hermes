@@ -1,11 +1,7 @@
 use std::{
-    cell::{LazyCell, RefCell},
     collections::HashMap,
-    hash::{BuildHasherDefault, DefaultHasher},
     io::{self, ErrorKind},
-    net::{IpAddr, SocketAddr},
-    str::FromStr,
-    sync::LazyLock,
+    net::IpAddr,
 };
 
 pub struct Dns {
@@ -42,9 +38,6 @@ impl Dns {
         self.lookup.entry(domain.into()).or_default().push(addr);
     }
     pub fn extend(&mut self, domain: &str, addr: impl IntoIterator<Item = IpAddr>) {
-        self.lookup
-            .entry(domain.into())
-            .or_default()
-            .extend(addr.into_iter());
+        self.lookup.entry(domain.into()).or_default().extend(addr);
     }
 }

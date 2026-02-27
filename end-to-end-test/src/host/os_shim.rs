@@ -33,12 +33,11 @@ impl<'a> OsShim<'a> {
         let mut loopback = net::ip::Network::new();
         loopback.add_machine(&host, Some("127.0.0.0/8".parse().unwrap()));
         loopback.add_machine(&host, Some("::1/128".parse().unwrap()));
-        let mut nets = HashMap::new();
         Self {
-            host: host,
-            sockets: Default::default(),
+            host,
             loopback,
-            nets,
+            sockets: Default::default(),
+            nets: Default::default(),
         }
     }
 

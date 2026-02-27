@@ -56,7 +56,7 @@ impl<'a> Host<'a> {
             .unwrap();
 
         Host {
-            nic: MachineNic::new(tx, id.clone()),
+            nic: MachineNic::new(tx, id),
             id,
             rx: rx.into(),
             entrypoint: software,
@@ -67,13 +67,13 @@ impl<'a> Host<'a> {
     }
     // drops all received messages on the floor
     pub fn clear(&self) {
-        while let Ok(_) = self.rx.borrow_mut().try_recv() {}
+        while self.rx.borrow_mut().try_recv().is_ok() {}
     }
 
     pub fn poll_read(&self, cx: &mut Context<'_>) -> Poll<Option<bytes::Bytes>> {
         self.rx.borrow_mut().poll_recv(cx)
     }
-
+    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn read(&self) -> Option<Bytes> {
         self.rx.borrow_mut().recv().await
     }
@@ -83,6 +83,7 @@ impl<'a> Host<'a> {
     }
 
     // entrypoint here is a fn to allow for rebooting a host
+    #[allow(clippy::async_yields_async)]
     pub fn start(&self) {
         // spawn_local immediately completes, adding the spawned task to
         // the LocalSet
@@ -184,6 +185,6 @@ mod tests {
     fn types() {
         let h = Host::new(10, || async { Ok(()) });
         h.start();
-        assert_eq!(h.tick(Duration::new(1, 0)).unwrap(), true);
+        assert!(h.tick(Duration::new(1, 0)).unwrap());
     }
 }
