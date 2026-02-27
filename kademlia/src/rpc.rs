@@ -41,9 +41,11 @@ impl<
     }
 
     fn get_shifted_target_id(&self, shift_by: usize) -> Id<ID_LEN> {
-        let shifted_one: Distance<ID_LEN> = Distance::ONE << shift_by;
+        let randomized_distance_from_self: [u8; ID_LEN] = rand::random();
+        let shifted_dist: Distance<ID_LEN> =
+            Distance::new(randomized_distance_from_self) >> (ID_LEN * 8 - shift_by);
 
-        let next_bucket_addr = &shifted_one;
+        let next_bucket_addr = &shifted_dist;
         next_bucket_addr ^ self.local_addr()
     }
     /// refreshes all buckets which haven't been looked up within the past
@@ -420,7 +422,7 @@ impl<
                     .collect()
             }
         }
-
+        k_closest.write().await.truncate(BUCKET_SIZE);
         k_closest
             .into_inner()
             .into_iter()

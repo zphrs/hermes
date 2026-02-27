@@ -1,5 +1,6 @@
 mod distance;
 mod logging;
+use std::hash::Hash;
 use std::ops::BitXorAssign;
 use std::ops::Index;
 
@@ -8,7 +9,11 @@ pub use self::distance::Pair as DistancePair;
 use crate::HasId;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct Id<const N: usize>([u8; N]);
+#[cfg_attr(
+    feature = "minicbor",
+    derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)
+)]
+pub struct Id<const N: usize>(#[cfg_attr(feature = "minicbor", n(0))] [u8; N]);
 
 impl<const N: usize> HasId<N> for Id<N> {
     fn id(&self) -> &Id<N> {

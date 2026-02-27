@@ -296,7 +296,7 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
 
     let leftover_nodes = size - (size.ilog2() as usize) - 1;
 
-    const SPAWN_CHUNK_SIZE: usize = 100;
+    const SPAWN_CHUNK_SIZE: usize = 10_000;
 
     for outer in 0..(leftover_nodes / SPAWN_CHUNK_SIZE) {
         let mut tasks = tokio::task::JoinSet::new();

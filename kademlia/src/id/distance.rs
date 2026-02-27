@@ -292,3 +292,32 @@ where
         Some(self.cmp(other))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use expect_test::expect;
+
+    use crate::{Distance, Id};
+    fn get_shifted_target_id(shift_by: usize, local_addr: &Id<32>) -> Id<32> {
+        let randomized_distance_from_self: [u8; 32] = rand::random();
+        let shifted_dist: Distance<32> =
+            Distance::new(randomized_distance_from_self) >> (32 * 8 - shift_by);
+
+        let next_bucket_addr = &shifted_dist;
+        next_bucket_addr ^ local_addr
+    }
+    #[test]
+    fn shifted() {
+        let local_addr = Id::<32>::from([120; 32]);
+        let shifted_arget = get_shifted_target_id(32, &local_addr);
+        expect![[r#"
+            Distance(
+                0000000000000000
+                0000000000000000
+                0000000000000000
+                00000000768767C5,
+            )
+        "#]]
+        .assert_debug_eq(&(&shifted_arget ^ &local_addr));
+    }
+}
