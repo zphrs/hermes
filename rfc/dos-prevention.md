@@ -1,79 +1,96 @@
 # Denial of Service Performed by a Local Adversary
 
-The two systems which can allow a denial of service by a local adversary are the
-sky network which is responsible for connecting earth nodes and the earth
-network which is responsible for temporarily storing messages. Theoretically
-attacks to both should be addressable by proof-of-work because the resources
-available to genuine nodes should always exceed the resources available. This is
-because the sky nodes' roles are very simple. Sky nodes simply fascilitate hole
-punching. This means that the inputs and outputs to the server are fixed-size
-and thus handled in low constant time. Because costs to the sky nodes are brief
-and low, we assume that there will always be abundancy across the sky in the
-non-adversarial cases. In adversarial cases however,
-
-In constrast, fellow earth nodes fascilitate temporary storage of messages,
-where messages can be of an arbitrary size. One option to reduce this to a
-constant size is to
+Both the sky and the earth are potentially vulnerable to denial-of-service attacks. We aim to ensure that performing a global attack requires significant resources and we aim to minimize the efficacy of local DOS attacks on a specific part of the network. Sku nodes and earth nodes have their own potential attack vectors and thus have their own mitigations to the variety of possible attacks, detailed below.
 
 ## Sky Node Attacks
 
-An attack on the sky network is earth nodes performing several random find_node
-requests. The benefit of an attack on the sky node is to prevent any honest
-requests to the network. This can be mitigated by a) requiring a fixed cost to a
-specific identity and b) imposing a local per-sky node rate limit based on that
-fixed cost identity (which allows for bursting).
+One attack on the sky network is when a node performs several random
+requests to prevent genuine requests. This can be mitigated by a) requiring a fixed cost to a specific identity and by b) imposing a local per-sky node rate limit based on that fixed cost identity. At the same time, we can assume that the network is over-provisioned for typical traffic and thus only rate limit in the exceptional case that the network is struggling with either genuine or malicious surges in traffic.
 
-For most residential and mobile connections, public IP can serve as a costly
-identity. In some cases however, one public IP address can be shared by up to
-tens of thousands of honest clients through NAT. In these cases we can use proof
-of work (PoW) to provide a secondary costly identity as a fallback for rate
-limiting without sacrificing the ability to restrict malicious actors and
-without sacrificing anomynity.
+Typically, public IP is used as a costly identity on which to rate limit. However, a determined adversary is able to temporary utilize hundreds of thousands of unrelated IPs through botnets in order to mount a denial-of-service attack. Thus, IP is not costly enough to prevent denial-of-service attacks by sufficiently determined adversaries. So instead we can use proof of work (PoW) to provide a costly temporary identity to rate limit on because PoW-based identities can have adjustable costs associated with them.
 
-## Proof of Work
+### Proof of Work Mitigation
 
-Proof of work is where a sky node sends a challenge to a specific client which
-the client must then complete, typically `hash(challenge.concat(nonce))` where
-`challenge` is provided by the server and `nonce` is a monotonically increasing
-value provided by the client. Once the client finds a nonce value which makes
-the first $b$ bits of the hash 0 bits, where b is the current difficulty, the
-client sends back the challenge and the found nonce which the server then
-verifies. Since a challenge is easy to create and verify the correctness of, it
-doesn't significantly burden the sky server. $b$ will be set dynamically based
-on the demand which the sky server is facing.
+The PoW mitigation has overloaded sky nodes send a challenge to a specific client which the client must then complete, typically `hash(challenge.concat(nonce))` where `challenge` is provided by the server and `nonce` is a monotonically increasing value provided by the client. Once the client finds a nonce value which makes the first $b$ bits of the hash 0 bits, where b is the current difficulty, the client sends back the challenge and the found nonce which the server then verifies. Since a challenge is easy to create and verify the correctness of, it doesn't significantly burden the sky server. $b$ will be set dynamically based on how much demand the sky server is currently facing. We use Equi-X, a bespoke hash algorithm developed by the Tor project [[source](https://gitlab.torproject.org/tpo/core/tor/-/blob/main/src/ext/equix/devlog.md)].
 
-The specific intricacies of the implementation take significant inspiration from
-[Tor's PoW system](https://spec.torproject.org/hspow-spec/index.html) with one
-notable difference.
+Whenever a client finds a successful solve, that nonce is good for only one request and the sky node will store a cache of all valid nonces used thus far. Future requests would require a nonce that has never been used before so clients should choose their initial `nonce` value randomly in order to avoid searching for a valid solution in the same hash space as another client. Furthermore, the challenge will be periodically rotated every few minutes. When a challenge is rotated, it will maintain the used-up-cache of the most recent previous challenge value and mark it as deprecated, issuing a warning to nodes that the challenge has changed if they issue a request with a solve for that challenge. This ensures that the server's used-up cache can stay relatively constant-sized while still ensuring that nodes do not waste a proof-of-work computation.
 
-Tor's system uses an ordered queue approach which can result in clients not
-knowing whether their request will ever be served. To mitigate this issue, we
-instead use a fixed size queue of size $q$. Whenever that queue is full, the
-internal difficulty threshold is incremented by 1 and all requests after that
-point must meet at least that internal difficulty threshold. If the internal
-difficulty threshold doesn't increment for $q$ client requests in a row then the
-internal difficulty threshold is decremented by 1. The external difficulty
-threshold given to clients is 1 greater than $d$ except when $d = 0$. When
-$d = 0$ the external difficulty is also $0$.
+The specific intricacies of the implementation detailed above take significant inspiration from [Tor's PoW system](https://spec.torproject.org/hspow-spec/index.html) with one notable difference: Tor's system uses an ordered queue approach which can result in clients not knowing whether their request will ever be served; we instead use a fixed size queue of size $q$. The size of the queue is determined to be half of the timeout duration of a given client divided by the average time it takes to serve any given request. Whenever the queue is full, the internal difficulty threshold is incremented by 1 and all requests after that point must meet at least that internal difficulty threshold in order to be queued. If the queue is ever completely empty when a request comes in then the internal difficulty threshold is decremented by 1 for each request that arrives to a completely empty queue.
 
-### Mitigation Steps when Under Load
+The external difficulty threshold given to clients who reach a client with a full queue is always $d$. When $d = 0$ the external difficulty is also $0$. This means the external difficulty threshold will never be $1$.
 
-A local adversary could unduly burden the network by sending large messages to
-various random locations around the address space without the following
-countermeasures.
+While PoW can also be used for rate limiting for earth nodes and be executed in an identical manner, we expect sky nodes to serve as a "gateway" into the network and thus we expect earth nodes to get relatively few direct DOS traffic attacks.
 
-The overall countermeasure is to have nodes declare the maximum size of the
-messages they expect to receive is. If the total size of all messages exceeds
-the expected size declared then the node will evict (forget about) the
-oldest-seen messages, essentially keeping a FIFO ring buffer of messages.
+## Earth Node Attacks
 
-At the sky node layer, when connecting into a sky node one will establish a
-"lease" at that sky node. If the sky node is malicious then that will leak how
-long you intend to stay at that sky node. However, a good sky node will simply
-block all lookup queries which do not correspond to a node's lease.
+The core difficulty with preventing denial-of-service at the earth level is devising a system of reputation which encourages earth nodes to contribute back to the network.
+There are several mitigations for earth nodes, as we both need to protect the network from spam messages while also protecting individual users' inboxes from denial-of-service attacks, especially denial-of-service attacks from people who know their address in the network (which is considered public information).
 
-Secondly, earth nodes will only keep track of nodes which have preemptively
-announced their lease. Leases are generally kept track of, until their
-expiration date, by both sky and earth nodes.
+### Leeching Mitigations
 
-#
+To protect against a minority of bad actors over-using the network without contributing their fair share of delayed-delivery assistance back to the network, we employ reputation tracking of the recipient and use reputation to help nodes decide which messages to keep and which to discard when at their storage capacity. We also have every earth node maintain two message buckets, one based on reputation and the other based on PoW, so that users who are unable to contribute back to the network are still able to use the network overall by announcing proof-of-work attestations and to initially help with bootstrapping mutual reputation with a new node.
+
+Each bucket will be divvied up proportionally to either the reputation or to the difficulty of the proof-of-work of each recipient who has a non-empty inbox, respectfully. Inbox limits are only enforced when a message arrives, which if stored, would overflow the bucket. When enforced, all inboxes are shrunk by deleting any overuse of the inboxes by deleting messages ordered by messages with hashes farthest from the replicator's address. This ensures that 
+
+Notably a recipient's inbox can overflow until a newly arrived message would have to be thrown out due to the overflowing of the inbox. This is because in an ideal world, storage would be over-provisioned, especially for recipients with any reputation in the system (i.e. excluding recipients who never provide their own storage capacity to the network). 
+
+
+#### Reputation Tracking
+
+Unfortunately any node has no way to trust third-party reputation values reported by other nodes, as any user might maliciously report inflated reputations for specific nodes. Thus, the only reliable signal of other nodes' helpfulness to a specific node is whether that specific node has helped them in the past. As a high level overview, our reputation system has every earth node track how often other earth nodes in their neighborhood help them. Because Kademlia is symmetric, two nodes are always in one other's neighborhoods. Thus, tit-for-tat cooperation is possible through local reputation tracking.
+
+While this system as a whole is intended to incentivize tit-for-tat cooperation for delayed message delivery and thus require typical nodes to be both recipients and replicators, we use the terms "recipient" and "replicator" in this section to separate out the roles for the sake of clarity. To be absolutely clear, when we say "replicator" we mean a currently online node and when we say "recipient" we mean a currently offline node who has an in-transit message addressed to them.
+
+Let's start with a naive approach to local reputation: every recipient simply keeps a counter for each neighbor replicator which is incremented every time that replicator has directly delivered an uncorrupted message meant for them. This naive approach disincentivizes replicating the message to other replicators because doing so would increase the chance that another replicator is the one to finally deliver the message to the recipient, depriving the initial replicator of a reputation gain.
+
+To address this disincentive, we extend our naive approach to reward any replicator who claims to have the message which is intended for a recipient, to allow for anyone who is currently online to be rewarded for storing the message. The problem with this scheme is that malicious users could simply store the header without storing the actual message and get credit for the message. This can be mitigated by requiring proof-of-storage -- i.e. proof that they indeed have the message -- be sent alongside the message header. Such a proof-of-storage mechanism has previously been devised by FileCoin who use a hash of a subset of the message body between offset n to m combined with a nonce provided by the recipient as proof-of-storage [CIT. NEEDED]. While adding this proof-of-storage technique addresses the disincentive of replication, there's still no incentive to actively replicate to other nodes, rather now there's simply no disincentive to do so.
+
+<!-- CONTINUE PROOF READING FROM HERE -->
+
+To actively incentivize replication, each replicator will wrap the message body in another layer of encryption so that any node who got the message from them, directly or indirectly, must give them credit when finally delivering the message to the recipient. To facilitate wrapping the message in such a way that only the recipient can unwrap it, messages will include the public key for the recipient alongside their public address. Then, when a node receives a message, they will re-encrypt the message contents using their private key and the recipient's public key, append their public key to the end of the message header, and discard the original message body. Then, the next time they replicate their message to another neighbor they will send along their modified wrapped version of the message. This ensures that successive replicators must "credit" the predecessor holders of the message. We call the part of the header with each hop's public key the chain of custody. The chain of custody actively incentives replication because replicating the message would ensure that the replicator gets credit for temporarily holding the message even if they happen to be offline when the recipient comes online. However, this scheme incentivizes wrapping messages in an unbounded number of public keys and aliases, all of whom would be required to be credited. Such a technique trivially devalues reputation.
+
+To address the aforementioned reputation inflation technique, we could have nodes only replicate the versions of the message which have the shortest chains of custody. If a node learns of a shorter chain of custody compared to the version it is currently storing then it will store that version of the message instead and discard all versions with a greater wrapped count. However, this approach opens up a denial-of-service attack where a malicious actor could claim to have a version of a message which has a smaller chain of custody, which in reality is gibberish data put under the same header. To address this denial-of-service vector, we instead have replicas choose to build on the chain of custody with the highest reputation score.
+
+The reputation score for a chain of custody is derived from recipient's local reputation scores for all their neighbors, which should be regularly published by the recipient. The reputation scores from the recipient are normalized between 0 and 1 by having the recipient divide each score by the max score in the set. Then replicas calculate the reputation score for any given chain of custody by taking the product of all nodes' scores who are in the chain. This ensures that each additional hop will lower the chain's reputation while still ensuring that chains which the recipient trusts more due to past behavior are more likely to be more widely replicated.
+
+Now there's the case of how to handle ties in reputation. A recipient new to the neighborhood will not yet know who to trust and thus all chains will have a reputation value of 0. When tie-breaking between two chains, if one chain is a strict sub-chain of the other then the sub-chain should win the tie and be replicated. This is because the super-chain implicitly trusts the sub-chain and additionally requires trust of additional, potentially malicious, hops to the chain. Thus, a direct super-chain is guaranteed to be less trustworthy compared to any of its' sub-chains. 
+
+Note this doesn't work when comparing two chains which share a common sub-chain but have diverged since because there is no way to strictly order the reputation differences of two diverged chains. For these cases, we could simply go with the shorter of the two diverged chains. However, this enables an adversary to perpetually deny service to a recipient new to the neighborhood by simply always announcing a chain with only one hop that is actually just encrypted gibberish. A short gibberish chain would always win if replicas always chose the shorter of two diverged chains.
+
+To address this denial-of-service attack vector we instead have replicas always keep the chain that they heard of first. By having replicas stick with the chain they heard of first, denial of service to a new recipient would require beating all other chains of custody at replication. Since messages are always published in parallel at some constant replication factor (ex. 3 nodes) the malicious node would a) have to be one of the three initial replicas and b) propagate their chain faster than the other two equivalent chains from the other initial replicas. Since this strategy is not guaranteed and new nodes can potentially be helpful in the future, mounting such denial-of-service attacks gradually cost the "grouchy neighbor" reputation local to the new recipient, relative to the nodes in the neighborhood that consistently help new nodes. So, such an attack would only deprive the "grouchy neighbor" of future assistance from any new node as new nodes would gradually learn that the grouchy neighbor is unhelpful relative to other replicators in the neighborhood.
+
+In the case of a tie between two chains of custody, if one chain is a direct predecessor of another then the predecessor chain wins. In all other cases, replicas simply build on the chain which they heard of first. If instead we always broke ties based on the shortest chains then a malicious node could trivially deny service to a new node who doesn't know who is trustworthy in the neighborhood yet because all chains would have an equivalent reputation score of 0.
+
+While any node in the network could always corrupt a specific recipient's messages, their only incentive to do so would be denial-of-service. Furthermore, a node would have to have been helpful historically in order to be successful in a denial of service. Even still, denial-of-service is by no means guaranteed because the malicious node would have to out-compete 
+
+In order to prevent runaway reputation, we make reputation decay exponentially over time by multiplying all reputation values by 1/2 every time a message is successfully delivered. Then we increment all neighbors who could have helped deliver the message by 1/2. The reputation of nodes who help every round forms a linear recurrence which approaches 1 as the number of rounds approaches infinity. This means half of a node's local reputation at any given time is based purely on if they helped deliver the most recent message. This provides a continuous form of conditional cooperation: nodes that have been helpful previously will continue to be prioritized if they continue to be helpful in the future. However, any missed message assistance will immediately demote the recently unhelpful node below any node who helped, even a newly helpful node. However, they only lose half of their previous reputation and so if they help in the next round then they gain back most of their reputation. So, reputation merely breaks ties between nodes who have been consistently helpful in the past, prioritizing nodes who have helped most recently. In the case that all nodes didn't help deliver a message (the message was delivered directly to the recipient), all nodes are equally punished and ultimately the relative reputations maintain their ratios as all reputations are cut in half. In an interesting sense, no node is punished.
+
+In the previous paragraph we used the language "could have helped" to summarize our rewarding technique thus far. We define "could have helped" with any given message delivery as participation in a chain which is available for potential delivery when the recipient comes online to receive their message. The recipient can validate all chains once they've successfully received and validated the message from any chain by replicating the chain-of-replication encryption wrapping with a random byte offset no greater than the message's body by using stream cipher offsets, and then hash the resulting wrapped body fragment combined with a nonce. This hash should match the hash provided by the message holder as a proof-of-storage.
+
+A problem with rewarding all nodes who "could have helped" is that one physical earth node replicator can pretend to be a bunch of replicators who "could have helped" in parallel. For instance, let's say one physical earth node gets a message straight from the sender. Then that physical node could pretend that n different nodes all got that message straight from the sender. In practice, a physical node would need these n different nodes to all be nearby to one another in the address space to make this practical because recipients would never connect to nodes far away in hopes of getting their message and the which messages those n different nodes would have to be strongly correlated with one another to amortize storage costs. This closeness requirement for these n different virtual nodes to amortize work with one another give us our mitigation strategy.
+
+We mitigate the cloning attack by having recipients penalize clustering when calculating reputation gain. Specifically we have recipients calculate, for every replicator, the average virtual distance between the nearest two other replicators. Then we take the max of all of the average distances. Then we set the new node's new reputation equal to node.old_reputation * 0.5 + 0.5 * (node.average_dist / max_dist). While any given node might get very unlucky with accidentally clustering with neighbors, most nodes will be still get an increase in their reputation; furthermore, as the network grows, clustering in a neighborhood will change over time as the replication factor stays constant (the number of nearest online nodes a recipient peers with) and ones' neighborhood comprises an increasingly small address space. With our mitigation, performing a clone attack would require replicators to mine for nodes that are close enough to amortize message storage costs when replicating as one physical node, but not too close where they face a reputation penalty. Because such a goldilocks zone changes as the neighborhood gets more or less crowded (relative to the target address) any node performing a virtual node attack would regularly need to retire their old addresses and perform another round of mining to find new clustered addresses. Then they'd have to re-publicize their addresses list to their friends (who use their various addresses round-robin). Thus, by penalizing clustering, we make such an attack an expensive and inconvenient way to scam nearby nodes out of reputation.
+
+Another problem with rewarding all nodes who "could have helped" is that we do not directly deal with chains of arbitrary length when it comes to rewarding nodes with reputation. Thus, our new reputation calculation is:
+```python
+node.reputation = node.old_reputation * 0.5 + (0.5 * (node.average_dist / max_dist))/(max(0, shortest_known_chain_including(node).length - highest_reputation_valid_chain.length))
+```
+
+This new reputation calculation ensures that the total reputation given to a specific chain is at most equivalent to the total reputation given to the valid chain with the highest reputation. This ensures that an adversary cannot mine local reputation by chaining together a bunch of fake replicators. The aforementioned "goldilocks" mitigation also helps with mitigating inflated chain attacks because reputation is useless if nodes aren't nearby who they've helped.
+
+All in all, we now have a sufficient system for tracking the local reputation of nodes in the network and rewarding helpful behavior while preventing any mechanism to game the system. So, we can now rely on long-running tit-for-tat replication incentives in addition to PoW-based replication incentives. In essence a node will only consider replicating a message for a specific recipient in the tit-for-tat replication bucket if that recipient has previously proved that they tried their best to deliver a message to a specific recipient in the past. Otherwise, the message will be replicated in the proof-of-work bucket. In either case, messages are assumed to be variably-sized and are supposed to be treated atomically (all-or-nothing).
+
+Each recipient, whether based on reputation or PoW, has their own inbox on every replicator. Each recipient will have a certain amount of good-will which they use up when they have messages stored, where the good-will is either earned through helping the replicator previously receive a message or by the difficulty of the proof-of-work. Each replicator is able to configure their total capacity to help the network and is able to configure what percent of their buckets are based on proof-of-work versus reputation. Some amount of proof-of-work bucket space will help bootstrap tit-for-tat assistance between nodes because, in conditional cooperation, a node will have to start helping a little bit with message delivery in order to prove their helpfulness to the other nodes. That said, well established nodes can decrease their proof-of-work bucket sizes as they gain more local reputation with the nodes nearby.
+
+### Doppelganger Attacks
+
+A doppelganger attack is where more than one node claims a specific public address. While statistically such a coincidence is exceedingly rare, an adversary might intentionally perform a doppelganger attack for a denial-of-service attack. To mitigate this attack vector, we assign public addresses by setting public addresses to be a hash of the public signing key. This ensures that a user can "prove" ownership over a specific 256-bit address and by extension ensure that no other node is able to deny service by publishing AOPs with an altered sender key or by publishing trust values that place maximum trust in an adversarial replicator.
+
+
+### Announcement of Presence
+
+We formalize the process of publishing local reputation values, proofs of work, and sender public keys by calling such publication an announcement of presence (AOP). We assume that an earth node who hasn't published an AOP in the last few hours is offline and thus AOPs will expire after a few hours.
+
+We require a recipient to periodically declare to their neighbors that they're online in order to receive messages with an announcement of presence (AOP). This is necessary to ensure that only friends of a recipient can send messages to a given recipient and fill up the given recipient's inbox in their neighbors' buckets. Sky nodes will help with announcing new AOPs to a given neighborhood's currently online earth nodes as a part of announcing that a new node has come online but will not store any AOPs, instead leaving that to the earth nodes.
+
+These AOPs will include the recipient's virtual address, their neighborhood reputation values, their friends' collective public signing key which is used to verify that a sender of a message is indeed a friend of the recipient and not a spammer, a signature of the AOP using the recipient's private signing key, and the recipient's public signing key. Lastly the AOPs can optionally include a proof-of-work attestation of variable difficulty. Such an optional proof-of-work attestation allows bootstrapping of tit-for-tat reputation-based storage allocation while still allowing for mitigation of denial-of-service attacks.
