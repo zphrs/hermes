@@ -5,9 +5,6 @@ use std::time::UNIX_EPOCH;
 use std::ops::Div;
 
 use std::ops::Sub;
-use std::thread;
-use std::time::Duration;
-
 #[derive(PartialEq, PartialOrd, Eq, Ord)]
 pub struct Hour(u64);
 
@@ -60,6 +57,7 @@ impl Sub for SinceEpoch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_time_difference_calculation() {

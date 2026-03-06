@@ -1,4 +1,4 @@
-mod earth_node;
+pub mod earth_node;
 mod ping;
 mod sky_node;
 
