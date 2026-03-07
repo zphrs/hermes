@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Display, Write};
 
 use crate::helpers::from_fn;
 
@@ -56,6 +56,18 @@ impl<const N: usize> Id<N> {
             }
         }
         Ok(())
+    }
+
+    pub fn to_hex_string(&self) -> String {
+        let mut out = String::with_capacity(N * 2);
+
+        for word in self.bytes().chunks(8) {
+            // print each word (64 bits) together
+            for byte in word {
+                write!(out, "{:02X?}", byte).unwrap();
+            }
+        }
+        out
     }
 
     pub(crate) fn get_first_zero_byte(&self) -> usize {

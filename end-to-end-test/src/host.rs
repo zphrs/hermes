@@ -185,6 +185,8 @@ mod tests {
     fn types() {
         let h = Host::new(10, || async { Ok(()) });
         h.start();
+        assert!(!h.is_idle());
         assert!(h.tick(Duration::new(1, 0)).unwrap());
+        assert!(h.is_idle());
     }
 }
