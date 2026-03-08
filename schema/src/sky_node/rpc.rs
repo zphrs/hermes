@@ -1,40 +1,49 @@
 pub mod earth_to_sky;
 pub mod lookup;
 use crate::{
+    earth_node::EarthId,
     ping,
     sky_node::rpc::earth_to_sky::{EarthToSkyRequest, EarthToSkyResponse},
 };
+use maxlen::MaxLen;
 
 use self::lookup::FindSkyNodeRequest;
 use self::lookup::FindSkyNodeResponse;
 
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
+#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
+#[cbor(tag(0))]
 pub struct Request {
     #[n(0)]
-    value: RequestType,
-    #[n(1)]
-    request_id: u64,
+    pub value: RequestType,
 }
 
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
+#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
+#[cbor(flat)]
 pub enum RequestType {
     /// can be sent by anyone
     #[n(0)]
     Ping(#[n(0)] ping::Request),
-    /// can be sent by anyone, probably sent by other sky nodes
+    /// can be sent by anyone, but probably sent by other sky nodes
     #[n(1)]
     FindSkyNode(#[n(0)] FindSkyNodeRequest),
     /// should only be sent by earth nodes
     #[n(2)]
     FromEarth(#[n(0)] EarthToSkyRequest),
+    /// find earth nodes
+    #[n(3)]
+    EarthNodesNear(#[n(0)] EarthId),
+}
+
+pub mod response {
+
+    pub use crate::{lookup::FindSkyNodeResponse as FindSkyNode, ping::Response as Ping};
 }
 
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
+#[cbor(tag(0))]
 pub struct Response {
     #[n(0)]
     value: RequestType,
-    #[n(1)]
-    request_id: u64,
 }
 
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]

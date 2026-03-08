@@ -1,5 +1,7 @@
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
-pub struct Request {}
+use maxlen::MaxLen;
 
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
-pub struct Response {}
+#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
+pub struct Request;
+
+#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
+pub struct Response;

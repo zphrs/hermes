@@ -19,6 +19,11 @@ minicbor-derive = { version = "0.18.3", features = ["alloc", "std"] }
 rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "pem", "ring"] }
 quinn = { version = "0.11.9", default-features = false, features = ["ring", "bloom", "log", "platform-verifier", "runtime-tokio", "rustls-ring"] }
 rustls = { version = "0.23.37", default-features = false, features = ["ring"] }
+public-ip = "0.2.2"
+stun = "0.17.1"
+etcetera = "0.11.0"
+schema = { version = "0.1.0", path = "../schema" }
+minicbor = "2.2.1"
 
 [build-dependencies]
 capnpc = "0.21"
@@ -26,8 +31,5 @@ prost-build = "0.14.3"
 
 [dev-dependencies]
 expect-test = "1.5.1"
+tracing-test = "0.2.6"
 turmoil = "0.6.6"
-
-[profile.dev.package]
-expect-test.opt-level = 3
-turmoil.opt-level = 3

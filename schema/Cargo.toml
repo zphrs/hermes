@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-kademlia = { version = "0.1.0", path = "../kademlia", features = ["minicbor"] }
+crypto-bigint = "0.6.1"
+kademlia = { version = "0.1.0", path = "../kademlia", features = ["minicbor", "maxlen"] }
+maxlen = { version = "0.1.0", path = "../maxlen" }
+maxlen-derive = { version = "0.1.0", path = "../maxlen-derive" }
 minicbor = { version = "2.1.3", features = ["alloc", "std", "derive"] }
 sha2 = "0.10.9"
 

@@ -1,3 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["earth", "schema", "sky", "end-to-end-test"]
+members = ["earth", "schema", "sky", "end-to-end-test", "maxlen", "maxlen-derive"]
+
+[profile.dev.package]
+expect-test.opt-level = 3
+turmoil.opt-level = 3

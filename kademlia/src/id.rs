@@ -74,6 +74,10 @@ impl<const N: usize> Id<N> {
         &self.0
     }
 
+    pub fn as_array(&self) -> &[u8; N] {
+        &self.0
+    }
+
     pub fn xor_distance(&self, rhs: &Self) -> Distance<N> {
         self ^ rhs
     }
@@ -84,6 +88,13 @@ impl<const N: usize> Index<usize> for Id<N> {
 
     fn index(&self, index: usize) -> &Self::Output {
         self.0.index(index)
+    }
+}
+
+#[cfg(feature = "maxlen")]
+impl<const N: usize> maxlen::MaxLen for Id<N> {
+    fn biggest_instantiation() -> Self {
+        Self::ZERO
     }
 }
 
