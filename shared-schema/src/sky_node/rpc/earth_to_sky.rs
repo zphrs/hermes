@@ -1,5 +1,5 @@
 use crate::{
-    EarthNode, SkyNode,
+    EarthNode, MaxSizedVec, SkyNode,
     earth_node::{EarthId, candidate::Candidate},
     sky_node::rpc::lookup::FindSkyNodeResponse,
 };
@@ -50,21 +50,21 @@ where
 }
 
 pub mod response {
-    use crate::{EarthNode, SkyNode, earth_node::candidate::Candidate};
+    use crate::{EarthNode, MaxSizedVec, SkyNode, earth_node::candidate::Candidate};
     use maxlen::MaxLen;
 
     #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
     pub struct Register {
         #[n(0)]
-        pub neighbors: Option<[Option<SkyNode>; 20]>,
+        pub neighbors: Option<MaxSizedVec<SkyNode, 20>>,
     }
 
     // either found candidates is valid or not
     #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-    pub struct ConnectTo(#[n(0)] Result<[Option<Candidate>; 20], ()>);
+    pub struct ConnectTo(#[n(0)] Result<MaxSizedVec<Candidate, 20>, ()>);
 
     #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-    pub struct NearbyEarthNodes(#[n(0)] [Option<EarthNode>; 20]);
+    pub struct NearbyEarthNodes(#[n(0)] MaxSizedVec<EarthNode, 20>);
 }
 
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
@@ -90,7 +90,7 @@ pub enum EarthToSkyResponseValue {
     /// node or this sky node is missing the requested information. Connection
     /// to earth node should be `stopped()` after this message.
     #[n(2)]
-    NearbyEarthNodes(#[n(0)] [Option<EarthNode>; 20]),
+    NearbyEarthNodes(#[n(0)] MaxSizedVec<EarthNode, 20>),
     #[n(3)]
     Redirect(#[n(0)] FindSkyNodeResponse),
 }

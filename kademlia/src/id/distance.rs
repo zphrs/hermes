@@ -224,6 +224,11 @@ impl<Node, const ID_LEN: usize> Pair<Node, ID_LEN> {
     pub fn node(&self) -> &Node {
         &self.1
     }
+    // WARNING: mutating the id of the node is undefined behavior
+    pub fn node_mut(&mut self) -> &mut Node {
+        &mut self.1
+    }
+
     pub fn into_parts(self) -> (Distance<ID_LEN>, Node) {
         (self.0, self.1)
     }

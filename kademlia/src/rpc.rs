@@ -41,6 +41,7 @@ impl<
     }
 
     fn get_shifted_target_id(&self, shift_by: usize) -> Id<ID_LEN> {
+        // TODO: Make this rand call seeded
         let randomized_distance_from_self: [u8; ID_LEN] = rand::random();
         let shifted_dist: Distance<ID_LEN> =
             Distance::new(randomized_distance_from_self) >> (ID_LEN * 8 - shift_by);
@@ -78,8 +79,8 @@ impl<
         trace!("refreshing bucket");
         self.node_lookup(&target_id).await;
     }
-    // 2.3: Refreshing means picking a random ID (just gonna do halfway) in the
-    // bucket's range and performing a node search for that ID.
+    // 2.3: Refreshing means picking a random ID in the bucket's range and
+    // performing a node search for that ID.
     // Run internally when joining network
     async fn refresh_buckets_between(&self, left: &Distance<ID_LEN>, right: &Distance<ID_LEN>) {
         // perform node_lookup on the bucket directly after the input distance.

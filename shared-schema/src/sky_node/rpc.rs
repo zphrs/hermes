@@ -11,15 +11,8 @@ use self::lookup::FindSkyNodeRequest;
 use self::lookup::FindSkyNodeResponse;
 
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-#[cbor(tag(0))]
-pub struct Request {
-    #[n(0)]
-    pub value: RequestType,
-}
-
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 #[cbor(flat)]
-pub enum RequestType {
+pub enum RootRequest {
     /// can be sent by anyone
     #[n(0)]
     Ping(#[n(0)] ping::Request),
@@ -36,14 +29,16 @@ pub enum RequestType {
 
 pub mod response {
 
-    pub use crate::{lookup::FindSkyNodeResponse as FindSkyNode, ping::Response as Ping};
+    pub use crate::{
+        ping::Response as Ping, sky_node::rpc::lookup::FindSkyNodeResponse as FindSkyNode,
+    };
 }
 
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
 #[cbor(tag(0))]
 pub struct Response {
     #[n(0)]
-    value: RequestType,
+    value: RootRequest,
 }
 
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]

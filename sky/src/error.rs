@@ -16,10 +16,18 @@ pub enum Error {
     QuinnRead(#[from] quinn::ReadError),
     #[error("quinn write: {0}")]
     QuinnWrite(#[from] quinn::WriteError),
+    #[error("quinn connect: {0}")]
+    QuinnConnect(#[from] quinn::ConnectError),
     #[error("minicbor decode: {0}")]
     MinicborDecode(#[from] minicbor::decode::Error),
     #[error("minicbor encode: {0}")]
     MinicborEncode(String),
+    #[error("minicbor io: {0}")]
+    MinicborIo(#[from] minicbor_io::Error),
+    #[error("quinn")]
+    Quinn(#[from] quinn::ConnectionError),
+    #[error("connection closed")]
+    ConnClosed,
 }
 
 impl<T: Display> From<minicbor::encode::Error<T>> for Error {

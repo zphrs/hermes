@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["earth", "schema", "sky", "end-to-end-test", "maxlen", "maxlen-derive"]
+members = ["earth", "shared-schema", "sky", "end-to-end-test", "maxlen", "maxlen-derive", "rpc"]
 
 [profile.dev.package]
 expect-test.opt-level = 3

@@ -1,16 +1,17 @@
 pub mod rpc;
 
 use std::{
+    fmt::Debug,
     hash::Hash,
     net::{IpAddr, Ipv6Addr},
-    ops::{AddAssign, Deref, DerefMut},
-    sync::OnceLock,
-    time::Instant,
+    ops::{Deref, DerefMut},
+    sync::{Mutex, OnceLock},
 };
 
 use kademlia::{HasId, Id};
 use maxlen::MaxLen;
 use sha2::{Digest, Sha256};
+use tokio::time::Instant;
 
 struct DefaultInstant(pub Instant);
 
@@ -47,41 +48,52 @@ pub struct SkyNode {
     #[cbor(skip)]
     id: OnceLock<SkyId>,
     #[cbor(skip)]
-    last_heard_at: DefaultInstant,
+    last_reached_at: Mutex<DefaultInstant>,
 }
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, PartialEq, Eq, MaxLen)]
+
+impl Debug for SkyNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkyNode")
+            .field("address", &self.address)
+            .field("id", &self.id())
+            .finish()
+    }
+}
+
+#[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, PartialEq, Eq, MaxLen)]
 #[cbor(transparent)]
 pub struct SkyId(#[n(0)] pub(crate) Id<32>);
 
+impl std::fmt::Display for SkyId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Sky{}", self.0)
+    }
+}
+
+#[cfg(test)]
+#[test]
+pub fn test_fmt() {
+    let id = SkyId::from(IpAddr::from(Ipv6Addr::LOCALHOST));
+
+    expect_test::expect!["SkyId(7C3C...0529)"].assert_eq(&format!("{}", id));
+}
+
 impl From<IpAddr> for SkyId {
     fn from(value: IpAddr) -> Self {
-        let bytes = match value.to_canonical() {
-            std::net::IpAddr::V4(ipv4_addr) => Sha256::digest(ipv4_addr.octets()),
-            std::net::IpAddr::V6(ipv6_addr) => Sha256::digest(ipv6_addr.octets()),
+        let mut hasher: Sha256 = Sha256::default();
+        hasher.update("hermes-sky-id");
+        match value.to_canonical() {
+            std::net::IpAddr::V4(ipv4_addr) => hasher.update(ipv4_addr.octets()),
+            std::net::IpAddr::V6(ipv6_addr) => hasher.update(ipv6_addr.octets()),
         };
+        let bytes = hasher.finalize();
         Self(Id::<32>::from(&*bytes))
     }
 }
 
 impl MaxLen for SkyNode {
     fn biggest_instantiation() -> Self {
-        Self {
-            address: Ipv6Addr::UNSPECIFIED.into(),
-            id: OnceLock::new(),
-            last_heard_at: Default::default(),
-        }
-    }
-}
-
-impl AddAssign for SkyNode {
-    fn add_assign(&mut self, rhs: Self) {
-        assert_eq!(
-            self.address, rhs.address,
-            "two SkyNodes are only additive if they share the same id"
-        );
-        if *rhs.last_heard_at > *self.last_heard_at {
-            self.last_heard_at = rhs.last_heard_at;
-        }
+        Self::from(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
     }
 }
 
@@ -106,14 +118,36 @@ impl From<IpAddr> for SkyNode {
         Self {
             address: value,
             id: Default::default(),
-            last_heard_at: Default::default(),
+            last_reached_at: Default::default(),
         }
     }
 }
 
 impl HasId<32> for SkyNode {
     fn id(&self) -> &Id<32> {
-        &self.id.get_or_init(|| SkyId::from(self.address)).0
+        &self.sky_id().0
+    }
+}
+
+impl SkyNode {
+    pub async fn me(get_public_ip: impl FnOnce() -> IpAddr) -> SkyNode {
+        let addr = get_public_ip();
+        Self::from(addr)
+    }
+    pub fn sky_id(&self) -> &SkyId {
+        &self.id.get_or_init(|| SkyId::from(self.address))
+    }
+
+    pub fn address(&self) -> IpAddr {
+        self.address
+    }
+
+    pub fn last_reached_at(&self) -> Instant {
+        self.last_reached_at.lock().unwrap().0
+    }
+
+    pub fn reset_last_reached_at(&self) {
+        *self.last_reached_at.lock().unwrap() = Default::default();
     }
 }
 
