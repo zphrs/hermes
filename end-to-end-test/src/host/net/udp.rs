@@ -417,7 +417,54 @@ impl UdpSocket {
     /// }
     /// ```
     pub async fn ready(&self, interest: Interest) -> io::Result<Ready> {
-        todo!()
+        let mut ready = Ready::EMPTY;
+
+        // In our simulated socket the send channel is always writable unless closed.
+        if interest.is_writable() && !self.send.is_closed() {
+            ready |= Ready::WRITABLE;
+        }
+
+        if interest.is_readable() {
+            if self.peeked.borrow().is_some() {
+                // Already have a peeked packet buffered — readable immediately.
+                ready |= Ready::READABLE;
+            } else {
+                // Try a non-blocking peek at the recv channel.
+                match self.recv.borrow_mut().try_recv() {
+                    Ok(packet) => {
+                        *self.peeked.borrow_mut() = Some(Peeked::from(packet));
+                        ready |= Ready::READABLE;
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => {
+                        // Nothing available yet; will wait below if needed.
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        return Err(io::Error::from(ErrorKind::BrokenPipe));
+                    }
+                }
+            }
+        }
+
+        // If any requested interest is already satisfied, return immediately.
+        if !ready.is_empty() {
+            return Ok(ready);
+        }
+
+        // Nothing is immediately ready.  The only case where we must actually
+        // suspend is when READABLE was requested but no data has arrived yet
+        // (WRITABLE would already be set above if the channel is open).
+        if interest.is_readable() {
+            let packet = self
+                .recv
+                .borrow_mut()
+                .recv()
+                .await
+                .ok_or_else(|| io::Error::from(ErrorKind::BrokenPipe))?;
+            *self.peeked.borrow_mut() = Some(Peeked::from(packet));
+            ready |= Ready::READABLE;
+        }
+
+        Ok(ready)
     }
 
     /// Waits for the socket to become writable.
@@ -504,8 +551,14 @@ impl UdpSocket {
     /// This function may encounter any standard I/O error except `WouldBlock`.
     ///
     /// [`writable`]: method@Self::writable
-    pub fn poll_send_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        todo!()
+    pub fn poll_send_ready(&self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // In our simulated socket the send channel is always immediately writable
+        // unless the receiver has been dropped.
+        if self.send.is_closed() {
+            Poll::Ready(Err(io::Error::from(ErrorKind::BrokenPipe)))
+        } else {
+            Poll::Ready(Ok(()))
+        }
     }
 
     /// Sends data on the socket to the remote address that the socket is
@@ -585,8 +638,12 @@ impl UdpSocket {
     /// This function may encounter any standard I/O error except `WouldBlock`.
     ///
     /// [`connect`]: method@Self::connect
-    pub fn poll_send(&self, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        todo!()
+    pub fn poll_send(&self, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        match self.try_send(buf) {
+            Ok(n) => Poll::Ready(Ok(n)),
+            Err(e) if e.kind() == ErrorKind::WouldBlock => Poll::Pending,
+            Err(e) => Poll::Ready(Err(e)),
+        }
     }
 
     /// Tries to send data on the socket to the remote address to which it is
@@ -638,7 +695,23 @@ impl UdpSocket {
     /// }
     /// ```
     pub fn try_send(&self, buf: &[u8]) -> io::Result<usize> {
-        todo!()
+        // limits buf size to be < 1200 bytes (emulates ethernet)
+        let buf = &buf[..std::cmp::min(buf.len(), 1200)];
+        let packet = crate::net::udp::Packet::new(
+            self.local_addr,
+            self.peer_addr
+                .borrow()
+                .ok_or_else(|| io::Error::from(ErrorKind::NotConnected))?,
+            buf,
+            None,
+        );
+        match self.send.try_send(packet) {
+            Ok(()) => Ok(buf.len()),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(io::Error::from(ErrorKind::WouldBlock)),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(io::Error::from(ErrorKind::HostUnreachable))
+            }
+        }
     }
 
     /// Waits for the socket to become readable.
@@ -731,7 +804,21 @@ impl UdpSocket {
     ///
     /// [`readable`]: method@Self::readable
     pub fn poll_recv_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        todo!()
+        // Fast path: a packet is already buffered from a previous peek/recv.
+        if self.peeked.borrow().is_some() {
+            return Poll::Ready(Ok(()));
+        }
+
+        // Delegate to the underlying mpsc receiver so that the waker stored in
+        // `cx` is registered and will be woken when a packet arrives.
+        match self.recv.borrow_mut().poll_recv(cx) {
+            Poll::Ready(Some(packet)) => {
+                *self.peeked.borrow_mut() = Some(Peeked::from(packet));
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(None) => Poll::Ready(Err(io::Error::from(ErrorKind::BrokenPipe))),
+            Poll::Pending => Poll::Pending,
+        }
     }
 
     /// Receives a single datagram message on the socket from the remote address
@@ -772,7 +859,15 @@ impl UdpSocket {
     /// }
     /// ```
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        todo!()
+        loop {
+            match self.try_recv(buf) {
+                Ok(n) => return Ok(n),
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    std::future::poll_fn(|cx| self.poll_recv_ready(cx)).await?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Attempts to receive a single datagram message on the socket from the remote
@@ -799,7 +894,11 @@ impl UdpSocket {
     ///
     /// [`connect`]: method@Self::connect
     pub fn poll_recv(&self, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        std::task::ready!(self.poll_fill_peeked(cx, &mut borrow))?;
+        let chunk = Self::read_peeked(&mut borrow, buf.remaining());
+        buf.put_slice(&chunk);
+        Poll::Ready(Ok(()))
     }
 
     /// Tries to receive a single datagram message on the socket from the remote
@@ -853,7 +952,11 @@ impl UdpSocket {
     /// }
     /// ```
     pub fn try_recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        self.try_fill_peeked(&mut borrow)?;
+        let chunk = Self::read_peeked(&mut borrow, buf.len());
+        buf[..chunk.len()].copy_from_slice(&chunk);
+        Ok(chunk.len())
     }
 
     /// Tries to receive data from the stream into the provided buffer, advancing the
@@ -906,7 +1009,14 @@ impl UdpSocket {
     /// }
     /// ```
     pub fn try_recv_buf<B: BufMut>(&self, buf: &mut B) -> io::Result<usize> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        self.try_fill_peeked(&mut borrow)?;
+
+        let chunk = Self::read_peeked(&mut borrow, buf.remaining_mut());
+        let n = chunk.len();
+        buf.put_slice(&chunk);
+
+        Ok(n)
     }
 
     /// Receives a single datagram message on the socket from the remote address
@@ -940,7 +1050,14 @@ impl UdpSocket {
     /// }
     /// ```
     pub async fn recv_buf<B: BufMut>(&self, buf: &mut B) -> io::Result<usize> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        self.fill_peeked(&mut borrow).await?;
+
+        let chunk = Self::read_peeked(&mut borrow, buf.remaining_mut());
+        let n = chunk.len();
+        buf.put_slice(&chunk);
+
+        Ok(n)
     }
 
     /// Tries to receive a single datagram message on the socket. On success,
@@ -1001,7 +1118,13 @@ impl UdpSocket {
     /// }
     /// ```
     pub fn try_recv_buf_from<B: BufMut>(&self, buf: &mut B) -> io::Result<(usize, SocketAddr)> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        self.try_fill_peeked(&mut borrow)?;
+        let from = borrow.as_ref().unwrap().packet.header().get_src_addr();
+        let chunk = Self::read_peeked(&mut borrow, buf.remaining_mut());
+        let n = chunk.len();
+        buf.put_slice(&chunk);
+        Ok((n, from))
     }
 
     /// Receives a single datagram message on the socket, advancing the
@@ -1043,7 +1166,13 @@ impl UdpSocket {
     /// }
     /// ```
     pub async fn recv_buf_from<B: BufMut>(&self, buf: &mut B) -> io::Result<(usize, SocketAddr)> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        self.fill_peeked(&mut borrow).await?;
+        let from = borrow.as_ref().unwrap().packet.header().get_src_addr();
+        let chunk = Self::read_peeked(&mut borrow, buf.remaining_mut());
+        let n = chunk.len();
+        buf.put_slice(&chunk);
+        Ok((n, from))
     }
 
     /// Sends data on the socket to the given address. On success, returns the
@@ -1083,7 +1212,17 @@ impl UdpSocket {
     /// }
     /// ```
     pub async fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
-        todo!()
+        let target = to_socket_addrs(addr)?
+            .next()
+            .ok_or_else(|| io::Error::from(ErrorKind::InvalidInput))?;
+        // limits buf size to be < 1200 bytes (emulates ethernet)
+        let buf = &buf[..std::cmp::min(buf.len(), 1200)];
+        let packet = crate::net::udp::Packet::new(self.local_addr, target, buf, None);
+        self.send
+            .send(packet)
+            .await
+            .or(Err(io::Error::from(ErrorKind::HostUnreachable)))?;
+        Ok(buf.len())
     }
 
     /// Attempts to send data on the socket to a given address.
@@ -1105,11 +1244,15 @@ impl UdpSocket {
     /// This function may encounter any standard I/O error except `WouldBlock`.
     pub fn poll_send_to(
         &self,
-        cx: &mut Context<'_>,
+        _cx: &mut Context<'_>,
         buf: &[u8],
         target: SocketAddr,
     ) -> Poll<io::Result<usize>> {
-        todo!()
+        match self.try_send_to(buf, target) {
+            Ok(n) => Poll::Ready(Ok(n)),
+            Err(e) if e.kind() == ErrorKind::WouldBlock => Poll::Pending,
+            Err(e) => Poll::Ready(Err(e)),
+        }
     }
 
     /// Tries to send data on the socket to the given address, but if the send is
@@ -1160,7 +1303,16 @@ impl UdpSocket {
     /// }
     /// ```
     pub fn try_send_to(&self, buf: &[u8], target: SocketAddr) -> io::Result<usize> {
-        todo!()
+        // limits buf size to be < 1200 bytes (emulates ethernet)
+        let buf = &buf[..std::cmp::min(buf.len(), 1200)];
+        let packet = crate::net::udp::Packet::new(self.local_addr, target, buf, None);
+        match self.send.try_send(packet) {
+            Ok(()) => Ok(buf.len()),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(io::Error::from(ErrorKind::WouldBlock)),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(io::Error::from(ErrorKind::HostUnreachable))
+            }
+        }
     }
 
     /// Receives a single datagram message on the socket. On success, returns
@@ -1206,29 +1358,76 @@ impl UdpSocket {
     /// [packet injection attack]: https://en.wikipedia.org/wiki/Packet_injection
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         let mut borrow = self.peeked.borrow_mut();
-        let Peeked { packet, bytes } = self.fill_peeked(&mut borrow).await?;
-
-        let from = packet.header().get_src_addr();
-        let size = std::cmp::min(bytes.len(), buf.len());
-        buf[..size].copy_from_slice(&bytes[..size]);
-        *bytes = bytes.slice(..size);
-        return Ok((size, from));
+        self.fill_peeked(&mut borrow).await?;
+        let from = borrow.as_ref().unwrap().packet.header().get_src_addr();
+        let chunk = Self::read_peeked(&mut borrow, buf.len());
+        buf[..chunk.len()].copy_from_slice(&chunk);
+        Ok((chunk.len(), from))
     }
 
-    async fn fill_peeked<'a>(
+    async fn fill_peeked(
         &self,
-        peeked: &'a mut impl DerefMut<Target = Option<Peeked>>,
-    ) -> io::Result<&'a mut Peeked> {
+        peeked: &mut impl DerefMut<Target = Option<Peeked>>,
+    ) -> io::Result<()> {
         if peeked.is_none() {
-            let next_bytes = self
+            let packet = self
                 .recv
                 .borrow_mut()
                 .recv()
                 .await
                 .ok_or(ErrorKind::BrokenPipe)?;
-            peeked.replace(Peeked::from(next_bytes));
+            peeked.replace(Peeked::from(packet));
         }
-        Ok(peeked.as_mut().unwrap())
+        Ok(())
+    }
+
+    fn try_fill_peeked(
+        &self,
+        peeked: &mut impl DerefMut<Target = Option<Peeked>>,
+    ) -> io::Result<()> {
+        if peeked.is_none() {
+            match self.recv.borrow_mut().try_recv() {
+                Ok(packet) => {
+                    peeked.replace(Peeked::from(packet));
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    return Err(io::Error::from(ErrorKind::WouldBlock));
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    return Err(io::Error::from(ErrorKind::BrokenPipe));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn poll_fill_peeked(
+        &self,
+        cx: &mut Context<'_>,
+        peeked: &mut impl DerefMut<Target = Option<Peeked>>,
+    ) -> Poll<io::Result<()>> {
+        if peeked.is_none() {
+            match self.recv.borrow_mut().poll_recv(cx) {
+                Poll::Ready(Some(packet)) => {
+                    peeked.replace(Peeked::from(packet));
+                }
+                Poll::Ready(None) => {
+                    return Poll::Ready(Err(io::Error::from(ErrorKind::BrokenPipe)));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    /// Extracts up to `max` bytes from the buffered datagram and discards
+    /// the rest, consuming the datagram entirely (standard UDP semantics).
+    fn read_peeked(borrow: &mut Option<Peeked>, max: usize) -> Bytes {
+        let peeked = borrow.as_mut().unwrap();
+        let n = peeked.bytes.len().min(max);
+        let chunk = peeked.bytes.slice(..n);
+        *borrow = None;
+        chunk
     }
 
     /// Attempts to receive a single datagram on the socket.
@@ -1262,7 +1461,12 @@ impl UdpSocket {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<SocketAddr>> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        std::task::ready!(self.poll_fill_peeked(cx, &mut borrow))?;
+        let from = borrow.as_ref().unwrap().packet.header().get_src_addr();
+        let chunk = Self::read_peeked(&mut borrow, buf.remaining());
+        buf.put_slice(&chunk);
+        Poll::Ready(Ok(from))
     }
 
     /// Tries to receive a single datagram message on the socket. On success,
@@ -1324,7 +1528,12 @@ impl UdpSocket {
     /// }
     /// ```
     pub fn try_recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        self.try_fill_peeked(&mut borrow)?;
+        let from = borrow.as_ref().unwrap().packet.header().get_src_addr();
+        let chunk = Self::read_peeked(&mut borrow, buf.len());
+        buf[..chunk.len()].copy_from_slice(&chunk);
+        Ok((chunk.len(), from))
     }
 
     /// Tries to read or write from the socket using a user-provided IO operation.
@@ -1364,7 +1573,34 @@ impl UdpSocket {
         interest: Interest,
         f: impl FnOnce() -> io::Result<R>,
     ) -> io::Result<R> {
-        todo!()
+        let mut ready = false;
+
+        if interest.is_writable() && !self.send.is_closed() {
+            ready = true;
+        }
+
+        if interest.is_readable() {
+            if self.peeked.borrow().is_some() {
+                ready = true;
+            } else {
+                match self.recv.borrow_mut().try_recv() {
+                    Ok(packet) => {
+                        *self.peeked.borrow_mut() = Some(Peeked::from(packet));
+                        ready = true;
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => {}
+                }
+            }
+        }
+
+        if !ready {
+            return Err(io::Error::from(io::ErrorKind::WouldBlock));
+        }
+
+        f()
     }
 
     /// Reads or writes from the socket using a user-provided IO operation.
@@ -1397,7 +1633,13 @@ impl UdpSocket {
         interest: Interest,
         mut f: impl FnMut() -> io::Result<R>,
     ) -> io::Result<R> {
-        todo!()
+        loop {
+            self.ready(interest).await?;
+            match f() {
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                res => return res,
+            }
+        }
     }
 
     /// Receives a single datagram from the connected address without removing it from the queue.
@@ -1444,7 +1686,15 @@ impl UdpSocket {
     /// [`peek_sender`]: method@Self::peek_sender
     /// [packet injection attack]: https://en.wikipedia.org/wiki/Packet_injection
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        todo!()
+        loop {
+            match self.try_peek(buf) {
+                Ok(n) => return Ok(n),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::future::poll_fn(|cx| self.poll_recv_ready(cx)).await?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Receives data from the connected address, without removing it from the input queue.
@@ -1487,7 +1737,12 @@ impl UdpSocket {
     /// [`poll_peek_sender`]: method@Self::poll_peek_sender
     /// [packet injection attack]: https://en.wikipedia.org/wiki/Packet_injection
     pub fn poll_peek(&self, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        std::task::ready!(self.poll_fill_peeked(cx, &mut borrow))?;
+        let bytes = &borrow.as_ref().unwrap().bytes;
+        let len = bytes.len().min(buf.remaining());
+        buf.put_slice(&bytes[..len]);
+        Poll::Ready(Ok(()))
     }
 
     /// Tries to receive data on the connected address without removing it from the input queue.
@@ -1518,7 +1773,12 @@ impl UdpSocket {
     /// [`try_peek_sender`]: method@Self::try_peek_sender
     /// [packet injection attack]: https://en.wikipedia.org/wiki/Packet_injection
     pub fn try_peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        self.try_fill_peeked(&mut borrow)?;
+        let bytes = &borrow.as_ref().unwrap().bytes;
+        let len = bytes.len().min(buf.len());
+        buf[..len].copy_from_slice(&bytes[..len]);
+        Ok(len)
     }
 
     /// Receives data from the socket, without removing it from the input queue.
@@ -1566,7 +1826,15 @@ impl UdpSocket {
     /// [`peek_sender`]: method@Self::peek_sender
     /// [packet injection attack]: https://en.wikipedia.org/wiki/Packet_injection
     pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        todo!()
+        loop {
+            match self.try_peek_from(buf) {
+                Ok(res) => return Ok(res),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::future::poll_fn(|cx| self.poll_recv_ready(cx)).await?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Receives data from the socket, without removing it from the input queue.
@@ -1614,7 +1882,14 @@ impl UdpSocket {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<SocketAddr>> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        std::task::ready!(self.poll_fill_peeked(cx, &mut borrow))?;
+        let peeked = borrow.as_ref().unwrap();
+        let from = peeked.packet.header().get_src_addr();
+        let bytes = &peeked.bytes;
+        let len = bytes.len().min(buf.remaining());
+        buf.put_slice(&bytes[..len]);
+        Poll::Ready(Ok(from))
     }
 
     /// Tries to receive data on the socket without removing it from the input queue.
@@ -1646,7 +1921,14 @@ impl UdpSocket {
     /// [`try_peek_sender`]: method@Self::try_peek_sender
     /// [packet injection attack]: https://en.wikipedia.org/wiki/Packet_injection
     pub fn try_peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        self.try_fill_peeked(&mut borrow)?;
+        let peeked = borrow.as_ref().unwrap();
+        let from = peeked.packet.header().get_src_addr();
+        let bytes = &peeked.bytes;
+        let len = bytes.len().min(buf.len());
+        buf[..len].copy_from_slice(&bytes[..len]);
+        Ok((len, from))
     }
 
     /// Retrieve the sender of the data at the head of the input queue, waiting if empty.
@@ -1663,7 +1945,15 @@ impl UdpSocket {
     /// [`peek_from`]: method@Self::peek_from
     /// [packet injection attack]: https://en.wikipedia.org/wiki/Packet_injection
     pub async fn peek_sender(&self) -> io::Result<SocketAddr> {
-        todo!()
+        loop {
+            match self.peek_sender_inner() {
+                Ok(addr) => return Ok(addr),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::future::poll_fn(|cx| self.poll_recv_ready(cx)).await?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Retrieve the sender of the data at the head of the input queue,
@@ -1687,7 +1977,9 @@ impl UdpSocket {
     /// [`poll_peek_from`]: method@Self::poll_peek_from
     /// [packet injection attack]: https://en.wikipedia.org/wiki/Packet_injection
     pub fn poll_peek_sender(&self, cx: &mut Context<'_>) -> Poll<io::Result<SocketAddr>> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        std::task::ready!(self.poll_fill_peeked(cx, &mut borrow))?;
+        Poll::Ready(Ok(borrow.as_ref().unwrap().packet.header().get_src_addr()))
     }
 
     /// Try to retrieve the sender of the data at the head of the input queue.
@@ -1703,12 +1995,14 @@ impl UdpSocket {
     ///
     /// [packet injection attack]: https://en.wikipedia.org/wiki/Packet_injection
     pub fn try_peek_sender(&self) -> io::Result<SocketAddr> {
-        todo!()
+        self.peek_sender_inner()
     }
 
     #[inline]
     fn peek_sender_inner(&self) -> io::Result<SocketAddr> {
-        todo!()
+        let mut borrow = self.peeked.borrow_mut();
+        self.try_fill_peeked(&mut borrow)?;
+        Ok(borrow.as_ref().unwrap().packet.header().get_src_addr())
     }
 
     /// Gets the value of the `SO_BROADCAST` option for this socket.
