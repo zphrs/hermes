@@ -11,11 +11,9 @@ use crate::{
     },
 };
 use bytes::Bytes;
+use tracing::info;
 
 use std::{collections::HashMap, io::ErrorKind, time::Duration};
-
-#[derive(Default)]
-struct NetworkInner {}
 
 pub struct Network {
     machines: HashMap<MachineId, MachineNic>,
@@ -54,7 +52,7 @@ impl Network {
             .get(id)
             .ok_or(ErrorKind::HostUnreachable)?
             .clone();
-        println!("waiting to send for {:?}", rand_dur);
+        info!("waiting to send for {:?}", rand_dur);
         self.inner_machine.spawn_local(async move {
             tokio::time::sleep(rand_dur).await;
             let res = nic.try_post(posting).await;

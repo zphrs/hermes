@@ -3,7 +3,6 @@ use crate::host::net::dns::Dns;
 use crate::host::net::macros::cfg_net;
 
 use crate::sim::SIM;
-use std::future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
@@ -23,9 +22,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV
 /// will change. Stabilization is pending enhancements to the Rust language.
 pub trait ToSocketAddrs: sealed::ToSocketAddrsPriv {}
 
-type ReadyFuture<T> = future::Ready<io::Result<T>>;
-
-pub(crate) fn to_socket_addrs<T>(arg: T) -> io::Result<T::Iter>
+pub fn to_socket_addrs<T>(arg: T) -> io::Result<T::Iter>
 where
     T: ToSocketAddrs,
 {

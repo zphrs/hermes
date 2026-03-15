@@ -140,17 +140,17 @@ impl Sim {
         self.dns.borrow_mut()
     }
 
-    pub fn tick() -> Result {
+    pub fn tick() -> Result<bool> {
         SIM.with(|sim| {
+            let mut is_done = true;
             for (_type, map) in &*sim.machines.borrow() {
                 for (id, m) in map {
-                    ACTIVE_MACHINE_ID
-                        .set(id, || m.tick(sim.config.tick_amount()))
-                        .unwrap();
+                    is_done =
+                        ACTIVE_MACHINE_ID.set(id, || m.tick(sim.config.tick_amount()))? && is_done;
                 }
             }
-        });
-        Ok(())
+            Ok(is_done)
+        })
     }
 
     pub fn tick_machine<M: Machine>(m: MachineRef<M>) -> Result<bool> {
@@ -161,6 +161,11 @@ impl Sim {
         SIM.set(self, || {
             CONFIG.set(&self.config, || RNG.set(&self.rng.clone(), f))
         })
+    }
+
+    pub fn run_until_idle() -> Result {
+        while !Sim::tick()? {}
+        Ok(())
     }
 
     pub(crate) fn on_machine<R>(server: MachineRef<impl Machine>, f: impl FnOnce() -> R) -> R {

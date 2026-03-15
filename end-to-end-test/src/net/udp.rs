@@ -22,6 +22,16 @@ pub struct Packet {
     data: Bytes,
 }
 
+impl std::fmt::Debug for Packet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Packet")
+            .field("header", &self.header)
+            .field("data_len", &self.data.len())
+            .field("checksum", &self.header().calculate_checksum(&self.data))
+            .finish()
+    }
+}
+
 impl From<Header> for RecvMeta {
     fn from(header: Header) -> Self {
         let (src, dst) = header.get_socket_addrs();
@@ -159,8 +169,8 @@ pub struct Header {
 impl Debug for Header {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Header")
-            .field("src_addr", &self.get_src_addr())
-            .field("dst_addr", &self.get_dst_addr())
+            .field("src", &self.get_src_addr())
+            .field("dst", &self.get_dst_addr())
             .finish()
     }
 }

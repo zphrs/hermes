@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 use tokio::task::AbortHandle;
+use tracing::warn;
 
 use crate::sim::machine::{BasicMachine, HasNic, Machine, MachineId};
 
@@ -54,7 +55,10 @@ impl Host {
     pub fn start(&self) {
         // spawn_local immediately completes, adding the spawned task to
         // the LocalSet
-
+        if self.handle.borrow().is_some() {
+            warn!("tried to start an already running task");
+            return;
+        };
         let handle = self.inner_machine.spawn_local((self.entrypoint)());
 
         *self.handle.borrow_mut() = Some(handle);
@@ -63,13 +67,22 @@ impl Host {
     pub fn stop(&self) {
         if let Some(handle) = self.handle.take() {
             handle.abort();
+        } else {
+            warn!("tried to stop a task that is already stopped")
         }
     }
 }
 
 impl Machine for Host {
     fn tick(&self, duration: Duration) -> std::result::Result<bool, Box<dyn std::error::Error>> {
-        self.inner_machine.tick(duration)
+        self.inner_machine.tick(duration)?;
+        let mut handle = self.handle.borrow_mut();
+        if let Some(task) = &*handle {
+            if task.is_finished() {
+                *handle = None;
+            }
+        };
+        Ok(handle.is_none())
     }
 
     fn id(&self) -> MachineId {
@@ -77,7 +90,7 @@ impl Machine for Host {
     }
 
     fn is_idle(&self) -> bool {
-        self.inner().is_idle()
+        self.handle.borrow().is_none()
     }
 }
 

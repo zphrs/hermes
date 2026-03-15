@@ -1,12 +1,16 @@
-#![allow(dead_code)] // TODO: remove this line to check for dead code
 //! based on the [api of simgrid](https://simgrid.org/doc/latest/app_s4u.html)
 pub(crate) mod config;
 mod error;
-mod host;
+pub mod host;
+pub use host::net::udp::UdpSocket;
 pub mod net;
 pub mod sim;
+pub use host::Host;
+
+pub use host::os_shim::OsShim;
 
 pub use net::udp::Packet;
+pub use sim::machine::Machine;
 
 /// hosts can belong to multiple networks
 #[cfg(test)]
@@ -17,7 +21,7 @@ mod tests {
             ip,
             udp::{self},
         },
-        sim::{Sim, machine::Machine as _},
+        sim::{Sim, machine::Machine},
     };
     use bytes::BytesMut;
     use std::{
@@ -29,6 +33,27 @@ mod tests {
 
     #[test]
     fn quinn() {}
+
+    #[test]
+    fn peer_addr() {
+        use crate::UdpSocket;
+        use crate::sim::Sim;
+        use crate::{Host, OsShim};
+        use std::net::SocketAddr;
+
+        let sim = Sim::new();
+        sim.enter_runtime(|| {
+            let _shim = OsShim::new(Host::new(1, || async {
+                let addr = "0.0.0.0:8080".parse::<SocketAddr>().unwrap();
+                let peer = "127.0.0.1:11100".parse::<SocketAddr>().unwrap();
+                let sock = UdpSocket::bind(addr).await?;
+                sock.connect(peer).await?;
+                assert_eq!(peer, sock.peer_addr()?);
+                Ok(())
+            }));
+            Sim::run_until_idle().unwrap();
+        });
+    }
 
     #[test]
     #[traced_test]
@@ -43,9 +68,18 @@ mod tests {
 
                 let socket = udp::UdpSocket::bind(SERVER_ADDR).await?;
                 println!("running server");
-                let mut buf = [0u8; b"Hello world!".len()];
-                let (_len, _addr) = socket.recv_from(&mut buf).await?;
-                assert_eq!(&buf, b"Hello world!");
+                let mut messages = std::collections::HashSet::new();
+
+                let mut buf = [0u8; 13]; // max of "Hello world!" and "yay" lengths, but we need to handle variable sizes
+                let (len, _addr) = socket.recv_from(&mut buf).await?;
+                messages.insert(String::from_utf8_lossy(&buf[..len]).to_string());
+
+                let mut buf = [0u8; 13];
+                let (len, _addr) = socket.recv_from(&mut buf).await?;
+                messages.insert(String::from_utf8_lossy(&buf[..len]).to_string());
+
+                assert!(messages.contains("Message 1"));
+                assert!(messages.contains("Message 2"));
                 Ok(())
             }));
 
@@ -58,23 +92,17 @@ mod tests {
                 trace!("client socket inited");
                 socket.connect(SERVER_ADDR).await?;
                 trace!("client connected to server");
-                socket.send(b"Hello world!").await?;
-                trace!("client sent message, DONE");
+                socket.send(b"Message 1").await?;
+                trace!("client sent message 2");
+                socket.send(b"Message 2").await?;
                 Ok(())
             }));
             client.get().borrow().connect_to_net(net);
 
-            Sim::tick_machine(server).unwrap();
-            Sim::tick_machine(client).unwrap();
-            assert!(client.is_idle());
-            for _ in 0..50 {
-                Sim::tick_machine(net).unwrap();
-            }
-            assert!(Sim::tick_machine(net).unwrap());
-            Sim::tick_machine(server).unwrap();
+            Sim::run_until_idle().unwrap();
 
             assert!(net.is_idle());
-
+            assert!(client.is_idle());
             assert!(server.is_idle());
         })
     }
@@ -132,8 +160,6 @@ mod tests {
                 Ok(())
             }));
 
-            server.get().borrow().start();
-
             Sim::on_machine(server, || {
                 assert!(
                     !Sim::get_current_machine::<Host>()
@@ -142,8 +168,6 @@ mod tests {
                         .unwrap()
                 );
             });
-
-            client.get().borrow().start();
 
             client
                 .get()

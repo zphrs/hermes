@@ -21,6 +21,10 @@ rand_distr = "0.5.1"
 futures-io = "0.3.32"
 tracing-test = "0.2.6"
 
+[dev-dependencies]
+tokio = { version = "1.49.0", features = ["macros", "net", "rt", "sync", "test-util", "time", "rt-multi-thread"] }
+
+
 [features]
 default = ["net", "io-util"]
 net = []

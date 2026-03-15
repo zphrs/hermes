@@ -10,7 +10,7 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use scoped_tls::scoped_thread_local;
 use tokio::sync::mpsc::{self, Receiver};
-use tracing::{info, trace, warn};
+use tracing::{info, instrument, trace, warn};
 
 use crate::{
     config::CONFIG,
@@ -81,11 +81,10 @@ impl InnerOsShim {
         };
         listener.io.send(udp_packet).await.unwrap();
     }
-
+    #[instrument(skip(self))]
     fn send_packet(&self, msg: udp::Packet) -> std::io::Result<()> {
         let mut src_addr = msg.header().get_src_addr();
         let src_ip = src_addr.ip();
-        trace!("send_packet sending {:?}", msg.header());
 
         if src_ip.is_unspecified() {
             for addr in self.nets.keys() {
@@ -278,7 +277,7 @@ impl Machine for OsShim {
     fn is_idle(&self) -> bool {
         // always will be the two tasks for handling sending and receiving messages
         // from the client process.
-        self.host.inner().tasks_left() <= 2
+        self.host.is_idle()
     }
 }
 

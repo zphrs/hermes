@@ -17,7 +17,7 @@ pub(crate) struct MessageLoss {
 
 impl Default for MessageLoss {
     fn default() -> Self {
-        Self { fail_rate: 0.01 }
+        Self { fail_rate: 0.0 }
     }
 }
 
