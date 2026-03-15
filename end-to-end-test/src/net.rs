@@ -7,21 +7,30 @@ use crate::{
     config::CONFIG,
     sim::{
         RNG,
-        machine::{HasNic, Machine, MachineId, MachineNic},
+        machine::{BasicMachine, HasNic, Machine, MachineId, MachineNic},
     },
 };
 use bytes::Bytes;
-use rand::Rng;
-use std::{cell::RefCell, collections::HashMap, io::ErrorKind, time::Duration};
-use tokio::{runtime::Runtime, task::LocalSet};
-use tracing::{trace, warn};
+
+use std::{collections::HashMap, io::ErrorKind, time::Duration};
+
+#[derive(Default)]
+struct NetworkInner {}
 
 pub struct Network {
-    id: MachineId,
-    hosts: HashMap<MachineId, MachineNic>,
-    rt: Runtime,
-    local: LocalSet,
-    unsent_messages: RefCell<Vec<(Bytes, Duration, MachineNic)>>,
+    machines: HashMap<MachineId, MachineNic>,
+    inner_machine: BasicMachine,
+}
+
+impl Network {
+    pub fn new() -> Self {
+        let machine = CONFIG.with(|cfg| BasicMachine::new(cfg.ip_hop_capacity()));
+        let out = Self {
+            inner_machine: machine,
+            machines: Default::default(),
+        };
+        out
+    }
 }
 
 impl Default for Network {
@@ -29,29 +38,10 @@ impl Default for Network {
         Self::new()
     }
 }
-impl Network {
-    pub fn new() -> Self {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .start_paused(true)
-            .build()
-            .unwrap();
-        Network {
-            id: MachineId::new(),
-            hosts: Default::default(),
-            rt,
-            local: LocalSet::new(),
-            unsent_messages: Default::default(),
-        }
-    }
-    pub fn add_machine(&mut self, host: &dyn HasNic) {
-        self.hosts.insert(*host.id(), host.nic());
-    }
 
-    pub fn add_machines<'a>(&mut self, hosts: impl IntoIterator<Item = &'a dyn HasNic>) {
-        for host in hosts {
-            self.add_machine(host);
-        }
+impl Network {
+    pub fn add_machine(&mut self, host: &dyn HasNic) {
+        self.machines.insert(host.id(), host.nic());
     }
 
     pub fn try_send_to_host(&self, id: &MachineId, posting: Bytes) -> std::io::Result<()> {
@@ -60,52 +50,34 @@ impl Network {
             RNG.with(|rng| latency.sample(rng.borrow_mut()))
         });
         let nic = self
-            .hosts
+            .machines
             .get(id)
             .ok_or(ErrorKind::HostUnreachable)?
             .clone();
+        println!("waiting to send for {:?}", rand_dur);
+        self.inner_machine.spawn_local(async move {
+            tokio::time::sleep(rand_dur).await;
+            let res = nic.try_post(posting).await;
+            if let Err(e) = res {
+                tracing::warn!("dropped message {}", e);
+            }
+            Ok(())
+        });
 
-        self.unsent_messages
-            .borrow_mut()
-            .push((posting, rand_dur, nic));
         Ok(())
     }
 }
 
 impl Machine for Network {
     fn tick(&self, duration: Duration) -> Result<bool, Box<dyn std::error::Error>> {
-        for (posting, rand_dur, nic) in self.unsent_messages.borrow_mut().drain(..) {
-            trace!("Adding msg to net");
-            let message_loss = CONFIG.with(|cfg| cfg.message_loss_fail_rate());
-            if RNG.with(|rng| rng.borrow_mut().random_bool(message_loss)) {
-                warn!("dropped message: {:?}", posting);
-                continue;
-            }
-            #[allow(clippy::async_yields_async)]
-            {
-                let _handle = self.rt.block_on(async {
-                    self.local
-                        .run_until(async {
-                            tokio::task::spawn_local(async move {
-                                tokio::time::sleep(rand_dur).await;
-                                nic.try_post(posting).await
-                            })
-                        })
-                        .await
-                });
-            }
-        }
-        self.rt.block_on(async {
-            self.local
-                .run_until(async {
-                    tokio::time::sleep(duration).await;
-                })
-                .await
-        });
-        Ok(false)
+        self.inner_machine.tick(duration)
     }
 
-    fn id(&self) -> &crate::sim::machine::MachineId {
-        &self.id
+    fn id(&self) -> crate::sim::machine::MachineId {
+        self.inner_machine.id()
+    }
+
+    fn is_idle(&self) -> bool {
+        self.inner_machine.is_idle()
     }
 }

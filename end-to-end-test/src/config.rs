@@ -63,6 +63,8 @@ impl Default for Latency {
 #[derive(Clone, Copy)]
 pub(crate) struct Config {
     udp_capacity: usize,
+    ip_hop_capacity: usize,
+    nic_capacity: usize,
     tick_amount: Duration,
     latency: Latency,
     message_loss: MessageLoss,
@@ -81,6 +83,13 @@ impl Config {
     pub fn message_loss_fail_rate(&self) -> f64 {
         self.message_loss.fail_rate
     }
+    pub(crate) fn ip_hop_capacity(&self) -> usize {
+        self.ip_hop_capacity
+    }
+
+    pub(crate) fn nic_capacity(&self) -> usize {
+        self.nic_capacity
+    }
 }
 
 impl Default for Config {
@@ -88,9 +97,12 @@ impl Default for Config {
         Self {
             // can only buffer 100 messages at a time, otherwise drops msg on floor
             udp_capacity: 100,
-            // granularity of tick(), necessary to tick to simulate clock skew between
+            // can only buffer 100 messages at a time, otherwise drops msg on floor
+            ip_hop_capacity: 100,
+            nic_capacity: 100,
+            // granularity of tick(), it's necessary to tick to simulate clock skew between
             // hosts
-            tick_amount: Duration::from_millis(1),
+            tick_amount: Duration::from_millis(10),
             latency: Default::default(),
             message_loss: Default::default(),
         }

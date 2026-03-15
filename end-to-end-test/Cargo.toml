@@ -14,10 +14,12 @@ scoped-tls = "1.0.1"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 getrandom = { version = "0.2.12" }
-tokio = { version = "1.49.0", features = ["rt", "sync", "test-util", "time"] }
+tokio = { version = "1.49.0", features = ["net", "rt", "sync", "test-util", "time"] }
 ip_network_table = "0.2.0"
 ip_network = "0.4.1"
 rand_distr = "0.5.1"
+futures-io = "0.3.32"
+tracing-test = "0.2.6"
 
 [features]
 default = ["net", "io-util"]

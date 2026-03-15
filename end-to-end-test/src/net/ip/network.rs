@@ -1,11 +1,11 @@
 use bytes::Bytes;
 pub use ip_network::IpNetwork as IpPrefix;
 use ip_network_table::IpNetworkTable;
-use std::{collections::HashMap, io::ErrorKind};
+use std::{collections::HashMap, io::ErrorKind, net::IpAddr};
 
 use crate::{
     error::Error,
-    net::{self, ip},
+    net::{self},
     sim::machine::{HasNic, Machine, MachineId},
 };
 #[derive(Default)]
@@ -29,13 +29,21 @@ impl Network {
         self.bound_ips.insert(new_range, *host);
     }
 
-    pub fn add_machine(&mut self, host: &dyn HasNic, addr: Option<IpPrefix>) {
+    pub fn add_machine_with_range(&mut self, host: &impl HasNic, addr: IpPrefix) {
         self.network.add_machine(host);
-        // will simply assign an address if unspecified
-        self.bound_ips.insert(
-            addr.unwrap_or_else(|| IpPrefix::from(self.ip_generator.next())),
-            *host.id(),
-        );
+        // will simply assign a single address if unspecified
+        self.bound_ips.insert(addr, host.id());
+    }
+
+    /// assigns a single address if unspecified
+    pub fn add_machine(&mut self, host: &dyn HasNic) -> IpAddr {
+        self.network.add_machine(host);
+        let generated_ip = self.ip_generator.next();
+
+        self.bound_ips
+            .insert(IpPrefix::from(generated_ip), host.id());
+
+        generated_ip
     }
 
     pub fn machine_ip_prefix(&mut self, id: &MachineId) -> Option<&IpPrefix> {
@@ -49,15 +57,12 @@ impl Network {
     pub fn try_send_packet(&self, bytes: Bytes) -> Result<(), Error> {
         let mut cloned_bytes = bytes.clone();
         let ip_header = net::ip::Header::try_from_buf(&mut cloned_bytes)?;
-        let ip::Header::V4 { dst, .. } = ip_header else {
-            Err(Error::InvalidPacket("should be an ipv4 header"))?
-        };
+        let dst_addr = ip_header.get_ip_addrs().1;
 
         let longest_match = self
             .bound_ips
-            .longest_match(dst)
+            .longest_match(dst_addr)
             .ok_or(std::io::Error::from(ErrorKind::HostUnreachable))?;
-
         self.network.try_send_to_host(longest_match.1, bytes)?;
 
         Ok(())
@@ -69,7 +74,11 @@ impl Machine for Network {
         self.network.tick(duration)
     }
 
-    fn id(&self) -> &MachineId {
+    fn id(&self) -> MachineId {
         self.network.id()
+    }
+
+    fn is_idle(&self) -> bool {
+        self.network.is_idle()
     }
 }

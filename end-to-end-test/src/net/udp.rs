@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     hint::unreachable_unchecked,
     net::{IpAddr, SocketAddr},
     num::{NonZero, NonZeroU16},
@@ -15,6 +16,7 @@ use super::{
 
 use super::ip;
 
+#[derive(Clone)]
 pub struct Packet {
     header: Header,
     data: Bytes,
@@ -95,8 +97,8 @@ impl Packet {
         self.header.write_into_buf(into);
         into.put_slice(&self.data);
     }
-    pub fn try_from_bytes(bytes: &mut Bytes) -> Result<Self, ParseError> {
-        let header = Header::try_from_buf(bytes)?;
+    pub fn try_from_bytes(mut bytes: Bytes) -> Result<Self, ParseError> {
+        let header = Header::try_from_buf(&mut bytes)?;
         if header.payload_length() as usize > bytes.len() {
             Err(ParseError::NotEnoughForData {
                 expected: header.payload_length(),
@@ -110,13 +112,57 @@ impl Packet {
     pub fn body(&self) -> Bytes {
         self.data.clone()
     }
+
+    pub fn set_src_addr(&mut self, src: SocketAddr) {
+        self.set_addrs(src, self.header().get_dst_addr());
+    }
+
+    pub fn set_dst_addr(&mut self, dst: SocketAddr) {
+        self.set_addrs(self.header().get_src_addr(), dst);
+    }
+
+    pub fn set_addrs(&mut self, src: SocketAddr, dst: SocketAddr) {
+        match (src.ip(), dst.ip()) {
+            (IpAddr::V4(src), IpAddr::V4(dst)) => {
+                self.header.ip_header.set_v4_address(src, dst);
+            }
+            (IpAddr::V4(src), IpAddr::V6(dst)) => {
+                self.header
+                    .ip_header
+                    .set_v6_address(src.to_ipv6_mapped(), dst);
+            }
+            (IpAddr::V6(src), IpAddr::V4(dst)) => {
+                self.header
+                    .ip_header
+                    .set_v6_address(src, dst.to_ipv6_mapped());
+            }
+            (IpAddr::V6(src), IpAddr::V6(dst)) => {
+                self.header.ip_header.set_v6_address(src, dst);
+            }
+        }
+        self.header.src_port = src.port();
+        self.header.dst_port = dst.port();
+    }
+
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
 }
 #[derive(Clone)]
-pub(crate) struct Header {
+pub struct Header {
     ip_header: ip::Header,
     src_port: u16,
     dst_port: u16,
     checksum: Option<NonZeroU16>,
+}
+
+impl Debug for Header {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Header")
+            .field("src_addr", &self.get_src_addr())
+            .field("dst_addr", &self.get_dst_addr())
+            .finish()
+    }
 }
 
 impl Header {
@@ -127,6 +173,18 @@ impl Header {
 
     pub fn payload_length(&self) -> u16 {
         self.ip_header.payload_length() - Self::UDP_HEADER_LEN as u16
+    }
+
+    pub fn ip_header(&self) -> &ip::Header {
+        &self.ip_header
+    }
+
+    pub fn get_src_addr(&self) -> SocketAddr {
+        self.get_socket_addrs().0
+    }
+
+    pub fn get_dst_addr(&self) -> SocketAddr {
+        self.get_socket_addrs().1
     }
 
     /// Returns (source, destination) socket addresses.
@@ -303,7 +361,7 @@ mod tests {
         assert!(val.check_checksum());
         let mut bytes = BytesMut::new();
         val.write_into_buf(&mut bytes);
-        let val2 = Packet::try_from_bytes(&mut bytes.freeze()).unwrap();
+        let val2 = Packet::try_from_bytes(bytes.freeze()).unwrap();
         assert!(val2.check_checksum());
 
         let val_ipv6 = Packet::new(
@@ -316,7 +374,7 @@ mod tests {
 
         let mut bytes = BytesMut::new();
         val_ipv6.write_into_buf(&mut bytes);
-        let from_bytes = Packet::try_from_bytes(&mut bytes.freeze()).unwrap();
+        let from_bytes = Packet::try_from_bytes(bytes.freeze()).unwrap();
         assert!(from_bytes.check_checksum());
     }
 }
