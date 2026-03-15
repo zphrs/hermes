@@ -46,6 +46,7 @@ struct InnerOsShim {
     // for allowing ports to send into the network
     send_incoming: mpsc::Sender<udp::Packet>,
     recv_incoming: RefCell<mpsc::Receiver<udp::Packet>>,
+    public_ip: Option<IpAddr>,
 }
 
 impl InnerOsShim {
@@ -61,6 +62,7 @@ impl InnerOsShim {
             port_iter: Self::ephemeral_port_gen(),
             send_incoming,
             recv_incoming: recv_incoming.into(),
+            public_ip: None,
         }
     }
 
@@ -87,14 +89,14 @@ impl InnerOsShim {
         let src_ip = src_addr.ip();
 
         if src_ip.is_unspecified() {
-            for addr in self.nets.keys() {
-                let mut msg = msg.clone();
-                src_addr.set_ip(*addr);
-                msg.set_src_addr(src_addr);
-                if let Err(e) = self.send_packet(msg) {
-                    info!("error sending packet: {e}");
-                }
+            let addr = self.public_ip().unwrap();
+            let mut msg = msg.clone();
+            src_addr.set_ip(addr);
+            msg.set_src_addr(src_addr);
+            if let Err(e) = self.send_packet(msg) {
+                info!("error sending packet: {e}");
             }
+
             return Ok(());
         }
         let mut buf_mut = BytesMut::new();
@@ -113,6 +115,14 @@ impl InnerOsShim {
             },
         }
         Ok(())
+    }
+
+    fn set_public_ip(&mut self, ip: IpAddr) {
+        self.public_ip = Some(ip);
+    }
+
+    fn public_ip(&self) -> Option<IpAddr> {
+        self.public_ip
     }
 
     fn pick_unused_port(&mut self, on: IpAddr) -> u16 {
@@ -238,9 +248,19 @@ impl OsShim {
         self.inner.borrow().handle_incoming_ip_packet(packet).await
     }
 
-    pub fn connect_to_net(&self, net: MachineRef<ip::Network>) {
+    pub fn connect_to_net(&self, net: MachineRef<ip::Network>) -> IpAddr {
         let addr = net.get().borrow_mut().add_machine(self);
-        self.inner.borrow_mut().add_net(addr, net)
+        self.inner.borrow_mut().add_net(addr, net);
+        addr
+    }
+
+    pub fn set_public_ip(&self, ip: IpAddr) {
+        trace!("setting public ip to {ip}");
+        self.inner.borrow_mut().set_public_ip(ip);
+    }
+
+    pub fn public_ip(&self) -> Option<IpAddr> {
+        self.inner.borrow().public_ip()
     }
 
     pub fn bind_to_addr(

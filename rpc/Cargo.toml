@@ -13,6 +13,7 @@ quic-rpc = "0.20.0"
 quinn = { version = "0.11.9", default-features = false, optional = true, features = ["futures-io"] }
 thiserror = "2.0.18"
 tokio = { version = "1.50.0", default-features = false }
+tracing = "0.1.44"
 
 
 [features]

@@ -7,6 +7,7 @@ use futures_io::{AsyncRead, AsyncWrite};
 use maxlen::MaxLen;
 use minicbor::{Decode, Encode};
 use minicbor_io::AsyncWriter;
+use tracing::trace;
 
 pub trait RpcMessage: Debug + for<'a> Decode<'a, ()> + Encode<()> + maxlen::MaxLen {}
 
@@ -137,6 +138,7 @@ pub trait Caller: Send + Sync + BiStream + Sized {
             let root = Root::from(req);
             let mut sender = minicbor_io::AsyncWriter::new(write);
             sender.write(root).await.map_err(RpcError::from)?;
+            trace!("sent query");
             let mut receiver = minicbor_io::AsyncReader::new(read);
             receiver.set_max_len(<M::Res as MaxLen>::max_len() as u32);
             Ok(receiver.read::<M::Res>().await.map_err(RpcError::from)?)
@@ -209,6 +211,36 @@ pub trait Client: Send + Sync + BiStream {
     fn accept_stream(
         &mut self,
     ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> + Send;
+    fn handle_one_request<'a, Root: RpcMessage, Rh: RootHandler<Root> + 'a>(
+        &'a mut self,
+        handler: &mut Rh,
+    ) -> impl Future<Output = Result<(), ClientError<Self::Error, Rh::Error>>> + Send
+    where
+        Rh::Error: Send,
+        <Self as BiStream>::SendStream: Sync,
+    {
+        async move {
+            let (write, read) = self.accept_stream().await.map_err(ClientError::Transport)?;
+            let mut receiver = minicbor_io::AsyncReader::new(read);
+            let Some(root) = receiver
+                .read::<Root>()
+                .await
+                .map_err(|e| ClientError::Rpc(RpcError::from(e)))?
+            else {
+                return Ok(());
+            };
+            let mut sender = minicbor_io::AsyncWriter::new(write);
+            match handler
+                .handle::<_, Self::Error>(root, Replier::new(&mut sender))
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => return Err(e),
+            }
+            Ok(())
+        }
+    }
+
     fn handle_client<'a, Root: RpcMessage, Rh: RootHandler<Root> + 'a>(
         &'a mut self,
         mut handler: Rh,
@@ -219,23 +251,7 @@ pub trait Client: Send + Sync + BiStream {
     {
         async move {
             loop {
-                let (write, read) = self.accept_stream().await.map_err(ClientError::Transport)?;
-                let mut receiver = minicbor_io::AsyncReader::new(read);
-                let Some(root) = receiver
-                    .read::<Root>()
-                    .await
-                    .map_err(|e| ClientError::Rpc(RpcError::from(e)))?
-                else {
-                    continue;
-                };
-                let mut sender = minicbor_io::AsyncWriter::new(write);
-                match handler
-                    .handle::<_, Self::Error>(root, Replier::new(&mut sender))
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) => return Err(e),
-                }
+                self.handle_one_request::<Root, Rh>(&mut handler).await?;
             }
         }
     }
@@ -362,6 +378,7 @@ mod tests {
             minicbor_derive::CborLen,
             maxlen::MaxLen,
         )]
+        #[allow(dead_code)]
         pub struct Request;
 
         impl From<Request> for super::Root {
@@ -416,7 +433,9 @@ mod tests {
         pub struct Response;
     }
 
+    #[allow(dead_code)]
     struct RootHandler;
+    #[allow(dead_code)]
     #[derive(Debug, thiserror::Error)]
     pub enum Error {
         #[error("rpc: {0}")]

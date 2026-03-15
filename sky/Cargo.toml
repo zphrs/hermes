@@ -28,6 +28,7 @@ minicbor-io = { version = "0.23.0", features = ["async-io"] }
 rpc = { version = "0.1.0", path = "../rpc" }
 futures-io = "0.3.32"
 maxlen = { version = "0.1.0", path = "../maxlen" }
+end-to-end-test = { version = "0.1.0", path = "../end-to-end-test" }
 
 [build-dependencies]
 capnpc = "0.21"
@@ -35,5 +36,5 @@ prost-build = "0.14.3"
 
 [dev-dependencies]
 expect-test = "1.5.1"
-tracing-test = "0.2.6"
+tracing-test = { version = "0.2.6", features=["no-env-filter"] }
 turmoil = "0.6.6"

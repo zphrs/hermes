@@ -1,4 +1,4 @@
-use std::{convert::Infallible, hint::unreachable_unchecked};
+use std::convert::Infallible;
 
 use maxlen::MaxLen;
 use rpc::Call;

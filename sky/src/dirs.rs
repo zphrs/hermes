@@ -1,6 +1,6 @@
 use std::{ops::Deref, path::PathBuf, sync::LazyLock};
 
-use etcetera::{choose_app_strategy, AppStrategy, AppStrategyArgs};
+use etcetera::{AppStrategy, AppStrategyArgs, choose_app_strategy};
 
 macro_rules! etc {
     () => {

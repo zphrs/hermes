@@ -1,22 +1,16 @@
-use std::{collections::HashMap, net::IpAddr, sync::Arc};
+use std::{net::IpAddr, sync::Arc};
 
-use futures_util::StreamExt;
 use tokio::{
     net::UdpSocket,
     task::{JoinSet, LocalSet},
 };
 use tracing::trace;
 
-static DEFAULT_STUN_SERVERS: [&'static str; 4] = [
-    "stun.cloudflare.com",
-    "stun.l.google.com",
-    "stun.syncthing.net",
-    "stun.xten.com",
-];
-
 // this pings out to STUN servers to get IP. Also pings dns and api providers like ipify et. al.
 pub async fn get_public_ip() -> Option<IpAddr> {
-    let mut ls: LocalSet = LocalSet::new();
+    use futures_util::StreamExt;
+    use std::collections::HashMap;
+    let ls: LocalSet = LocalSet::new();
     let jh1 = ls.spawn_local(
         public_ip::resolve(public_ip::http::ALL, public_ip::Version::Any)
             .filter_map(|v| async move { v.ok().map(|v| v.0) })
@@ -34,8 +28,21 @@ pub async fn get_public_ip() -> Option<IpAddr> {
     }
     hm.into_iter().max_by_key(|v| v.1).map(|v| v.0)
 }
+pub async fn get_public_ip_mock() -> Option<IpAddr> {
+    use end_to_end_test::{OsShim, sim::Sim};
+    let curr_os = Sim::get_current_machine::<OsShim>();
+    trace!("got current os shim");
+    return curr_os.borrow().public_ip();
+}
+
 // returns first ip returned from any of the default stun servers
 async fn query_stun_server() -> Vec<IpAddr> {
+    static DEFAULT_STUN_SERVERS: [&'static str; 4] = [
+        "stun.cloudflare.com",
+        "stun.l.google.com",
+        "stun.syncthing.net",
+        "stun.xten.com",
+    ];
     use stun::{
         agent::TransactionId,
         client::ClientBuilder,

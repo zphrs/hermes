@@ -39,10 +39,10 @@ async fn test() -> anyhow::Result<()> {
 
     // client side
     // create the rpc client given the channel and the service type
-    let mut client = RpcClient::<PingService, _>::new(client);
+    let client = RpcClient::<PingService, _>::new(client);
 
     // call the service
-    let res = client.rpc(Ping).await?;
+    let _res = client.rpc(Ping).await?;
 
     // server side
     // create the rpc server given the channel and the service type

@@ -70,6 +70,15 @@ impl std::fmt::Display for SkyId {
     }
 }
 
+impl SkyId {
+    pub fn to_url(&self) -> String {
+        let id = self.0.to_hex_string();
+        let left = &id[..id.len() / 2];
+        let right = &id[id.len() / 2..];
+        format!("{left}.{right}.invalid")
+    }
+}
+
 #[cfg(test)]
 #[test]
 pub fn test_fmt() {
