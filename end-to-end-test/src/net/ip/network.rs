@@ -36,7 +36,7 @@ impl Network {
     }
 
     /// assigns a single address if unspecified
-    pub fn add_machine(&mut self, host: &dyn HasNic) -> IpAddr {
+    pub fn add_machine(&mut self, host: &impl HasNic) -> IpAddr {
         self.network.add_machine(host);
         let generated_ip = self.ip_generator.next();
 
@@ -70,12 +70,8 @@ impl Network {
 }
 
 impl Machine for Network {
-    fn tick(&self, duration: std::time::Duration) -> Result<bool, Box<dyn std::error::Error>> {
-        self.network.tick(duration)
-    }
-
-    fn id(&self) -> MachineId {
-        self.network.id()
+    fn basic_machine(&self) -> std::rc::Rc<crate::sim::machine::BasicMachine> {
+        self.network.basic_machine()
     }
 
     fn is_idle(&self) -> bool {

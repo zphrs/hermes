@@ -8,12 +8,13 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use scoped_tls::scoped_thread_local;
-use tokio::sync::mpsc::{self, Receiver};
+use tokio::{
+    sync::mpsc::{self, Receiver},
+    task::AbortHandle,
+};
 use tracing::{info, instrument, trace, warn};
 
 use crate::{
-    config::CONFIG,
     host::Host,
     net::{
         self,
@@ -22,7 +23,8 @@ use crate::{
     },
     sim::{
         MachineRef, Sim,
-        machine::{HasNic, Machine},
+        config::CONFIG,
+        machine::{HasMachineId, HasNic, Machine},
     },
 };
 
@@ -47,6 +49,7 @@ struct InnerOsShim {
     send_incoming: mpsc::Sender<udp::Packet>,
     recv_incoming: RefCell<mpsc::Receiver<udp::Packet>>,
     public_ip: Option<IpAddr>,
+    ahs: Option<(AbortHandle, AbortHandle)>,
 }
 
 impl InnerOsShim {
@@ -63,7 +66,24 @@ impl InnerOsShim {
             send_incoming,
             recv_incoming: recv_incoming.into(),
             public_ip: None,
+            ahs: None,
         }
+    }
+
+    pub fn abort(&mut self) {
+        let Some((ah1, ah2)) = self.ahs.take() else {
+            return;
+        };
+        ah1.abort();
+        ah2.abort();
+    }
+
+    pub fn set_abort_handles(&mut self, ahs: (AbortHandle, AbortHandle)) {
+        self.ahs = Some(ahs.into());
+    }
+
+    pub fn is_aborted(&self) -> bool {
+        self.ahs.is_none()
     }
 
     async fn handle_incoming_ip_packet(&self, packet: Bytes) {
@@ -81,7 +101,10 @@ impl InnerOsShim {
             tracing::warn!("packet dropped, port {} is not bound", port);
             return;
         };
-        listener.io.send(udp_packet).await.unwrap();
+
+        if let Err(e) = listener.io.send(udp_packet).await {
+            warn!("error passing packet to listener: {}", e);
+        }
     }
     #[instrument(skip(self))]
     fn send_packet(&self, msg: udp::Packet) -> std::io::Result<()> {
@@ -94,7 +117,7 @@ impl InnerOsShim {
             src_addr.set_ip(addr);
             msg.set_src_addr(src_addr);
             if let Err(e) = self.send_packet(msg) {
-                info!("error sending packet: {e}");
+                warn!("error sending packet: {e}");
             }
 
             return Ok(());
@@ -201,10 +224,19 @@ impl OsShim {
             host,
             inner: inner.into(),
         };
-        let host = out.host();
+
+        out.spawn_forwarding_tasks_if_aborted();
+
+        Sim::add_machine(out)
+    }
+
+    fn spawn_forwarding_tasks_if_aborted(&self) {
+        if !self.inner.borrow().is_aborted() {
+            return;
+        }
 
         // handle receiving a message from the network and forwarding it to the udp port
-        host.inner().spawn_local(async move {
+        let ah1 = self.host.inner().spawn_local(async move {
             let machine = Sim::get_current_machine::<OsShim>();
             let borrowed = machine.borrow();
             loop {
@@ -217,7 +249,7 @@ impl OsShim {
         });
 
         // handle receiving a message from userspace and forwarding it to the network
-        host.inner().spawn_local(async move {
+        let ah2 = self.host.inner().spawn_local(async move {
             let machine = Sim::get_current_machine::<OsShim>();
             let borrowed = machine.borrow();
             loop {
@@ -231,7 +263,6 @@ impl OsShim {
                 else {
                     break;
                 };
-                trace!("sending {:?}", msg.header());
                 match borrowed.send_packet(msg) {
                     Ok(_) => {}
                     Err(e) => warn!("error when sending packet: {}", e),
@@ -239,9 +270,8 @@ impl OsShim {
             }
             Ok(())
         });
-        drop(host);
 
-        Sim::add_machine(out)
+        self.inner.borrow_mut().set_abort_handles((ah1, ah2));
     }
 
     async fn handle_incoming_ip_packet(&self, packet: Bytes) {
@@ -271,27 +301,28 @@ impl OsShim {
         self.inner.borrow_mut().bind_to_addr(addr)
     }
 
-    pub fn host_mut(&mut self) -> impl DerefMut<Target = Host> {
-        &mut self.host
+    pub fn start(self) -> MachineRef<OsShim> {
+        self.spawn_forwarding_tasks_if_aborted();
+        self.host.start();
+        let out = Sim::add_machine(self);
+        out
     }
 
-    pub fn host(&self) -> impl Deref<Target = Host> {
-        &self.host
+    pub fn stop(reference: MachineRef<Self>) -> Self {
+        let out = Sim::remove_machine(reference);
+        out.inner.borrow_mut().abort();
+        out.host.stop();
+        out
     }
+
     fn send_packet(&self, msg: udp::Packet) -> std::io::Result<()> {
         self.inner.borrow().send_packet(msg)
     }
 }
 
 impl Machine for OsShim {
-    fn tick(&self, duration: std::time::Duration) -> Result<bool, Box<dyn std::error::Error>> {
-        OS.set(&Sim::get_current_machine::<Self>(), || {
-            self.host.tick(duration)
-        })
-    }
-
-    fn id(&self) -> crate::sim::machine::MachineId {
-        self.host.id()
+    fn basic_machine(&self) -> Rc<crate::sim::machine::BasicMachine> {
+        self.host.basic_machine()
     }
 
     fn is_idle(&self) -> bool {
@@ -300,5 +331,3 @@ impl Machine for OsShim {
         self.host.is_idle()
     }
 }
-
-scoped_thread_local!(pub(crate) static OS: Rc<RefCell<OsShim>>);

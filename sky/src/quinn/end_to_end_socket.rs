@@ -3,11 +3,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[cfg(test)]
 pub use end_to_end_test::UdpSocket;
-#[cfg(not(test))]
-pub use tokio::net::UdpSocket;
 
+use end_to_end_test::{OsShim, sim::Sim};
 use quinn::{AsyncUdpSocket, UdpPoller};
 
 #[derive(Debug)]
@@ -30,7 +28,7 @@ impl AsyncUdpSocket for EndToEndSocket {
         self.sock
             .lock()
             .unwrap()
-            .try_send_to(&transmit.contents, transmit.destination)
+            .try_send_to_with_ecn(&transmit.contents, transmit.destination, transmit.ecn)
             .map(|_| ())
     }
 
@@ -43,21 +41,37 @@ impl AsyncUdpSocket for EndToEndSocket {
         if bufs.is_empty() || meta.is_empty() {
             return std::task::Poll::Ready(Ok(0));
         }
-        let mut buf = tokio::io::ReadBuf::new(&mut bufs[0]);
-        match std::task::ready!(self.sock.lock().unwrap().poll_recv_from(cx, &mut buf)) {
-            Ok(addr) => {
-                let len = buf.filled().len();
-                meta[0] = quinn::udp::RecvMeta {
-                    addr,
-                    len,
-                    stride: len,
-                    ecn: None,
-                    dst_ip: None,
-                };
-                std::task::Poll::Ready(Ok(1))
+        let mut count = 0;
+        for i in 0..bufs.len().min(meta.len()) {
+            let mut buf = tokio::io::ReadBuf::new(&mut bufs[i]);
+            let sock_lock = self.sock.lock().unwrap();
+            match sock_lock.poll_recv_from_with_ecn(cx, &mut buf) {
+                std::task::Poll::Ready(Ok((addr, ecn))) => {
+                    let len = buf.filled().len();
+                    meta[i] = quinn::udp::RecvMeta {
+                        addr,
+                        len,
+                        stride: len,
+                        ecn: ecn,
+                        dst_ip: Some(sock_lock.local_addr().unwrap().ip()),
+                    };
+                    count += 1;
+                }
+                std::task::Poll::Ready(Err(e)) => {
+                    if count > 0 {
+                        return std::task::Poll::Ready(Ok(count));
+                    }
+                    return std::task::Poll::Ready(Err(e));
+                }
+                std::task::Poll::Pending => {
+                    if count > 0 {
+                        return std::task::Poll::Ready(Ok(count));
+                    }
+                    return std::task::Poll::Pending;
+                }
             }
-            Err(e) => std::task::Poll::Ready(Err(e)),
         }
+        std::task::Poll::Ready(Ok(count))
     }
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {

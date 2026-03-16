@@ -2,6 +2,7 @@ use std::{
     any::Any,
     cell::RefCell,
     fmt::{Debug, Display},
+    rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
     task::{Context, Poll},
     time::Duration,
@@ -60,33 +61,33 @@ impl MachineNic {
     }
 }
 
-pub trait HasNic: Machine {
+pub trait HasNic: HasMachineId {
     fn nic(&self) -> MachineNic;
 }
 
-pub trait Machine: Any {
+pub trait HasMachineId {
+    fn id(&self) -> MachineId;
+}
+
+impl HasMachineId for MachineId {
+    fn id(&self) -> MachineId {
+        *self
+    }
+}
+
+impl<M: Machine> HasMachineId for M {
+    fn id(&self) -> MachineId {
+        self.basic_machine().id()
+    }
+}
+
+pub trait Machine: Any + HasMachineId {
     /// Returns whether the machine has finished all its tasks or the error
     /// that caused the failure.  Subsequent calls do not return the error as it
     /// is expected to fail the simulation.
-    fn tick(&self, duration: Duration) -> Result<bool>;
-
-    fn id(&self) -> MachineId;
+    fn basic_machine(&self) -> Rc<BasicMachine>;
 
     fn is_idle(&self) -> bool;
-}
-
-impl<T: Machine> Machine for RefCell<T> {
-    fn tick(&self, duration: Duration) -> Result<bool> {
-        self.borrow().tick(duration)
-    }
-
-    fn id(&self) -> MachineId {
-        self.borrow().id()
-    }
-
-    fn is_idle(&self) -> bool {
-        self.borrow().is_idle()
-    }
 }
 
 pub struct BasicMachine {
@@ -109,6 +110,7 @@ impl BasicMachine {
             .start_paused(true)
             .build()
             .unwrap();
+
         Self {
             nic: MachineNic::new(tx, id),
             id,
@@ -150,38 +152,8 @@ impl BasicMachine {
     pub fn tasks_left(&self) -> usize {
         self.js.borrow().len()
     }
-}
 
-impl HasNic for BasicMachine {
-    fn nic(&self) -> MachineNic {
-        self.nic.clone()
-    }
-}
-
-impl Machine for BasicMachine {
-    // This method is called by [`Sim::run`], which iterates through all the
-    // runtimes and ticks each one. The magic of this method is described in the
-    // documentation for [`LocalSet::run_until`], but it may not be entirely
-    // obvious how things fit together.
-    //
-    // A [`LocalSet`] tracks the tasks to run, which may in turn spawn more
-    // tasks. `run_until` drives a top level task to completion, but not its
-    // children. If you look below, you may be confused. The task we run here
-    // just sleeps and has no children! However, it's the _same `JoinSet`_ that
-    // is used to run software on the host.
-    //
-    // In this way, every time `tick` is called, the following unfolds:
-    //
-    // 1. We schedule a new task that simply sleeps
-    // 2. Time advances on the runtime
-    // 3. Other tasks on the `LocalSet` get a chance to run
-    // 4. The sleep finishes
-    // 5. The runtime pauses
-    //
-    // Returns whether the software has finished successfully or the error
-    // that caused failure. Subsequent calls do not return the error as it is
-    // expected to fail the simulation.
-    fn tick(&self, duration: Duration) -> Result<bool> {
+    pub fn tick(&self, duration: Duration) -> Result<bool> {
         self.rt.block_on(async {
             self.local
                 .run_until(async {
@@ -197,12 +169,20 @@ impl Machine for BasicMachine {
         Ok(self.js.borrow().is_empty())
     }
 
+    pub fn is_idle(&self) -> bool {
+        self.js.borrow().is_empty()
+    }
+}
+
+impl HasMachineId for BasicMachine {
     fn id(&self) -> MachineId {
         self.id
     }
+}
 
-    fn is_idle(&self) -> bool {
-        self.js.borrow().is_empty()
+impl HasNic for BasicMachine {
+    fn nic(&self) -> MachineNic {
+        self.nic.clone()
     }
 }
 

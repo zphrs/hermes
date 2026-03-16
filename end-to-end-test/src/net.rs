@@ -3,28 +3,29 @@ pub mod error;
 pub mod ip;
 pub mod udp;
 
-use crate::{
+use crate::sim::{
+    RNG,
     config::CONFIG,
-    sim::{
-        RNG,
-        machine::{BasicMachine, HasNic, Machine, MachineId, MachineNic},
-    },
+    machine::{BasicMachine, HasNic, Machine, MachineId, MachineNic},
 };
 use bytes::Bytes;
-use tracing::info;
+use rand::Rng;
+use tracing::{info, warn};
 
-use std::{collections::HashMap, io::ErrorKind, time::Duration};
+use std::rc::Rc;
+use std::time::Duration;
+use std::{collections::HashMap, io::ErrorKind};
 
 pub struct Network {
-    machines: HashMap<MachineId, MachineNic>,
-    inner_machine: BasicMachine,
+    machines: HashMap<MachineId, (MachineNic, Duration)>,
+    inner_machine: Rc<BasicMachine>,
 }
 
 impl Network {
     pub fn new() -> Self {
         let machine = CONFIG.with(|cfg| BasicMachine::new(cfg.ip_hop_capacity()));
         let out = Self {
-            inner_machine: machine,
+            inner_machine: machine.into(),
             machines: Default::default(),
         };
         out
@@ -38,26 +39,46 @@ impl Default for Network {
 }
 
 impl Network {
-    pub fn add_machine(&mut self, host: &dyn HasNic) {
-        self.machines.insert(host.id(), host.nic());
-    }
-
-    pub fn try_send_to_host(&self, id: &MachineId, posting: Bytes) -> std::io::Result<()> {
-        let rand_dur = CONFIG.with(|cfg| {
+    pub fn add_machine(&mut self, host: &impl HasNic) {
+        let latency = CONFIG.with(|cfg| {
             let latency = cfg.latency();
             RNG.with(|rng| latency.sample(rng.borrow_mut()))
         });
-        let nic = self
+        self.machines.insert(host.id(), (host.nic(), latency));
+    }
+
+    pub fn try_send_to_host(&self, id: &MachineId, posting: Bytes) -> std::io::Result<()> {
+        let dropped = CONFIG.with(|cfg| {
+            let dropped =
+                RNG.with(|rng| rng.borrow_mut().random_bool(cfg.message_loss_fail_rate()));
+            dropped
+        });
+        let (nic, latency) = self
             .machines
             .get(id)
             .ok_or(ErrorKind::HostUnreachable)?
             .clone();
-        info!("waiting to send for {:?}", rand_dur);
+        if dropped {
+            warn!("dropped message due to chance");
+            return Ok(());
+        }
+        let jitter = RNG.with(|rng| {
+            let stdev = latency.as_millis() as f64 / 5.0;
+            let dist = rand_distr::Normal::new(0.0, stdev).unwrap();
+            let jitter_ms = rng.borrow_mut().sample(dist) as i64;
+            if jitter_ms < 0 {
+                latency.saturating_sub(Duration::from_millis((-jitter_ms) as u64))
+            } else {
+                latency + Duration::from_millis(jitter_ms as u64)
+            }
+        });
+        info!("waiting to send for {:?}", jitter);
         self.inner_machine.spawn_local(async move {
-            tokio::time::sleep(rand_dur).await;
+            // let sleep_for = jitter;
+            tokio::time::sleep(jitter).await;
             let res = nic.try_post(posting).await;
             if let Err(e) = res {
-                tracing::warn!("dropped message {}", e);
+                tracing::warn!("failed to post to network: {}", e);
             }
             Ok(())
         });
@@ -67,12 +88,8 @@ impl Network {
 }
 
 impl Machine for Network {
-    fn tick(&self, duration: Duration) -> Result<bool, Box<dyn std::error::Error>> {
-        self.inner_machine.tick(duration)
-    }
-
-    fn id(&self) -> crate::sim::machine::MachineId {
-        self.inner_machine.id()
+    fn basic_machine(&self) -> Rc<BasicMachine> {
+        self.inner_machine.clone()
     }
 
     fn is_idle(&self) -> bool {

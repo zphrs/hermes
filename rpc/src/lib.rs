@@ -62,7 +62,14 @@ pub trait Transport {
     ) -> impl Future<Output = Result<Self::Caller, Self::Error>>;
     /// associated Client type with this transport
     type Client: Client;
-    fn accept(&mut self) -> impl Future<Output = Result<Self::Client, Self::Error>>;
+    type Incoming: Incoming;
+    fn accept(&mut self) -> impl Future<Output = Result<Self::Incoming, Self::Error>>;
+}
+
+pub trait Incoming {
+    type Client: Client;
+    type Error;
+    fn accept(self) -> impl Future<Output = Result<Self::Client, Self::Error>>;
 }
 
 pub trait BiStream {

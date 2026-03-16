@@ -98,10 +98,9 @@ async fn query_stun_server() -> Vec<IpAddr> {
 #[cfg(test)]
 mod tests {
     use crate::get_public_ip::get_public_ip;
-    use tracing_test::traced_test;
 
     #[tokio::test]
-    #[traced_test]
+    #[test_log::test]
     async fn pub_ip() {
         println!("{:?}", get_public_ip().await);
     }

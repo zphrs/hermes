@@ -10,9 +10,9 @@ scoped_thread_local!(pub(crate) static CONFIG: Config);
 ///
 /// Provides default values of 1% chance of a message being dropped
 #[derive(Clone, Copy)]
-pub(crate) struct MessageLoss {
+pub struct MessageLoss {
     /// Probability of a message being dropped/corrupted
-    pub(crate) fail_rate: f64,
+    pub fail_rate: f64,
 }
 
 impl Default for MessageLoss {
@@ -28,7 +28,7 @@ impl Default for MessageLoss {
 /// - max_message_latency: 100ms
 /// - latency_distribution: Exp(5)
 #[derive(Clone, Copy)]
-pub(crate) struct Latency {
+pub struct Latency {
     /// Minimum latency
     min_message_latency: Duration,
 
@@ -44,9 +44,13 @@ impl Latency {
     where
         R: Rng + ?Sized,
     {
-        let mult = self.latency_distribution.sample(rand.deref_mut());
-        let range = (self.max_message_latency - self.min_message_latency).as_millis() as f64;
-        self.min_message_latency + Duration::from_millis((range * mult) as _)
+        let sample = self.latency_distribution.sample(rand.deref_mut());
+        let latency_ms = self.min_message_latency.as_millis() as f64 + sample;
+        let clamped = latency_ms.clamp(
+            self.min_message_latency.as_millis() as f64,
+            self.max_message_latency.as_millis() as f64,
+        );
+        Duration::from_millis(clamped as u64)
     }
 }
 
@@ -55,19 +59,19 @@ impl Default for Latency {
         Self {
             min_message_latency: Duration::from_millis(50),
             max_message_latency: Duration::from_millis(500),
-            latency_distribution: Exp::new(5.0).unwrap(),
+            latency_distribution: Exp::new(10.0).unwrap(),
         }
     }
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct Config {
-    udp_capacity: usize,
-    ip_hop_capacity: usize,
-    nic_capacity: usize,
-    tick_amount: Duration,
-    latency: Latency,
-    message_loss: MessageLoss,
+pub struct Config {
+    pub udp_capacity: usize,
+    pub ip_hop_capacity: usize,
+    pub nic_capacity: usize,
+    pub tick_amount: Duration,
+    pub latency: Latency,
+    pub message_loss: MessageLoss,
 }
 impl Config {
     pub fn latency(&self) -> &Latency {
@@ -83,11 +87,11 @@ impl Config {
     pub fn message_loss_fail_rate(&self) -> f64 {
         self.message_loss.fail_rate
     }
-    pub(crate) fn ip_hop_capacity(&self) -> usize {
+    pub fn ip_hop_capacity(&self) -> usize {
         self.ip_hop_capacity
     }
 
-    pub(crate) fn nic_capacity(&self) -> usize {
+    pub fn nic_capacity(&self) -> usize {
         self.nic_capacity
     }
 }
@@ -99,7 +103,7 @@ impl Default for Config {
             udp_capacity: 100,
             // can only buffer 100 messages at a time, otherwise drops msg on floor
             ip_hop_capacity: 100,
-            nic_capacity: 100,
+            nic_capacity: 100000,
             // granularity of tick(), it's necessary to tick to simulate clock skew between
             // hosts
             tick_amount: Duration::from_millis(10),

@@ -6,12 +6,15 @@ use std::{
     cell::RefCell,
     fmt::{Debug, from_fn},
     pin::Pin,
-    time::Duration,
+    rc::Rc,
 };
 use tokio::task::AbortHandle;
 use tracing::warn;
 
-use crate::sim::machine::{BasicMachine, HasNic, Machine, MachineId};
+use crate::sim::{
+    config::CONFIG,
+    machine::{BasicMachine, HasMachineId, HasNic, Machine},
+};
 
 pub(crate) type Software<'a> = Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result>>> + 'static>;
 pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -19,7 +22,7 @@ pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Erro
 pub struct Host {
     entrypoint: Software<'static>,
     handle: RefCell<Option<AbortHandle>>,
-    inner_machine: BasicMachine,
+    inner_machine: Rc<BasicMachine>,
 }
 
 impl Debug for Host {
@@ -31,16 +34,17 @@ impl Debug for Host {
 }
 
 impl Host {
-    pub fn new<F, Fut>(bufsize: usize, software: F) -> Self
+    pub fn new<F, Fut>(software: F) -> Self
     where
         F: Fn() -> Fut + 'static,
         Fut: Future<Output = Result> + 'static,
     {
+        let bufsize = CONFIG.with(|cfg| cfg.nic_capacity);
         let software: Software = Box::new(move || Box::pin(software()));
         let out = Host {
             entrypoint: software,
             handle: None.into(),
-            inner_machine: BasicMachine::new(bufsize),
+            inner_machine: BasicMachine::new(bufsize).into(),
         };
         out.start();
         out
@@ -74,23 +78,18 @@ impl Host {
 }
 
 impl Machine for Host {
-    fn tick(&self, duration: Duration) -> std::result::Result<bool, Box<dyn std::error::Error>> {
-        self.inner_machine.tick(duration)?;
+    fn basic_machine(&self) -> Rc<BasicMachine> {
+        self.inner_machine.clone()
+    }
+
+    fn is_idle(&self) -> bool {
         let mut handle = self.handle.borrow_mut();
         if let Some(task) = &*handle {
             if task.is_finished() {
                 *handle = None;
             }
         };
-        Ok(handle.is_none())
-    }
-
-    fn id(&self) -> MachineId {
-        self.inner().id()
-    }
-
-    fn is_idle(&self) -> bool {
-        self.handle.borrow().is_none()
+        handle.is_none()
     }
 }
 
@@ -108,10 +107,10 @@ mod tests {
 
     #[test]
     fn types() {
-        let h = Host::new(10, || async { Ok(()) });
+        let h = Host::new(|| async { Ok(()) });
         h.start();
         assert!(!h.is_idle());
-        assert!(h.tick(Duration::new(1, 0)).unwrap());
+        assert!(h.inner_machine.tick(Duration::new(1, 0)).unwrap());
         assert!(h.is_idle());
     }
 }

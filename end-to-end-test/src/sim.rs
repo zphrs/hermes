@@ -1,24 +1,28 @@
+pub mod config;
 pub mod machine;
 
 use crate::{
-    config::{CONFIG, Config},
     host::{Result, net::dns::Dns},
-    sim::machine::{Machine, MachineId},
+    sim::{
+        config::CONFIG,
+        machine::{BasicMachine, HasMachineId, Machine, MachineId},
+    },
 };
+pub use config::Config;
 
 use rand::{SeedableRng as _, rngs::SmallRng};
 use scoped_tls::scoped_thread_local;
 use std::{
-    any::TypeId,
+    any::{Any, TypeId},
     cell::RefCell,
     collections::HashMap,
     hash::{BuildHasherDefault, DefaultHasher},
     marker::PhantomData,
-    ops::DerefMut,
+    ops::{DerefMut, Div},
     rc::Rc,
 };
 
-scoped_thread_local!(pub(crate) static RNG: RefCell<SmallRng>);
+scoped_thread_local!(pub static RNG: RefCell<SmallRng>);
 scoped_thread_local!(pub(crate) static ACTIVE_MACHINE_ID: MachineId);
 scoped_thread_local!(pub static SIM: Sim);
 
@@ -27,10 +31,12 @@ pub struct Sim {
     machines: RefCell<
         HashMap<
             TypeId,
-            HashMap<MachineId, Rc<dyn Machine>, BuildHasherDefault<DefaultHasher>>,
+            HashMap<MachineId, Rc<dyn Any>, BuildHasherDefault<DefaultHasher>>,
             BuildHasherDefault<DefaultHasher>,
         >,
     >,
+    basic_machines:
+        RefCell<HashMap<MachineId, Rc<BasicMachine>, BuildHasherDefault<DefaultHasher>>>,
     config: Config,
     rng: RefCell<SmallRng>,
     dns: RefCell<Dns>,
@@ -40,6 +46,7 @@ impl Default for Sim {
     fn default() -> Self {
         Self {
             machines: Default::default(),
+            basic_machines: Default::default(),
             config: Default::default(),
             rng: SmallRng::seed_from_u64(1234).into(),
             dns: Default::default(),
@@ -47,9 +54,15 @@ impl Default for Sim {
     }
 }
 
-pub struct MachineRef<M: Machine> {
+pub struct MachineRef<M: Machine + ?Sized> {
     id: MachineId,
     _phantom: PhantomData<M>,
+}
+
+impl<M: Machine> HasMachineId for MachineRef<M> {
+    fn id(&self) -> MachineId {
+        self.id
+    }
 }
 
 impl<M: Machine> Clone for MachineRef<M> {
@@ -66,7 +79,7 @@ impl<M: Machine> Copy for MachineRef<M> {}
 impl<M: Machine> From<Rc<RefCell<M>>> for MachineRef<M> {
     fn from(value: Rc<RefCell<M>>) -> Self {
         MachineRef {
-            id: value.id(),
+            id: value.borrow().id(),
             _phantom: Default::default(),
         }
     }
@@ -78,17 +91,12 @@ impl<M: Machine> MachineRef<M> {
     }
 }
 
-impl<M: Machine> Machine for MachineRef<M> {
-    fn tick(&self, duration: std::time::Duration) -> Result<bool> {
-        self.get().borrow().tick(duration)
-    }
-
-    fn id(&self) -> MachineId {
-        self.id
-    }
-
-    fn is_idle(&self) -> bool {
-        self.get().borrow().is_idle()
+impl<M: Machine> From<MachineId> for MachineRef<M> {
+    fn from(value: MachineId) -> Self {
+        MachineRef {
+            id: value,
+            _phantom: Default::default(),
+        }
     }
 }
 
@@ -102,15 +110,54 @@ impl Sim {
     pub fn new() -> Self {
         Default::default()
     }
+    /// Example: Create a simulation with a custom config
+    ///
+    /// ```
+    /// # use end_to_end_test::sim::Sim;
+    /// # use std::time::Duration;
+    /// # use end_to_end_test::sim::Config;
+    /// let sim = Sim::with_config(Config {
+    ///     tick_amount: Duration::from_millis(100),
+    ///     ..Default::default()
+    /// });
+    /// ```
+    pub fn with_config(config: Config) -> Self {
+        Self {
+            config,
+            ..Default::default()
+        }
+    }
 
     pub fn add_machine<M: Machine>(machine: M) -> MachineRef<M> {
         SIM.with(|v| {
             let id = machine.id();
+            let basic_machine = machine.basic_machine();
             let mut binding = v.machines.borrow_mut();
             let typed = binding.entry(TypeId::of::<M>()).or_default();
             let out = Rc::new(RefCell::new(machine));
             typed.insert(id, out.clone());
+            v.basic_machines.borrow_mut().insert(id, basic_machine);
             out.into()
+        })
+    }
+
+    pub fn remove_machine<M: Machine>(machine_ref: MachineRef<M>) -> M {
+        SIM.with(|v| {
+            let id = machine_ref.id();
+            let type_id = std::any::TypeId::of::<M>();
+            let mut machines = v.machines.borrow_mut();
+            let typed = machines
+                .get_mut(&type_id)
+                .expect("No machines of this type registered");
+            let out = typed.remove(&id);
+            v.basic_machines.borrow_mut().remove(&id);
+            let machine: Rc<RefCell<M>> =
+                Rc::downcast(out.expect("Machine with this id not found"))
+                    .expect("types should match");
+            Rc::try_unwrap(machine)
+                .map_err(|_| ())
+                .expect("unwrap should work")
+                .into_inner()
         })
     }
     /// will panic if called outside of a sim runtime
@@ -143,18 +190,24 @@ impl Sim {
     pub fn tick() -> Result<bool> {
         SIM.with(|sim| {
             let mut is_done = true;
-            for (_type, map) in &*sim.machines.borrow() {
-                for (id, m) in map {
-                    is_done =
-                        ACTIVE_MACHINE_ID.set(id, || m.tick(sim.config.tick_amount()))? && is_done;
-                }
+            for (id, m) in &*sim.basic_machines.borrow() {
+                is_done =
+                    ACTIVE_MACHINE_ID.set(id, || m.tick(sim.config.tick_amount()))? && is_done;
             }
             Ok(is_done)
         })
     }
 
     pub fn tick_machine<M: Machine>(m: MachineRef<M>) -> Result<bool> {
-        Self::on_machine(m, || m.get().tick(CONFIG.with(|cfg| cfg.tick_amount())))
+        SIM.with(|sim| {
+            Self::on_machine(m, || {
+                sim.basic_machines
+                    .borrow()
+                    .get(&m.id())
+                    .unwrap()
+                    .tick(CONFIG.with(|cfg| cfg.tick_amount()))
+            })
+        })
     }
 
     pub fn enter_runtime<R>(&self, f: impl FnOnce() -> R) -> R {
@@ -163,8 +216,40 @@ impl Sim {
         })
     }
 
-    pub fn run_until_idle() -> Result {
-        while !Sim::tick()? {}
+    pub fn run_until_idle<'a, M: Machine, I: ExactSizeIterator<Item = &'a MachineRef<M>>>(
+        f: impl Fn() -> I,
+    ) -> Result {
+        let mut tick_count = 0;
+        let mut last_log_time = std::time::Instant::now();
+        while !Sim::tick()? {
+            tick_count += 1;
+            if tick_count % 100 == 0 {
+                let elapsed = last_log_time.elapsed();
+                let iter = f();
+                let total_count = iter.len();
+                let count = iter
+                    .filter(|machine: &&MachineRef<M>| machine.get().borrow().is_idle())
+                    .count();
+                let percent_idle = if total_count > 0 {
+                    (count as f64 / total_count as f64) * 100.0
+                } else {
+                    0.0
+                };
+                let in_sim_elapsed = tick_count * CONFIG.with(|cfg| cfg.tick_amount());
+                tracing::warn!(
+                    "ticking {} ({:?}), {:.1}% idle, in_sim_elapsed: {:?}",
+                    tick_count,
+                    elapsed.div(100),
+                    percent_idle,
+                    in_sim_elapsed
+                );
+                last_log_time = std::time::Instant::now();
+
+                if count == total_count {
+                    break;
+                }
+            }
+        }
         Ok(())
     }
 

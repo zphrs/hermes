@@ -13,9 +13,10 @@ use std::net::{self, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::ops::DerefMut;
 use std::task::{Context, Poll};
 
+use crate::OsShim;
 use crate::host::net::addr::ToSocketAddrs;
 use crate::host::net::addr::to_socket_addrs;
-use crate::host::os_shim::OS;
+use crate::sim::Sim;
 
 /// A UDP socket.
 ///
@@ -128,7 +129,7 @@ use crate::host::os_shim::OS;
 pub struct UdpSocket {
     send: mpsc::Sender<crate::net::udp::Packet>,
     recv: RefCell<mpsc::Receiver<crate::net::udp::Packet>>,
-    local_addr: SocketAddr,
+    local_addr: RefCell<SocketAddr>,
     // most recent peer
     peer_addr: RefCell<Option<SocketAddr>>,
 
@@ -188,12 +189,13 @@ impl UdpSocket {
     }
 
     fn bind_addr(addr: SocketAddr) -> io::Result<UdpSocket> {
-        let (send, recv, local_addr) = OS.with(|os| os.borrow().bind_to_addr(addr))?;
+        let curr_os = Sim::get_current_machine::<OsShim>();
+        let (send, recv, local_addr) = curr_os.borrow().bind_to_addr(addr)?;
 
         Ok(Self {
             send,
             recv: recv.into(),
-            local_addr,
+            local_addr: local_addr.into(),
             peer_addr: Default::default(),
             peeked: None.into(),
         })
@@ -294,7 +296,7 @@ impl UdpSocket {
     /// # }
     /// ```
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        Ok(self.local_addr)
+        Ok(*self.local_addr.borrow())
     }
 
     /// Returns the socket address of the remote peer this socket was connected to.
@@ -609,11 +611,11 @@ impl UdpSocket {
     /// }
     /// ```
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        // limits buf size to be < 1200 bytes (emulates ethernet)
+        // limits buf size to be < 1472 bytes (emulates ethernet)
         // maybe swap out with a config value
-        let buf = &buf[..std::cmp::min(buf.len(), 1200)];
+        let buf = &buf[..std::cmp::min(buf.len(), 1472)];
         let packet = crate::net::udp::Packet::new(
-            self.local_addr,
+            *self.local_addr.borrow(),
             self.peer_addr.borrow().ok_or(ErrorKind::NotConnected)?,
             buf,
             None,
@@ -705,10 +707,10 @@ impl UdpSocket {
     /// }
     /// ```
     pub fn try_send(&self, buf: &[u8]) -> io::Result<usize> {
-        // limits buf size to be < 1200 bytes (emulates ethernet)
-        let buf = &buf[..std::cmp::min(buf.len(), 1200)];
+        // limits buf size to be < 1472 bytes (emulates ethernet)
+        let buf = &buf[..std::cmp::min(buf.len(), 1472)];
         let packet = crate::net::udp::Packet::new(
-            self.local_addr,
+            *self.local_addr.borrow(),
             self.peer_addr
                 .borrow()
                 .ok_or_else(|| io::Error::from(ErrorKind::NotConnected))?,
@@ -1225,9 +1227,9 @@ impl UdpSocket {
         let target = to_socket_addrs(addr)?
             .next()
             .ok_or_else(|| io::Error::from(ErrorKind::InvalidInput))?;
-        // limits buf size to be < 1200 bytes (emulates ethernet)
-        let buf = &buf[..std::cmp::min(buf.len(), 1200)];
-        let packet = crate::net::udp::Packet::new(self.local_addr, target, buf, None);
+        // limits buf size to be < 1472 bytes (emulates ethernet)
+        let buf = &buf[..std::cmp::min(buf.len(), 1472)];
+        let packet = crate::net::udp::Packet::new(*self.local_addr.borrow(), target, buf, None);
         self.send
             .send(packet)
             .await
@@ -1313,9 +1315,27 @@ impl UdpSocket {
     /// }
     /// ```
     pub fn try_send_to(&self, buf: &[u8], target: SocketAddr) -> io::Result<usize> {
-        // limits buf size to be < 1200 bytes (emulates ethernet)
-        let buf = &buf[..std::cmp::min(buf.len(), 1200)];
-        let packet = crate::net::udp::Packet::new(self.local_addr, target, buf, None);
+        // limits buf size to be < 1472 bytes (emulates ethernet)
+        let buf = &buf[..std::cmp::min(buf.len(), 1472)];
+        let packet = crate::net::udp::Packet::new(*self.local_addr.borrow(), target, buf, None);
+        match self.send.try_send(packet) {
+            Ok(()) => Ok(buf.len()),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(io::Error::from(ErrorKind::WouldBlock)),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(io::Error::from(ErrorKind::HostUnreachable))
+            }
+        }
+    }
+
+    pub fn try_send_to_with_ecn(
+        &self,
+        buf: &[u8],
+        target: SocketAddr,
+        ecn: Option<quinn_udp::EcnCodepoint>,
+    ) -> io::Result<usize> {
+        // limits buf size to be < 1472 bytes (emulates ethernet)
+        let buf = &buf[..std::cmp::min(buf.len(), 1472)];
+        let packet = crate::net::udp::Packet::new(*self.local_addr.borrow(), target, buf, ecn);
         match self.send.try_send(packet) {
             Ok(()) => Ok(buf.len()),
             Err(mpsc::error::TrySendError::Full(_)) => Err(io::Error::from(ErrorKind::WouldBlock)),
@@ -1477,6 +1497,23 @@ impl UdpSocket {
         let chunk = Self::read_peeked(&mut borrow, buf.remaining());
         buf.put_slice(&chunk);
         Poll::Ready(Ok(from))
+    }
+
+    pub fn poll_recv_from_with_ecn(
+        &self,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<(SocketAddr, Option<quinn_udp::EcnCodepoint>)>> {
+        let mut borrow = self.peeked.borrow_mut();
+        std::task::ready!(self.poll_fill_peeked(cx, &mut borrow))?;
+        let header = borrow.as_ref().unwrap().packet.header();
+        let from = header.get_src_addr();
+        let to = header.get_dst_addr();
+        *self.local_addr.borrow_mut() = to;
+        let ecn = header.ip_header().ecn();
+        let chunk = Self::read_peeked(&mut borrow, buf.remaining());
+        buf.put_slice(&chunk);
+        Poll::Ready(Ok((from, ecn)))
     }
 
     /// Tries to receive a single datagram message on the socket. On success,
