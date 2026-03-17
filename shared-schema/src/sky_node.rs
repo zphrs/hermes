@@ -3,9 +3,9 @@ pub mod rpc;
 use std::{
     fmt::Debug,
     hash::Hash,
-    net::{IpAddr, Ipv6Addr},
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     ops::{Deref, DerefMut},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use kademlia::{HasId, Id};
@@ -13,6 +13,10 @@ use maxlen::MaxLen;
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
+// stands for hermes sky
+pub const PORT: u16 = u16::from_be_bytes(*b"hs");
+
+#[derive(Clone)]
 struct DefaultInstant(pub Instant);
 
 impl Default for DefaultInstant {
@@ -41,14 +45,14 @@ impl DerefMut for DefaultInstant {
     }
 }
 
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
+#[derive(Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
 pub struct SkyNode {
     #[n(0)]
     address: IpAddr,
     #[cbor(skip)]
     id: OnceLock<SkyId>,
     #[cbor(skip)]
-    last_reached_at: Mutex<DefaultInstant>,
+    last_reached_at: Arc<Mutex<DefaultInstant>>,
 }
 
 impl Debug for SkyNode {
@@ -60,7 +64,9 @@ impl Debug for SkyNode {
     }
 }
 
-#[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, PartialEq, Eq, MaxLen)]
+#[derive(
+    Debug, Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, PartialEq, Eq, MaxLen,
+)]
 #[cbor(transparent)]
 pub struct SkyId(#[n(0)] pub(crate) Id<32>);
 
@@ -76,6 +82,18 @@ impl SkyId {
         let left = &id[..id.len() / 2];
         let right = &id[id.len() / 2..];
         format!("{left}.{right}.invalid")
+    }
+    /// # SAFETY
+    /// The caller must ensure that the kademlia Id was at one point a SkyId
+    /// and was not initially an [`EarthId`](crate::earth_node::EarthId)
+    pub unsafe fn from_kademlia_id_unchecked(id: kademlia::Id<32>) -> Self {
+        Self(id)
+    }
+}
+
+impl Into<kademlia::Id<32>> for SkyId {
+    fn into(self) -> kademlia::Id<32> {
+        self.0
     }
 }
 
@@ -102,7 +120,7 @@ impl From<IpAddr> for SkyId {
 
 impl MaxLen for SkyNode {
     fn biggest_instantiation() -> Self {
-        Self::from(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
+        Self::from(IpAddr::biggest_instantiation())
     }
 }
 
@@ -147,8 +165,12 @@ impl SkyNode {
         &self.id.get_or_init(|| SkyId::from(self.address))
     }
 
-    pub fn address(&self) -> IpAddr {
+    pub fn ip_address(&self) -> IpAddr {
         self.address
+    }
+
+    pub fn socket_address(&self) -> SocketAddr {
+        (self.ip_address(), PORT).into()
     }
 
     pub fn last_reached_at(&self) -> Instant {

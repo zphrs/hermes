@@ -11,7 +11,9 @@ use crate::{Distance, DistancePair, HasId, Id, RequestHandler, RoutingTable};
 const ALPHA: usize = 3;
 
 /// key is assumed to be an Id<ID_LEN>
-#[derive(Clone)]
+///
+/// Clone is weak
+
 pub struct RpcManager<
     Node: HasId<ID_LEN>,
     Handler: RequestHandler<Node, ID_LEN>,
@@ -21,6 +23,26 @@ pub struct RpcManager<
     handler: Handler,
     pub(crate) routing_table: Arc<RwLock<RoutingTable<Node, ID_LEN, BUCKET_SIZE>>>,
     local_node: Node,
+}
+
+impl<
+    Node: HasId<ID_LEN>,
+    Handler: RequestHandler<Node, ID_LEN>,
+    const ID_LEN: usize,
+    const BUCKET_SIZE: usize,
+> Clone for RpcManager<Node, Handler, ID_LEN, BUCKET_SIZE>
+where
+    Handler: Clone,
+    Node: Clone,
+{
+    /// weak clone
+    fn clone(&self) -> Self {
+        Self {
+            handler: self.handler.clone(),
+            routing_table: self.routing_table.clone(),
+            local_node: self.local_node.clone(),
+        }
+    }
 }
 
 impl<
@@ -331,8 +353,10 @@ impl<
         }
     }
 
-    pub async fn find_node(&self, from: Node, id: &Id<ID_LEN>) -> Vec<Node> {
-        self.add_node(from.clone()).await;
+    pub async fn find_node(&self, from: Option<Node>, id: &Id<ID_LEN>) -> Vec<Node> {
+        if let Some(from) = from {
+            self.add_node(from.clone()).await;
+        }
         let lock = self.routing_table.read().await;
         let mut out: Vec<DistancePair<Node, ID_LEN>> = self
             .find_node_with_lock(id, &lock)

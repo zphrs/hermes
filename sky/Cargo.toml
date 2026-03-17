@@ -40,6 +40,7 @@ prost-build = "0.14.3"
 [dev-dependencies]
 expect-test = "1.5.1"
 test-log = { version = "0.2.19", default-features = false, features = ["color","trace"] }
+tracing-subscriber = "0.3.23"
 
 
 

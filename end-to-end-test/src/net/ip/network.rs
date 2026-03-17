@@ -1,19 +1,60 @@
 use bytes::Bytes;
 pub use ip_network::IpNetwork as IpPrefix;
 use ip_network_table::IpNetworkTable;
-use std::{collections::HashMap, io::ErrorKind, net::IpAddr};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    io::ErrorKind,
+    net::IpAddr,
+    rc::Rc,
+};
 
 use crate::{
     error::Error,
     net::{self},
-    sim::machine::{HasNic, Machine, MachineId},
+    sim::{
+        MachineRef,
+        machine::{HasNic, Machine, MachineId},
+    },
 };
+
+/// A guard that holds a network partition and removes it when dropped
+pub struct PartitionGuard {
+    mref: Option<MachineRef<Network>>,
+    from: IpAddr,
+    to: IpAddr,
+}
+
+impl PartitionGuard {
+    /// Creates a new partition guard
+    fn new(mref: MachineRef<Network>, from: IpAddr, to: IpAddr) -> Self {
+        PartitionGuard {
+            mref: Some(mref),
+            from,
+            to,
+        }
+    }
+}
+
+impl Drop for PartitionGuard {
+    fn drop(&mut self) {
+        if let Some(mref) = self.mref.take() {
+            mref.get()
+                .borrow_mut()
+                .partitions
+                .remove(&(self.from, self.to));
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Network {
     network: net::Network,
     bound_ips: IpNetworkTable<MachineId>,
     machine_to_prefix: HashMap<MachineId, IpPrefix>,
     ip_generator: crate::net::ip::Generator,
+    // blocking, blocked
+    partitions: HashSet<(IpAddr, IpAddr)>,
 }
 
 impl Network {
@@ -54,15 +95,40 @@ impl Network {
         &mut self.network
     }
 
+    pub fn add_one_way_partition(
+        net: MachineRef<Self>,
+        from: IpAddr,
+        to: IpAddr,
+    ) -> PartitionGuard {
+        net.get().borrow_mut().partitions.insert((from, to));
+        PartitionGuard::new(net, from, to)
+    }
+
+    pub fn add_two_way_partition(
+        net: MachineRef<Self>,
+        from: IpAddr,
+        to: IpAddr,
+    ) -> (PartitionGuard, PartitionGuard) {
+        let guard1 = Self::add_one_way_partition(net.clone(), from, to);
+        let guard2 = Self::add_one_way_partition(net, to, from);
+        (guard1, guard2)
+    }
+
     pub fn try_send_packet(&self, bytes: Bytes) -> Result<(), Error> {
         let mut cloned_bytes = bytes.clone();
         let ip_header = net::ip::Header::try_from_buf(&mut cloned_bytes)?;
         let dst_addr = ip_header.get_ip_addrs().1;
 
+        if self.partitions.contains(&ip_header.get_ip_addrs()) {
+            tracing::warn!("Packet blocked due to network partition");
+            return Ok(());
+        }
+
         let longest_match = self
             .bound_ips
             .longest_match(dst_addr)
             .ok_or(std::io::Error::from(ErrorKind::HostUnreachable))?;
+
         self.network.try_send_to_host(longest_match.1, bytes)?;
 
         Ok(())

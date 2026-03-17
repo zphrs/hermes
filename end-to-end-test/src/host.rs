@@ -1,4 +1,3 @@
-pub(crate) mod io;
 pub mod net;
 pub mod os_shim;
 

@@ -7,7 +7,7 @@ use futures_io::{AsyncRead, AsyncWrite};
 use maxlen::MaxLen;
 use minicbor::{Decode, Encode};
 use minicbor_io::AsyncWriter;
-use tracing::trace;
+use tracing::{trace, warn};
 
 pub trait RpcMessage: Debug + for<'a> Decode<'a, ()> + Encode<()> + maxlen::MaxLen {}
 
@@ -16,6 +16,7 @@ impl<T> RpcMessage for T where T: Debug + for<'a> Decode<'a, ()> + Encode<()> + 
 pub trait Method {
     type Req: Send;
     type Res: RpcMessage + Send;
+    // this is equivalent to aborting a reply
     type Error;
 }
 
@@ -57,13 +58,13 @@ pub trait Transport {
     type Caller: Caller;
     /// get a caller
     fn connect(
-        &mut self,
-        to: Self::Address,
-    ) -> impl Future<Output = Result<Self::Caller, Self::Error>>;
+        &self,
+        to: &Self::Address,
+    ) -> impl Future<Output = Result<Self::Caller, Self::Error>> + Send;
     /// associated Client type with this transport
     type Client: Client;
     type Incoming: Incoming;
-    fn accept(&mut self) -> impl Future<Output = Result<Self::Incoming, Self::Error>>;
+    fn accept(&self) -> impl Future<Output = Result<Self::Incoming, Self::Error>> + Send;
 }
 
 pub trait Incoming {
@@ -132,28 +133,36 @@ impl<Bs: BiStream> InitializedMessageStream<Bs> {
 pub trait Caller: Send + Sync + BiStream + Sized {
     type Error;
     fn open_stream(
-        &mut self,
+        &self,
     ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> + Send;
 
     fn query<M: Method, Root: RpcMessage + From<M::Req> + Send>(
-        &mut self,
+        &self,
         req: M::Req,
-    ) -> impl Future<Output = Result<Option<M::Res>, CallerError<Self::Error>>> + Send {
+    ) -> impl Future<Output = Result<M::Res, CallerError<Self::Error>>> + Send {
         async {
             let (write, read) = self.open_stream().await.map_err(CallerError::Transport)?;
+            {
+                let root = Root::from(req);
+                let mut sender = minicbor_io::AsyncWriter::new(write);
 
-            let root = Root::from(req);
-            let mut sender = minicbor_io::AsyncWriter::new(write);
-            sender.write(root).await.map_err(RpcError::from)?;
+                sender.write(root).await.map_err(RpcError::from)?;
+                // drops write here to indicate no more writes will occur
+            }
             trace!("sent query");
+
             let mut receiver = minicbor_io::AsyncReader::new(read);
             receiver.set_max_len(<M::Res as MaxLen>::max_len() as u32);
-            Ok(receiver.read::<M::Res>().await.map_err(RpcError::from)?)
+            Ok(receiver
+                .read::<M::Res>()
+                .await
+                .map_err(RpcError::from)?
+                .ok_or(RpcError::Closed)?)
         }
     }
 
     fn init_message_stream<M: StreamMethod, Root: RpcMessage + From<<M as Method>::Req> + Send>(
-        &mut self,
+        &self,
         req: <M as Method>::Req,
     ) -> impl Future<Output = Result<InitializedMessageStream<Self>, CallerError<Self::Error>>> + Send
     {
@@ -168,7 +177,7 @@ pub trait Caller: Send + Sync + BiStream + Sized {
     }
     // just dropping it should close the stream
     fn close_message_stream<M: StreamMethod>(
-        &mut self,
+        &self,
         msg_stream: InitializedMessageStream<Self>,
     ) -> impl Future<Output = ()> + Send
     where
@@ -178,7 +187,7 @@ pub trait Caller: Send + Sync + BiStream + Sized {
     }
 
     fn send_to_message_stream<M: StreamMethod>(
-        &mut self,
+        &self,
         req: <M as StreamMethod>::Req,
         msg_stream: &mut InitializedMessageStream<Self>,
     ) -> impl Future<Output = Result<(), CallerError<Self::Error>>> + Send {
@@ -190,7 +199,7 @@ pub trait Caller: Send + Sync + BiStream + Sized {
     }
 
     fn query_from_stream<M: StreamMethod>(
-        &mut self,
+        &self,
         streams: &mut InitializedMessageStream<Self>,
     ) -> impl Future<Output = Result<Option<<M as StreamMethod>::Res>, CallerError<Self::Error>>> + Send
     {
@@ -216,19 +225,22 @@ pub enum ClientError<T, E> {
 pub trait Client: Send + Sync + BiStream {
     type Error: Send;
     fn accept_stream(
-        &mut self,
+        &self,
     ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> + Send;
     fn handle_one_request<'a, Root: RpcMessage, Rh: RootHandler<Root> + 'a>(
-        &'a mut self,
+        &'a self,
         handler: &mut Rh,
     ) -> impl Future<Output = Result<(), ClientError<Self::Error, Rh::Error>>> + Send
     where
         Rh::Error: Send,
         <Self as BiStream>::SendStream: Sync,
+        Root: Debug,
     {
         async move {
             let (write, read) = self.accept_stream().await.map_err(ClientError::Transport)?;
             let mut receiver = minicbor_io::AsyncReader::new(read);
+            receiver.set_max_len(Root::max_len() as u32);
+
             let Some(root) = receiver
                 .read::<Root>()
                 .await
@@ -249,12 +261,13 @@ pub trait Client: Send + Sync + BiStream {
     }
 
     fn handle_client<'a, Root: RpcMessage, Rh: RootHandler<Root> + 'a>(
-        &'a mut self,
+        &'a self,
         mut handler: Rh,
     ) -> impl Future<Output = Result<(), ClientError<Self::Error, Rh::Error>>> + Send
     where
         Rh::Error: Send,
         <Self as BiStream>::SendStream: Sync,
+        Root: Debug,
     {
         async move {
             loop {
@@ -286,6 +299,8 @@ pub enum RpcError {
     FuturesIo(#[from] futures_io::Error),
     #[error("minicbor: {0}")]
     MinicborIo(#[from] minicbor_io::Error),
+    #[error("stream closed")]
+    Closed,
 }
 
 pub struct Replier<'a, T: AsyncWrite + Unpin + Send + Sync> {

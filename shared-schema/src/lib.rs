@@ -20,6 +20,7 @@ pub enum Node {
     Earth(#[n(0)] EarthNode),
 }
 
+#[derive(Debug)]
 pub struct MaxSizedVec<T, const N: usize>(arrayvec::ArrayVec<T, N>);
 
 impl<T, const N: usize> Deref for MaxSizedVec<T, N> {
@@ -27,6 +28,12 @@ impl<T, const N: usize> Deref for MaxSizedVec<T, N> {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<T, const N: usize> FromIterator<T> for MaxSizedVec<T, N> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self(ArrayVec::from_iter(iter))
     }
 }
 

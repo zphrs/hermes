@@ -4,6 +4,7 @@ use tokio::io::Interest;
 use tokio::io::ReadBuf;
 use tokio::io::Ready;
 use tokio::sync::mpsc;
+use tracing::trace;
 
 use std::cell::RefCell;
 use std::fmt;
@@ -1231,8 +1232,7 @@ impl UdpSocket {
         let buf = &buf[..std::cmp::min(buf.len(), 1472)];
         let packet = crate::net::udp::Packet::new(*self.local_addr.borrow(), target, buf, None);
         self.send
-            .send(packet)
-            .await
+            .try_send(packet)
             .or(Err(io::Error::from(ErrorKind::HostUnreachable)))?;
         Ok(buf.len())
     }
@@ -1336,6 +1336,7 @@ impl UdpSocket {
         // limits buf size to be < 1472 bytes (emulates ethernet)
         let buf = &buf[..std::cmp::min(buf.len(), 1472)];
         let packet = crate::net::udp::Packet::new(*self.local_addr.borrow(), target, buf, ecn);
+        trace!("sending packet");
         match self.send.try_send(packet) {
             Ok(()) => Ok(buf.len()),
             Err(mpsc::error::TrySendError::Full(_)) => Err(io::Error::from(ErrorKind::WouldBlock)),

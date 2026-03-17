@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     io::{Error, ErrorKind},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ops::{Deref, DerefMut, Range},
+    ops::Range,
     rc::Rc,
 };
 
@@ -12,7 +12,7 @@ use tokio::{
     sync::mpsc::{self, Receiver},
     task::AbortHandle,
 };
-use tracing::{info, instrument, trace, warn};
+use tracing::{instrument, trace, warn};
 
 use crate::{
     host::Host,
@@ -24,7 +24,7 @@ use crate::{
     sim::{
         MachineRef, Sim,
         config::CONFIG,
-        machine::{HasMachineId, HasNic, Machine},
+        machine::{HasNic, Machine},
     },
 };
 
@@ -102,8 +102,8 @@ impl InnerOsShim {
             return;
         };
 
-        if let Err(e) = listener.io.send(udp_packet).await {
-            warn!("error passing packet to listener: {}", e);
+        if let Err(e) = listener.io.try_send(udp_packet) {
+            warn!("error passing packet to udp listener: {}", e);
         }
     }
     #[instrument(skip(self))]

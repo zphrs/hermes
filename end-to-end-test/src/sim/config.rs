@@ -17,7 +17,7 @@ pub struct MessageLoss {
 
 impl Default for MessageLoss {
     fn default() -> Self {
-        Self { fail_rate: 0.0 }
+        Self { fail_rate: 0.01 }
     }
 }
 
@@ -30,13 +30,13 @@ impl Default for MessageLoss {
 #[derive(Clone, Copy)]
 pub struct Latency {
     /// Minimum latency
-    min_message_latency: Duration,
+    pub min_message_latency: Duration,
 
     /// Maximum latency
-    max_message_latency: Duration,
+    pub max_message_latency: Duration,
 
     /// Probability distribution of latency within the range above.
-    latency_distribution: Exp<f64>,
+    pub latency_distribution: Exp<f64>,
 }
 
 impl Latency {
@@ -99,11 +99,12 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            // can only buffer 100 messages at a time, otherwise drops msg on floor
+            // can only buffer 100 outgoing messages at a time on any given socket, otherwise drops msg on floor
             udp_capacity: 100,
             // can only buffer 100 messages at a time, otherwise drops msg on floor
             ip_hop_capacity: 100,
-            nic_capacity: 100000,
+            // can only buffer 1000 messages at a time, otherwise reports a WouldBlock error
+            nic_capacity: 100,
             // granularity of tick(), it's necessary to tick to simulate clock skew between
             // hosts
             tick_amount: Duration::from_millis(10),

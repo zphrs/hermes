@@ -2,12 +2,9 @@ mod end_to_end_socket;
 mod skip_server_verification;
 
 use end_to_end_test::sim::RNG;
-use quinn::{
-    ConnectionId, ConnectionIdGenerator, EndpointStats,
-    congestion::{Cubic, CubicConfig},
-};
+use quinn::{ConnectionId, ConnectionIdGenerator, EndpointStats};
 use rand::Rng;
-use sha2::digest::generic_array::arr::Inc;
+
 use skip_server_verification::SkipServerVerification;
 
 #[cfg(test)]
@@ -15,7 +12,7 @@ pub use end_to_end_test::UdpSocket;
 #[cfg(not(test))]
 pub use tokio::net::UdpSocket;
 use tokio::{runtime::Handle, time::sleep_until};
-use tracing::{Instrument as _, Level, span, trace, warn};
+use tracing::{trace, warn};
 
 use std::{
     collections::HashMap,
@@ -28,13 +25,17 @@ use std::{
 use quinn::{EndpointConfig, Runtime, ServerConfig, VarInt, crypto::rustls::QuicClientConfig};
 use rpc::BiStream;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use shared_schema::sky_node::SkyId;
+use shared_schema::{
+    SkyNode,
+    sky_node::{PORT, SkyId},
+};
 
-use crate::request_handler::PORT;
-
+#[derive(Clone)]
 pub struct Transport {
     endpoint: quinn::Endpoint,
-    open_conns: HashMap<SocketAddr, quinn::Connection>,
+    open_conns: Arc<
+        tokio::sync::RwLock<HashMap<SocketAddr, tokio::sync::Mutex<Option<quinn::Connection>>>>,
+    >,
 }
 
 impl Transport {
@@ -104,7 +105,7 @@ impl quinn::Runtime for TokioRuntime {
 
     fn wrap_udp_socket(
         &self,
-        t: std::net::UdpSocket,
+        _t: std::net::UdpSocket,
     ) -> std::io::Result<Arc<dyn quinn::AsyncUdpSocket>> {
         unimplemented!()
     }
@@ -119,10 +120,9 @@ impl quinn::Runtime for TokioRuntime {
 }
 
 impl Transport {
-    fn transport_config() -> Arc<quinn::TransportConfig> {
+    fn transport_config() -> quinn::TransportConfig {
         let mut transport = quinn::TransportConfig::default();
         transport.max_idle_timeout(Some(VarInt::from(30_000u32).into()));
-        // transport.keep_alive_interval(Some(Duration::new(15, 0)));
         // transport.receive_window(VarInt::MAX);
         // transport.stream_receive_window(VarInt::MAX);
         // transport.send_window(u64::MAX);
@@ -133,7 +133,7 @@ impl Transport {
         //         .initial_window(20_000_000_000)
         //         .clone(),
         // ));
-        Arc::new(transport)
+        transport
     }
 
     fn endpoint_config() -> quinn::EndpointConfig {
@@ -164,7 +164,7 @@ impl Transport {
         let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
         #[cfg(test)]
         let abstract_sock = {
-            use super::quinn::end_to_end_socket::EndToEndSocket;
+            use super::quinn_transport::end_to_end_socket::EndToEndSocket;
             let sock = UdpSocket::bind(addr).await?;
             Arc::new(EndToEndSocket::from(sock))
         };
@@ -174,7 +174,7 @@ impl Transport {
             quinn::TokioRuntime.wrap_udp_socket(std::net::UdpSocket::bind(addr)?)?
         };
 
-        let mut endpoint_config = Self::endpoint_config();
+        let endpoint_config = Self::endpoint_config();
 
         let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
             endpoint_config,
@@ -192,7 +192,8 @@ impl Transport {
             .unwrap(),
         ));
         let transport = Self::transport_config();
-        client_config.transport_config(transport);
+        // transport.keep_alive_interval(Some(Duration::new(10, 0)));
+        client_config.transport_config(transport.into());
         endpoint.set_default_client_config(client_config);
         Ok(Self {
             endpoint,
@@ -208,7 +209,7 @@ impl Transport {
     ) -> Result<Self, Error> {
         #[cfg(test)]
         let abstract_sock = {
-            use super::quinn::end_to_end_socket::EndToEndSocket;
+            use super::quinn_transport::end_to_end_socket::EndToEndSocket;
 
             let sock = UdpSocket::bind(addr).await?;
             Arc::new(EndToEndSocket::from(sock))
@@ -225,7 +226,7 @@ impl Transport {
 
         let transport = Self::transport_config();
 
-        server_config.transport_config(transport);
+        server_config.transport_config(transport.into());
         let endpoint_config = Self::endpoint_config();
         let endpoint = quinn::Endpoint::new_with_abstract_socket(
             endpoint_config,
@@ -259,30 +260,53 @@ pub enum Error {
 }
 
 impl rpc::Transport for Transport {
-    type Address = SocketAddr;
+    type Address = SkyNode;
 
     type Error = Error;
 
     type Caller = Caller;
 
-    async fn connect(&mut self, to: Self::Address) -> Result<Self::Caller, Self::Error> {
-        let conn = match self.open_conns.get_mut(&to) {
-            Some(c) => c,
-            None => {
-                let id = SkyId::from(to.ip());
-
-                let url = id.to_url();
-                let new_conn = self.endpoint.connect(to, &url)?.await?;
-                self.open_conns.entry(to).or_insert(new_conn)
+    fn connect(
+        &self,
+        to: &Self::Address,
+    ) -> impl Future<Output = Result<Self::Caller, Self::Error>> + Send {
+        async {
+            let mut read_lock = self.open_conns.read().await;
+            let maybe_conn_mutex = read_lock.get(&to.socket_address());
+            if let Some(conn_mutex) = maybe_conn_mutex {
+                let conn = conn_mutex.lock().await;
+                if let Some(conn) = &*conn
+                    && conn.close_reason().is_none()
+                {
+                    return Ok(conn.clone().into());
+                }
             }
-        };
-        // Connection: May be cloned to obtain another handle to the same connection.
-        Ok(quinn::Connection::clone(conn).into())
+
+            // now we need to hold lock on open_conns[to.socket_address()] so we only init a conn once
+            let conn_mutex = match maybe_conn_mutex {
+                Some(m) => m,
+                None => {
+                    // implicit maybe_conn_mutex drop
+                    drop(read_lock);
+                    let mut write_lock = self.open_conns.write().await;
+                    write_lock.insert(to.socket_address(), Default::default());
+                    read_lock = tokio::sync::RwLockWriteGuard::downgrade(write_lock);
+                    read_lock.get(&to.socket_address()).unwrap()
+                }
+            };
+
+            let mut conn_lock = conn_mutex.lock().await;
+
+            let url = to.sky_id().to_url();
+            let new_conn = self.endpoint.connect(to.socket_address(), &url)?.await?;
+            *conn_lock = Some(new_conn.clone());
+            Ok(new_conn.into())
+        }
     }
 
     type Client = Client;
 
-    async fn accept(&mut self) -> Result<Self::Incoming, Self::Error> {
+    async fn accept(&self) -> Result<Self::Incoming, Self::Error> {
         let incoming = self
             .endpoint
             .accept()
@@ -313,7 +337,7 @@ impl rpc::Incoming for Incoming {
 
 impl rpc::Close for Transport {
     async fn close(self) {
-        self.endpoint.close(0u32.into(), b"");
+        // self.endpoint.close(VarInt::from_u32(0), b"");
         self.endpoint.wait_idle().await
     }
 }
@@ -344,7 +368,7 @@ impl BiStream for Caller {
 impl rpc::Caller for Caller {
     type Error = Error;
 
-    async fn open_stream(&mut self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
+    async fn open_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
         self.conn.open_bi().await.map_err(Self::Error::from)
     }
 }
@@ -379,7 +403,7 @@ impl BiStream for Client {
 impl rpc::Client for Client {
     type Error = Error;
 
-    async fn accept_stream(&mut self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
+    async fn accept_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
         Ok(self.conn.accept_bi().await?)
     }
 }
@@ -393,15 +417,18 @@ impl rpc::Close for Client {
 #[cfg(test)]
 mod tests {
 
+    use expect_test::expect;
     use rpc::{Call, Caller, Client, Close, Incoming, Transport as _};
     use std::convert::Infallible;
+
+    use std::time::Duration;
     use tracing::trace;
     use tracing::{Instrument, Level, span};
 
     use end_to_end_test::{Host, OsShim, net::ip, sim::Sim};
     use shared_schema::ping;
 
-    use crate::{quinn::Transport, request_handler::PORT};
+    use crate::quinn_transport::Transport;
 
     struct PingHandler;
 
@@ -422,17 +449,17 @@ mod tests {
     }
 
     #[test_log::test]
-    pub fn quinn() {
+    pub fn basic_quinn() {
         let sim = Sim::new();
         sim.enter_runtime(|| {
             let net = Sim::add_machine(ip::Network::new());
             let server = OsShim::new(Host::new(move || {
                 let span = span!(Level::TRACE, "server");
                 async {
-                    let mut tp = Transport::self_signed_server().await?;
+                    let tp = Transport::self_signed_server().await?;
                     trace!("server inited");
 
-                    let mut client = tp.accept().await?.accept().await?;
+                    let client = tp.accept().await?.accept().await?;
                     trace!("accepted client conn");
                     client.handle_one_request(&mut PingHandler).await?;
 
@@ -452,8 +479,8 @@ mod tests {
                 async move {
                     trace!("running");
 
-                    let mut tp = Transport::client().await?;
-                    let mut conn = tp.connect((server_addr, PORT).into()).await?;
+                    let tp = Transport::client().await?;
+                    let conn = tp.connect(&server_addr.into()).await?;
                     conn.query::<shared_schema::ping::Method, shared_schema::ping::Request>(
                         shared_schema::ping::Request,
                     )
@@ -469,6 +496,62 @@ mod tests {
             let client_ip = client.get().borrow().connect_to_net(net);
             client.get().borrow().set_public_ip(client_ip);
             let arr = [client, server];
+            Sim::run_until_idle(|| arr.iter()).unwrap();
+        })
+    }
+    #[test_log::test]
+    pub fn check_timeout_state() {
+        let sim = Sim::new();
+        sim.enter_runtime(|| {
+            let net = Sim::add_machine(ip::Network::new());
+            let server = OsShim::new(Host::new(move || {
+                let span = span!(Level::TRACE, "server");
+                async {
+                    let tp = Transport::self_signed_server().await?;
+                    let client = tp.accept().await?.accept().await?;
+                    client.handle_one_request(&mut PingHandler).await?;
+                    tp.close().await;
+                    Ok(())
+                }
+                .instrument(span)
+            }));
+
+            let server_addr = server.get().borrow().connect_to_net(net);
+            server.get().borrow().set_public_ip(server_addr);
+            Sim::tick_machine(server).unwrap();
+
+            let client = OsShim::new(Host::new(move || {
+                let span = span!(Level::TRACE, "client");
+                async move {
+                    let tp = Transport::client().await?;
+                    let conn = tp.connect(&server_addr.into()).await?;
+                    conn.query::<shared_schema::ping::Method, shared_schema::ping::Request>(
+                        shared_schema::ping::Request,
+                    )
+                    .await?;
+                    {
+                        let _guard = ip::Network::add_one_way_partition(
+                            net,
+                            Sim::get_current_machine::<OsShim>()
+                                .borrow()
+                                .public_ip()
+                                .unwrap(),
+                            Sim::get_current_machine::<OsShim>()
+                                .borrow()
+                                .public_ip()
+                                .unwrap(),
+                        );
+                        tokio::time::sleep(Duration::from_secs(40)).await;
+                    }
+                    expect!["timed out"].assert_eq(&conn.conn.close_reason().unwrap().to_string());
+
+                    Ok(())
+                }
+                .instrument(span)
+            }));
+            let client_ip = client.get().borrow().connect_to_net(net);
+            client.get().borrow().set_public_ip(client_ip);
+            let arr = [client];
             Sim::run_until_idle(|| arr.iter()).unwrap();
         })
     }

@@ -74,11 +74,10 @@ impl Network {
         });
         info!("waiting to send for {:?}", jitter);
         self.inner_machine.spawn_local(async move {
-            // let sleep_for = jitter;
             tokio::time::sleep(jitter).await;
             let res = nic.try_post(posting).await;
             if let Err(e) = res {
-                tracing::warn!("failed to post to network: {}", e);
+                tracing::warn!("failed to deliver message to nic: {}", e);
             }
             Ok(())
         });

@@ -297,6 +297,11 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
                     fn biggest_instantiation() -> Self {
                         #field_inits
                     }
+
+                    fn max_len() -> usize {
+                        static OL: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
+                        *OL.get_or_init(|| <Self as MaxLen>::max_len_init())
+                    }
                 }
             }
         }
@@ -341,6 +346,11 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
                             .into_iter()
                             .max_by_key(|v| minicbor::len(v))
                             .unwrap()
+                    }
+
+                    fn max_len() -> usize {
+                        static OL: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
+                        *OL.get_or_init(|| <Self as MaxLen>::max_len_init())
                     }
                 }
             }

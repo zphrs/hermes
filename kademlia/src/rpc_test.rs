@@ -101,7 +101,7 @@ impl RequestHandler<Node, ID_LEN> for RpcAdapter {
             return vec![];
         };
         // tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        manager.find_node(from.clone(), id).await
+        manager.find_node(Some(from.clone()), id).await
     }
 }
 

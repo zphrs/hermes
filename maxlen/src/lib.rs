@@ -50,8 +50,13 @@
 //! assert!(max_len > 0);
 //! ```
 
-use std::net::SocketAddr;
-use std::sync::OnceLock;
+use std::any::Any;
+use std::any::TypeId;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, DefaultHasher};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::RwLock;
 
 use minicbor::CborLen;
 
@@ -84,6 +89,7 @@ pub use maxlen_derive::MaxLen;
 /// let instance = u32::biggest_instantiation();
 /// assert_eq!(instance, u32::MAX);
 /// ```
+static INIT_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub trait MaxLen
 where
     Self: CborLen<()> + Sized,
@@ -100,6 +106,8 @@ where
     /// This method creates the biggest instantiation and measures its encoded size.
     /// Use `max_len()` instead if you want caching.
     fn max_len_init() -> usize {
+        INIT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
         minicbor::len(Self::biggest_instantiation())
     }
 
@@ -123,8 +131,9 @@ where
     /// assert_eq!(len1, len2);
     /// ```
     fn max_len() -> usize {
-        static OL: OnceLock<usize> = OnceLock::new();
-        *OL.get_or_init(|| Self::max_len_init())
+        tracing::warn!("using uncached version of max_len");
+        let out = Self::max_len_init();
+        out
     }
 }
 
@@ -181,7 +190,16 @@ impl MaxLen for () {
 impl MaxLen for SocketAddr {
     fn biggest_instantiation() -> Self {
         use std::net::{IpAddr, Ipv6Addr};
-        SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
+
+        SocketAddr::new(Ipv6Addr::from_segments([u16::MAX; 8]).into(), u16::MAX)
+    }
+}
+
+impl MaxLen for IpAddr {
+    fn biggest_instantiation() -> Self {
+        use std::net::Ipv6Addr;
+
+        IpAddr::V6(Ipv6Addr::from_segments([u16::MAX; 8]))
     }
 }
 
@@ -247,6 +265,15 @@ impl MaxLen for i64 {
 impl MaxLen for bool {
     fn biggest_instantiation() -> Self {
         true
+    }
+}
+
+impl<'a, T: MaxLen + Clone> MaxLen for Cow<'a, T> {
+    fn biggest_instantiation() -> Self {
+        let owned: Cow<'a, T> = Cow::Owned(T::biggest_instantiation());
+        let borrowed = Cow::Borrowed(&T::biggest_instantiation());
+        debug_assert!(owned.cbor_len(&mut ()) >= borrowed.cbor_len(&mut ()));
+        owned
     }
 }
 

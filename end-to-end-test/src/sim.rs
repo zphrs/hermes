@@ -20,6 +20,7 @@ use std::{
     marker::PhantomData,
     ops::{DerefMut, Div},
     rc::Rc,
+    time::Duration,
 };
 
 scoped_thread_local!(pub static RNG: RefCell<SmallRng>);
@@ -121,7 +122,7 @@ impl Sim {
     ///     ..Default::default()
     /// });
     /// ```
-    pub fn with_config(config: Config) -> Self {
+    pub fn new_with_config(config: Config) -> Self {
         Self {
             config,
             ..Default::default()
@@ -183,6 +184,12 @@ impl Sim {
         Self::get_machine(curr_machine)
     }
 
+    /// will panic if called outside of a machine instance / runtime
+    pub fn get_current_machine_ref<M: Machine>() -> MachineRef<M> {
+        let curr_machine = ACTIVE_MACHINE_ID.with(|id| *id);
+        MachineRef::from(curr_machine)
+    }
+
     pub(crate) fn dns_mut(&self) -> impl DerefMut<Target = Dns> {
         self.dns.borrow_mut()
     }
@@ -191,6 +198,9 @@ impl Sim {
         SIM.with(|sim| {
             let mut is_done = true;
             for (id, m) in &*sim.basic_machines.borrow() {
+                if m.is_idle() {
+                    continue;
+                }
                 is_done =
                     ACTIVE_MACHINE_ID.set(id, || m.tick(sim.config.tick_amount()))? && is_done;
             }
@@ -210,12 +220,33 @@ impl Sim {
         })
     }
 
+    pub fn tick_machine_with_duration<M: Machine>(
+        duration: Duration,
+        m: MachineRef<M>,
+    ) -> Result<bool> {
+        SIM.with(|sim| {
+            Self::on_machine(m, || {
+                sim.basic_machines
+                    .borrow()
+                    .get(&m.id())
+                    .unwrap()
+                    .tick(duration)
+            })
+        })
+    }
+
     pub fn enter_runtime<R>(&self, f: impl FnOnce() -> R) -> R {
         SIM.set(self, || {
             CONFIG.set(&self.config, || RNG.set(&self.rng.clone(), f))
         })
     }
-
+    /// The passed in iterator just determines which machines' [`Machine::is_idle()`]
+    /// status is checked in order to stop ticking.
+    /// The sim will run all machines in lockstep.
+    ///
+    /// If you want to simulate machines with clock skew,
+    /// call [`Sim::tick_machine()`] or [`Sim::tick_machine_with_duration()`].
+    /// Checking if it should stop and logging diagnostics is done every 100 ticks.
     pub fn run_until_idle<'a, M: Machine, I: ExactSizeIterator<Item = &'a MachineRef<M>>>(
         f: impl Fn() -> I,
     ) -> Result {
@@ -237,10 +268,11 @@ impl Sim {
                 };
                 let in_sim_elapsed = tick_count * CONFIG.with(|cfg| cfg.tick_amount());
                 tracing::warn!(
-                    "ticking {} ({:?}), {:.1}% idle, in_sim_elapsed: {:?}",
+                    "ticking {} ({:?}), {:.1}% idle, ({} machines left) in_sim_elapsed: {:?}",
                     tick_count,
                     elapsed.div(100),
                     percent_idle,
+                    total_count - count,
                     in_sim_elapsed
                 );
                 last_log_time = std::time::Instant::now();

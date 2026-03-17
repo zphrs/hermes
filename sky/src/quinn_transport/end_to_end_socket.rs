@@ -5,7 +5,6 @@ use std::{
 
 pub use end_to_end_test::UdpSocket;
 
-use end_to_end_test::{OsShim, sim::Sim};
 use quinn::{AsyncUdpSocket, UdpPoller};
 
 #[derive(Debug)]
