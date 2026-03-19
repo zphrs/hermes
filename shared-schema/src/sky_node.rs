@@ -3,7 +3,7 @@ pub mod rpc;
 use std::{
     fmt::Debug,
     hash::Hash,
-    net::{IpAddr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     ops::{Deref, DerefMut},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -97,14 +97,6 @@ impl Into<kademlia::Id<32>> for SkyId {
     }
 }
 
-#[cfg(test)]
-#[test]
-pub fn test_fmt() {
-    let id = SkyId::from(IpAddr::from(Ipv6Addr::LOCALHOST));
-
-    expect_test::expect!["SkyId(7C3C...0529)"].assert_eq(&format!("{}", id));
-}
-
 impl From<IpAddr> for SkyId {
     fn from(value: IpAddr) -> Self {
         let mut hasher: Sha256 = Sha256::default();
@@ -190,6 +182,16 @@ mod tests {
     use expect_test::expect;
 
     use crate::SkyNode;
+    use std::net::Ipv6Addr;
+
+    use crate::sky_node::SkyId;
+
+    #[test]
+    pub fn test_fmt() {
+        let id = SkyId::from(IpAddr::from(Ipv6Addr::LOCALHOST));
+
+        expect_test::expect!["SkyId(2A6A...8858)"].assert_eq(&format!("{}", id));
+    }
 
     #[test]
     fn test_ser() {

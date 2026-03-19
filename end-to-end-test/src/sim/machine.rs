@@ -26,9 +26,7 @@ pub struct MachineNic {
 
 impl Debug for MachineNic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HostNic")
-            .field("parent_id", &self.parent_id)
-            .finish()
+        f.debug_tuple("HostNic").field(&self.parent_id).finish()
     }
 }
 
@@ -226,7 +224,7 @@ impl Default for MachineId {
 
 impl Display for MachineId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#x}", self.id)
+        write!(f, "{:04x}", self.id)
     }
 }
 

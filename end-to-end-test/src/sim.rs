@@ -252,9 +252,11 @@ impl Sim {
     ) -> Result {
         let mut tick_count = 0;
         let mut last_log_time = std::time::Instant::now();
+
         while !Sim::tick()? {
             tick_count += 1;
-            if tick_count % 100 == 0 {
+            tracing::debug!(tick_count);
+            if tick_count % 10 == 0 {
                 let elapsed = last_log_time.elapsed();
                 let iter = f();
                 let total_count = iter.len();
@@ -267,7 +269,7 @@ impl Sim {
                     0.0
                 };
                 let in_sim_elapsed = tick_count * CONFIG.with(|cfg| cfg.tick_amount());
-                tracing::warn!(
+                tracing::info!(
                     "ticking {} ({:?}), {:.1}% idle, ({} machines left) in_sim_elapsed: {:?}",
                     tick_count,
                     elapsed.div(100),

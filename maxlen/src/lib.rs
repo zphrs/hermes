@@ -50,13 +50,10 @@
 //! assert!(max_len > 0);
 //! ```
 
-use std::any::Any;
-use std::any::TypeId;
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, DefaultHasher};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::RwLock;
+use std::{
+    borrow::Cow,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+};
 
 use minicbor::CborLen;
 
@@ -189,16 +186,12 @@ impl MaxLen for () {
 /// Uses an IPv6 address as it produces a larger encoding than IPv4.
 impl MaxLen for SocketAddr {
     fn biggest_instantiation() -> Self {
-        use std::net::{IpAddr, Ipv6Addr};
-
         SocketAddr::new(Ipv6Addr::from_segments([u16::MAX; 8]).into(), u16::MAX)
     }
 }
 
 impl MaxLen for IpAddr {
     fn biggest_instantiation() -> Self {
-        use std::net::Ipv6Addr;
-
         IpAddr::V6(Ipv6Addr::from_segments([u16::MAX; 8]))
     }
 }

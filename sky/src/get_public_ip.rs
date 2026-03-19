@@ -4,7 +4,7 @@ use tokio::{
     net::UdpSocket,
     task::{JoinSet, LocalSet},
 };
-use tracing::trace;
+use tracing::{info, trace};
 
 // this pings out to STUN servers to get IP. Also pings dns and api providers like ipify et. al.
 pub async fn get_public_ip() -> Option<IpAddr> {
@@ -26,13 +26,16 @@ pub async fn get_public_ip() -> Option<IpAddr> {
     for ip_addr in ip_addrs.into_iter().chain(ip_addrs_2) {
         *hm.entry(ip_addr).or_default() += 1
     }
-    hm.into_iter().max_by_key(|v| v.1).map(|v| v.0)
+    let out = hm.into_iter().max_by_key(|v| v.1).map(|v| v.0);
+    info!("got public ip {ip:?}", ip = out);
+    out
 }
+#[cfg(test)]
 pub async fn get_public_ip_mock() -> Option<IpAddr> {
     use end_to_end_test::{OsShim, sim::Sim};
     let curr_os = Sim::get_current_machine::<OsShim>();
-    trace!("got current os shim");
-    return curr_os.borrow().public_ip();
+    trace!("got current os shim address");
+    curr_os.borrow().public_ip()
 }
 
 // returns first ip returned from any of the default stun servers

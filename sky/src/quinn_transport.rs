@@ -1,6 +1,8 @@
+#[cfg(test)]
 mod end_to_end_socket;
 mod skip_server_verification;
 
+#[cfg(test)]
 use end_to_end_test::sim::RNG;
 use quinn::{ConnectionId, ConnectionIdGenerator, EndpointStats};
 use rand::Rng;
@@ -12,11 +14,12 @@ pub use end_to_end_test::UdpSocket;
 #[cfg(not(test))]
 pub use tokio::net::UdpSocket;
 use tokio::{runtime::Handle, time::sleep_until};
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 
 use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
+    ops::Deref,
     sync::Arc,
     time::Duration,
     u64, usize,
@@ -49,73 +52,83 @@ pub use crate::get_public_ip::get_public_ip;
 #[cfg(test)]
 pub use crate::get_public_ip::get_public_ip_mock as get_public_ip;
 
-#[derive(Debug)]
-struct TokioRuntime;
+#[cfg(test)]
+mod test_utils {
+    use std::{sync::Arc, time::Duration};
 
-struct Timesource {
-    start: std::time::Instant,
-}
+    use end_to_end_test::sim::RNG;
+    use quinn::{ConnectionId, ConnectionIdGenerator, Runtime as _};
+    use rand::Rng as _;
+    use tokio::time::sleep_until;
+    use tracing::trace;
+    #[derive(Debug)]
+    pub struct TokioRuntime;
 
-impl Timesource {
-    fn new() -> Self {
-        Self {
-            start: TokioRuntime.now(),
+    pub struct Timesource {
+        start: std::time::Instant,
+    }
+
+    impl Timesource {
+        pub fn new() -> Self {
+            Self {
+                start: TokioRuntime.now(),
+            }
         }
     }
-}
 
-impl quinn::TimeSource for Timesource {
-    fn now(&self) -> std::time::SystemTime {
-        let now = TokioRuntime.now();
-        let diff = now.duration_since(self.start);
-        std::time::SystemTime::UNIX_EPOCH + diff
-    }
-}
-
-struct SeededCidGenerator;
-
-impl ConnectionIdGenerator for SeededCidGenerator {
-    fn generate_cid(&mut self) -> ConnectionId {
-        RNG.with(|rng| {
-            let mut rng = rng.borrow_mut();
-            ConnectionId::new(&rng.random::<[u8; 20]>())
-        })
+    impl quinn::TimeSource for Timesource {
+        fn now(&self) -> std::time::SystemTime {
+            let now = TokioRuntime.now();
+            let diff = now.duration_since(self.start);
+            std::time::SystemTime::UNIX_EPOCH + diff
+        }
     }
 
-    fn cid_len(&self) -> usize {
-        20
+    pub struct SeededCidGenerator;
+
+    impl ConnectionIdGenerator for SeededCidGenerator {
+        fn generate_cid(&mut self) -> ConnectionId {
+            RNG.with(|rng| {
+                let mut rng = rng.borrow_mut();
+                ConnectionId::new(&rng.random::<[u8; 20]>())
+            })
+        }
+
+        fn cid_len(&self) -> usize {
+            20
+        }
+
+        fn cid_lifetime(&self) -> Option<Duration> {
+            None
+        }
     }
 
-    fn cid_lifetime(&self) -> Option<Duration> {
-        None
-    }
-}
+    impl quinn::Runtime for TokioRuntime {
+        fn new_timer(&self, i: std::time::Instant) -> std::pin::Pin<Box<dyn quinn::AsyncTimer>> {
+            let sleeping_for = i.saturating_duration_since(self.now());
 
-impl quinn::Runtime for TokioRuntime {
-    fn new_timer(&self, i: std::time::Instant) -> std::pin::Pin<Box<dyn quinn::AsyncTimer>> {
-        let sleeping_for = i.saturating_duration_since(self.now());
+            trace!("quinn sleeping for {:?}", sleeping_for);
+            Box::pin(sleep_until(i.into()))
+        }
 
-        trace!("quinn sleeping for {:?}", sleeping_for);
-        Box::pin(sleep_until(i.into()))
-    }
+        fn spawn(&self, future: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>) {
+            tokio::spawn(future);
+        }
 
-    fn spawn(&self, future: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>) {
-        tokio::spawn(future);
-    }
+        fn wrap_udp_socket(
+            &self,
+            _t: std::net::UdpSocket,
+        ) -> std::io::Result<Arc<dyn quinn::AsyncUdpSocket>> {
+            unimplemented!()
+        }
 
-    fn wrap_udp_socket(
-        &self,
-        _t: std::net::UdpSocket,
-    ) -> std::io::Result<Arc<dyn quinn::AsyncUdpSocket>> {
-        unimplemented!()
-    }
-
-    fn now(&self) -> std::time::Instant {
-        // panic if not in a tokio runtime
-        let rt = Handle::current();
-        let _g = rt.enter();
-        let out = tokio::time::Instant::now().into_std();
-        out
+        fn now(&self) -> std::time::Instant {
+            // panic if not in a tokio runtime
+            let rt = tokio::runtime::Handle::current();
+            let _g = rt.enter();
+            let out = tokio::time::Instant::now().into_std();
+            out
+        }
     }
 }
 
@@ -123,24 +136,23 @@ impl Transport {
     fn transport_config() -> quinn::TransportConfig {
         let mut transport = quinn::TransportConfig::default();
         transport.max_idle_timeout(Some(VarInt::from(30_000u32).into()));
-        // transport.receive_window(VarInt::MAX);
-        // transport.stream_receive_window(VarInt::MAX);
-        // transport.send_window(u64::MAX);
         transport.send_fairness(false);
-        // transport.max_concurrent_bidi_streams(10_000u32.into());
-        // transport.congestion_controller_factory(Arc::new(
-        //     CubicConfig::default()
-        //         .initial_window(20_000_000_000)
-        //         .clone(),
-        // ));
         transport
     }
 
     fn endpoint_config() -> quinn::EndpointConfig {
-        let mut endpoint_config: EndpointConfig = Default::default();
-        endpoint_config.rng_seed(Some(RNG.with(|rng| rng.borrow_mut().random())));
-        endpoint_config.cid_generator(|| Box::new(SeededCidGenerator));
-        endpoint_config
+        #[cfg(test)]
+        {
+            let mut endpoint_config: EndpointConfig = Default::default();
+            endpoint_config.rng_seed(Some(RNG.with(|rng| rng.borrow_mut().random())));
+            endpoint_config.cid_generator(|| Box::new(test_utils::SeededCidGenerator));
+            endpoint_config
+        }
+        #[cfg(not(test))]
+        {
+            let endpoint_config: EndpointConfig = Default::default();
+            endpoint_config
+        }
     }
 
     pub async fn self_signed_server() -> Result<Self, Error> {
@@ -161,6 +173,10 @@ impl Transport {
     }
 
     pub async fn client() -> Result<Self, Error> {
+        Self::client_with_keepalive(true).await
+    }
+
+    pub async fn client_with_keepalive(keepalive: bool) -> Result<Self, Error> {
         let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
         #[cfg(test)]
         let abstract_sock = {
@@ -180,8 +196,12 @@ impl Transport {
             endpoint_config,
             None,
             abstract_sock,
-            Arc::new(TokioRuntime),
+            #[cfg(test)]
+            Arc::new(test_utils::TokioRuntime),
+            #[cfg(not(test))]
+            Arc::new(quinn::TokioRuntime),
         )?;
+
         let mut client_config = quinn::ClientConfig::new(Arc::new(
             QuicClientConfig::try_from(
                 rustls::ClientConfig::builder()
@@ -191,8 +211,10 @@ impl Transport {
             )
             .unwrap(),
         ));
-        let transport = Self::transport_config();
-        // transport.keep_alive_interval(Some(Duration::new(10, 0)));
+        let mut transport = Self::transport_config();
+        if keepalive {
+            transport.keep_alive_interval(Some(Duration::new(10, 0)));
+        }
         client_config.transport_config(transport.into());
         endpoint.set_default_client_config(client_config);
         Ok(Self {
@@ -220,7 +242,8 @@ impl Transport {
             quinn::TokioRuntime.wrap_udp_socket(std::net::UdpSocket::bind(addr)?)?
         };
         let mut server_config = ServerConfig::with_single_cert(certs, priv_key)?;
-        server_config.time_source(Arc::new(Timesource::new()));
+        #[cfg(test)]
+        server_config.time_source(Arc::new(test_utils::Timesource::new()));
         server_config.max_incoming(usize::MAX);
         server_config.incoming_buffer_size_total(u64::MAX);
 
@@ -232,8 +255,12 @@ impl Transport {
             endpoint_config,
             Some(server_config),
             abstract_sock,
-            Arc::new(TokioRuntime),
+            #[cfg(test)]
+            Arc::new(test_utils::TokioRuntime),
+            #[cfg(not(test))]
+            Arc::new(quinn::TokioRuntime),
         )?;
+        info!("hosting on {:?}", endpoint.local_addr());
         Ok(Self {
             endpoint,
             open_conns: Default::default(),
@@ -317,8 +344,24 @@ impl rpc::Transport for Transport {
     type Incoming = Incoming;
 }
 
+impl Deref for Transport {
+    type Target = quinn::Endpoint;
+
+    fn deref(&self) -> &Self::Target {
+        &self.endpoint
+    }
+}
+
 pub struct Incoming {
     incoming: quinn::Incoming,
+}
+
+impl Deref for Incoming {
+    type Target = quinn::Incoming;
+
+    fn deref(&self) -> &Self::Target {
+        &self.incoming
+    }
 }
 
 impl From<quinn::Incoming> for Incoming {
@@ -377,15 +420,19 @@ pub struct Client {
     conn: quinn::Connection,
 }
 
-impl Client {
-    pub fn stats(&self) -> quinn::ConnectionStats {
-        self.conn.stats()
+impl Deref for Client {
+    type Target = quinn::Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.conn
     }
 }
 
-impl Caller {
-    pub fn stats(&self) -> quinn::ConnectionStats {
-        self.conn.stats()
+impl Deref for Caller {
+    type Target = quinn::Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.conn
     }
 }
 
@@ -523,7 +570,7 @@ mod tests {
             let client = OsShim::new(Host::new(move || {
                 let span = span!(Level::TRACE, "client");
                 async move {
-                    let tp = Transport::client().await?;
+                    let tp = Transport::client_with_keepalive(false).await?;
                     let conn = tp.connect(&server_addr.into()).await?;
                     conn.query::<shared_schema::ping::Method, shared_schema::ping::Request>(
                         shared_schema::ping::Request,

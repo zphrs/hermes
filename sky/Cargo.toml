@@ -28,19 +28,22 @@ minicbor-io = { version = "0.23.0", features = ["async-io"] }
 rpc = { version = "0.1.0", path = "../rpc" }
 futures-io = "0.3.32"
 maxlen = { version = "0.1.0", path = "../maxlen" }
-end-to-end-test = { version = "0.1.0", path = "../end-to-end-test" }
 rand = "0.9.2"
 quinn-proto = "0.11.14"
 env_logger = "0.11.9"
+tracing-subscriber = {version = "0.3.23", features = ["tokio-time"] }
 
 [build-dependencies]
 capnpc = "0.21"
 prost-build = "0.14.3"
 
 [dev-dependencies]
+end-to-end-test = { version = "0.1.0", path = "../end-to-end-test" }
 expect-test = "1.5.1"
 test-log = { version = "0.2.19", default-features = false, features = ["color","trace"] }
-tracing-subscriber = "0.3.23"
+tracing-subscriber = {version = "0.3.23", features = ["tokio-time"] }
+
+
 
 
 

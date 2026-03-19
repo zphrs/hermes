@@ -3,6 +3,7 @@ mod leaf;
 
 use std::cmp::min;
 use std::collections::hash_map;
+use std::num;
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -15,6 +16,7 @@ use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use tracing::instrument;
 
+use crate::Id;
 use crate::routing_table::leaf::Leaf;
 use crate::{
     HasId, RequestHandler,
@@ -61,7 +63,7 @@ impl<Node, const ID_LEN: usize> From<Error<Node, ID_LEN>> for DistancePair<Node,
     }
 }
 
-impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize> Default
+impl<Node: HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize> Default
     for RoutingTable<Node, ID_LEN, BUCKET_SIZE>
 {
     fn default() -> Self {
@@ -81,7 +83,7 @@ macro_rules! bucket_updated_at_entry {
     };
 }
 
-impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize>
+impl<Node: Eq + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize>
     RoutingTable<Node, ID_LEN, BUCKET_SIZE>
 {
     pub fn new() -> Self {
@@ -196,33 +198,21 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         bucket_updated_at_entry!(self, distance).insert_entry(Instant::now());
     }
 
-    pub async fn remove_unreachable_siblings_list_nodes(
-        &mut self,
+    pub async fn find_dead_siblings_list_nodes<'a>(
+        &self,
         local_node: &Node,
-        handler: &impl RequestHandler<Node, ID_LEN>,
-    ) {
-        // Ping all nodes concurrently and collect the ones that respond.
-        let mut to_remove_set = HashSet::new();
-        {
-            let to_remove = FuturesUnordered::from_iter(self.nearest_siblings_list.iter().map(
-                |pair| async move {
-                    (!handler.ping(local_node, pair.node()).await)
-                        .then_some(pair.node().id().clone())
-                },
-            ));
+        handler: &impl RequestHandler<Node, Node, ID_LEN>,
+    ) -> HashSet<Id<ID_LEN>> {
+        // Ping all nodes in the bucket at once and collect the ones that respond.
+        let to_remove =
+            FuturesUnordered::from_iter(self.nearest_siblings_list.iter().map(|pair| async move {
+                (!handler.ping(local_node, pair.node()).await).then_some(pair.node().id().clone())
+            }));
 
-            // once at least half have responded, continue.
-            let mut chunks = to_remove.ready_chunks(BUCKET_SIZE);
-            let mut total_pinged = 0;
-            while let Some(chunk) = chunks.next().await {
-                total_pinged += chunk.len();
-                to_remove_set.extend(chunk.into_iter().flatten());
-                if total_pinged >= BUCKET_SIZE {
-                    break;
-                }
-            }
-        }
+        to_remove.filter_map(|v| async move { v }).collect().await
+    }
 
+    pub async fn remove_siblings_list_nodes(&mut self, to_remove_set: &HashSet<Id<ID_LEN>>) {
         self.nearest_siblings_list = self
             .nearest_siblings_list
             .drain(..)

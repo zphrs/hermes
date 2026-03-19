@@ -1,3 +1,4 @@
+use tracing::Instrument as _;
 mod checksum;
 pub mod error;
 pub mod ip;
@@ -10,7 +11,7 @@ use crate::sim::{
 };
 use bytes::Bytes;
 use rand::Rng;
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -47,6 +48,10 @@ impl Network {
         self.machines.insert(host.id(), (host.nic(), latency));
     }
 
+    pub fn remove_machine(&mut self, host: &impl HasNic) {
+        self.machines.remove(&host.id());
+    }
+
     pub fn try_send_to_host(&self, id: &MachineId, posting: Bytes) -> std::io::Result<()> {
         let dropped = CONFIG.with(|cfg| {
             let dropped =
@@ -58,10 +63,6 @@ impl Network {
             .get(id)
             .ok_or(ErrorKind::HostUnreachable)?
             .clone();
-        if dropped {
-            warn!("dropped message due to chance");
-            return Ok(());
-        }
         let jitter = RNG.with(|rng| {
             let stdev = latency.as_millis() as f64 / 5.0;
             let dist = rand_distr::Normal::new(0.0, stdev).unwrap();
@@ -72,15 +73,23 @@ impl Network {
                 latency + Duration::from_millis(jitter_ms as u64)
             }
         });
-        info!("waiting to send for {:?}", jitter);
-        self.inner_machine.spawn_local(async move {
-            tokio::time::sleep(jitter).await;
-            let res = nic.try_post(posting).await;
-            if let Err(e) = res {
-                tracing::warn!("failed to deliver message to nic: {}", e);
+        let span = tracing::debug_span!("send_to_host", to=?id);
+        self.inner_machine.spawn_local(
+            async move {
+                if dropped {
+                    warn!("dropped message due to chance");
+                    return Ok(());
+                }
+                trace!("waiting to send for {:?}", jitter);
+                tokio::time::sleep(jitter).await;
+                let res = nic.try_post(posting).await;
+                if let Err(e) = res {
+                    tracing::warn!("failed to deliver message to nic: {}", e);
+                }
+                Ok(())
             }
-            Ok(())
-        });
+            .instrument(span),
+        );
 
         Ok(())
     }

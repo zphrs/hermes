@@ -1,4 +1,5 @@
 //! based on the [api of simgrid](https://simgrid.org/doc/latest/app_s4u.html)
+mod deterministic_rand;
 mod error;
 pub mod host;
 pub use host::net::udp::UdpSocket;

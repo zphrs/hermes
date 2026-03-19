@@ -4,7 +4,9 @@ mod routing_table;
 mod rpc;
 mod traits;
 
+mod client;
 mod helpers;
+pub mod node_cache;
 #[cfg(test)]
 mod rpc_test;
 

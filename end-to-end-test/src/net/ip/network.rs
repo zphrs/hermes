@@ -76,7 +76,7 @@ impl Network {
         self.bound_ips.insert(addr, host.id());
     }
 
-    /// assigns a single address if unspecified
+    /// assigns a single address for the machine in the 192.168.0.0/16 range
     pub fn add_machine(&mut self, host: &impl HasNic) -> IpAddr {
         self.network.add_machine(host);
         let generated_ip = self.ip_generator.next();
@@ -85,6 +85,11 @@ impl Network {
             .insert(IpPrefix::from(generated_ip), host.id());
 
         generated_ip
+    }
+
+    pub fn remove_machine(&mut self, host: &impl HasNic, addr: IpPrefix) {
+        self.network.remove_machine(host);
+        self.bound_ips.remove(addr);
     }
 
     pub fn machine_ip_prefix(&mut self, id: &MachineId) -> Option<&IpPrefix> {

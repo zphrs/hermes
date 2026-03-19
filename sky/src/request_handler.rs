@@ -5,12 +5,14 @@ use std::{
     time::Duration,
 };
 
+use kademlia::{RoutingTable, node_cache::KadNodeCache};
 use maxlen::MaxLen;
 
 use minicbor::CborLen as _;
-use rpc::{Call, Caller, Transport};
+use rpc::{Call, Caller, Client as _, ClientError, Transport};
 use shared_schema::{MaxSizedVec, SkyNode, ping, sky_node::SkyId};
-use tracing::trace;
+use tokio::task::JoinSet;
+use tracing::{Instrument as _, trace, trace_span};
 
 use crate::quinn_transport::{self, get_public_ip};
 
@@ -59,7 +61,7 @@ struct KadHandler {
     transport: quinn_transport::Transport,
 }
 
-impl kademlia::RequestHandler<SkyNode, 32> for KadHandler {
+impl kademlia::RequestHandler<SkyNode, SkyNode, 32> for KadHandler {
     async fn ping(&self, from: &SkyNode, node: &SkyNode) -> bool {
         if node.last_reached_at().elapsed() < Duration::from_secs(120) {
             return true;
@@ -109,22 +111,29 @@ impl kademlia::RequestHandler<SkyNode, 32> for KadHandler {
 }
 
 #[derive(Clone)]
-struct FindNodesMethod<'a> {
-    rpc_manager: kademlia::RpcManager<SkyNode, KadHandler, 32, 20>,
+pub struct FindNodesMethod<'a> {
+    rpc_manager:
+        kademlia::RpcManager<SkyNode, SkyNode, KadHandler, KadNodeCache<SkyNode, 32, 20>, 32, 20>,
     _phantom: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> FindNodesMethod<'a> {
-    fn new(transport: &quinn_transport::Transport, me: SkyNode) -> Self {
+    pub fn new(transport: &quinn_transport::Transport, me: SkyNode) -> Self {
+        let rpc_manager = kademlia::RpcManager::new(
+            KadHandler {
+                transport: transport.clone(),
+            },
+            me.clone(),
+            KadNodeCache::new(me),
+        );
         Self {
-            rpc_manager: kademlia::RpcManager::new(
-                KadHandler {
-                    transport: transport.clone(),
-                },
-                me,
-            ),
+            rpc_manager,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    fn node_lookup() {
+        todo!()
     }
 }
 
@@ -137,12 +146,13 @@ impl<'a> rpc::Method for FindNodesMethod<'a> {
 }
 
 impl<'a> rpc::Call for FindNodesMethod<'a> {
-    async fn call(&mut self, value: Self::Req) -> Result<Self::Res, Self::Error> {
-        Ok(self
+    async fn call(&mut self, value: Self::Req) -> Result<FindNodesResponse, Infallible> {
+        let out: FindNodesResponse = self
             .rpc_manager
             .find_node(value.from.map(Cow::into_owned), &value.sky_id.into())
             .await
-            .into())
+            .into();
+        Ok(out)
     }
 }
 
@@ -198,10 +208,85 @@ impl<'a> rpc::RootHandler<RootRequest<'a>> for RootHandler<'a> {
         }
     }
 }
+#[derive(Clone)]
+pub struct SkyServer {
+    handler: RootHandler<'static>,
+    transport: quinn_transport::Transport,
+}
+
+impl SkyServer {
+    pub async fn new() -> Result<Self, ClientError<quinn_transport::Error, Error>> {
+        let tp = quinn_transport::Transport::self_signed_server()
+            .await
+            .map_err(ClientError::Transport)?;
+        let handler = RootHandler::new(&tp).await.unwrap();
+        Ok(Self {
+            handler,
+            transport: tp,
+        })
+    }
+
+    pub fn into_parts(self) -> (RootHandler<'static>, quinn_transport::Transport) {
+        (self.handler, self.transport)
+    }
+    pub async fn add_nodes(&self, nodes: impl IntoIterator<Item = SkyNode>) {
+        self.handler
+            .find_nodes_handler
+            .rpc_manager
+            .add_nodes(nodes)
+            .await;
+    }
+    pub async fn run(self) -> Result<(), ClientError<quinn_transport::Error, Error>> {
+        let mut js: JoinSet<Result<(), ClientError<quinn_transport::Error, Error>>> =
+            JoinSet::new();
+
+        self.handler
+            .find_nodes_handler
+            .rpc_manager
+            .join_network()
+            .await;
+
+        let (handler, tp) = self.into_parts();
+        loop {
+            let incoming_client: quinn_transport::Incoming =
+                tp.accept().await.map_err(ClientError::Transport)?;
+            let handler = handler.clone();
+            let span = trace_span!("from client", client = %incoming_client.remote_address());
+            js.spawn( async move {
+
+                let conn = rpc::Incoming::accept(incoming_client)
+                    .await.map_err(ClientError::Transport)?;
+                trace!("accepted client");
+
+                if let Err(e) = conn.handle_client::<RootRequest, _>(handler).await {
+                    match e {
+                        ClientError::Transport(crate::quinn_transport::Error::Connection(
+                            quinn::ConnectionError::ApplicationClosed(close),
+                        )) if close.error_code == 0u32.into()
+                            && close.reason.len() == 0 =>
+                        {
+                            tracing::debug!("normal client closure")
+                        },
+                        ClientError::Transport(crate::quinn_transport::Error::Connection(quinn::ConnectionError::TimedOut)) => {
+                            tracing::warn!("connection to server timed out. Okay if the client still got all their responses")
+                        }
+                        e => Err(e).unwrap(),
+                    }
+                }
+                Ok(())
+                // Result<(), std::error::Error>::Ok(())
+            }.instrument(span));
+            while let Some(result) = js.try_join_next() {
+                result.unwrap()?;
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
 
+    use end_to_end_test::sim::machine::HasMachineId;
     use maxlen::MaxLen as _;
     use minicbor::CborLen as _;
     use rand::Rng;
@@ -211,8 +296,9 @@ mod tests {
         net::{IpAddr, Ipv4Addr},
         time::Duration,
     };
-    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::fmt::time::tokio_uptime;
     use tracing_subscriber::fmt::writer::MakeWriterExt;
+    use tracing_subscriber::fmt::{MakeWriter, format::Format};
 
     use rpc::{Caller as _, Client as _, ClientError, Close, Incoming, Transport as _};
     use tokio::task::JoinSet;
@@ -226,7 +312,7 @@ mod tests {
 
     use crate::{
         quinn_transport::Transport,
-        request_handler::{FindNodesRequest, RootHandler, RootRequest},
+        request_handler::{FindNodesRequest, RootHandler, RootRequest, SkyServer},
     };
 
     #[test]
@@ -252,48 +338,8 @@ mod tests {
     }
 
     pub fn create_server() -> MachineRef<OsShim> {
-        let server = OsShim::new(Host::new(move || {
-            let span = span!(Level::DEBUG, "server");
-            async {
-                let tp = Transport::self_signed_server().await?;
-                let handler = RootHandler::new(&tp).await?;
-
-                let mut js: JoinSet<Result<(), ClientError<crate::quinn_transport::Error, super::Error>>> = JoinSet::new();
-
-                loop {
-                    let incoming_client = tp.accept().await?;
-                    let handler = handler.clone();
-                    js.spawn_local( async move {
-                        let conn = incoming_client
-                            .accept()
-                            .await.map_err(ClientError::Transport)?;
-                        trace!("accepted client");
-                        warn!("Root max_len here is {}", RootRequest::max_len());
-                        if let Err(e) = conn.handle_client::<RootRequest, _>(handler).await {
-                            match e {
-                                ClientError::Transport(crate::quinn_transport::Error::Connection(
-                                    quinn::ConnectionError::ApplicationClosed(close),
-                                )) if close.error_code == 0u32.into()
-                                    && close.reason.len() == 0 =>
-                                {
-                                    debug!("normal client closure")
-                                },
-                                ClientError::Transport(crate::quinn_transport::Error::Connection(quinn::ConnectionError::TimedOut)) => {
-                                    warn!("connection to server timed out. Okay if the client still got all their responses")
-                                }
-                                e => Err(e).unwrap(),
-                            }
-                        }
-                        Ok(())
-                        // Result<(), std::error::Error>::Ok(())
-                    });
-                    while let Some(result) = js.try_join_next() {
-                        result??;
-                    }
-
-                }
-            }
-            .instrument(span)
+        let server = OsShim::new(Host::new(move || async {
+            Ok(SkyServer::new().await?.run().await?)
         }));
         server
     }
@@ -350,8 +396,6 @@ mod tests {
                     result?.unwrap();
                 }
 
-                let stats = conn.stats();
-                trace!("client stats: {:#?}", stats);
                 conn.close().await;
                 tp.close().await;
 
@@ -363,34 +407,24 @@ mod tests {
     }
 
     #[test]
-    pub fn ping_test() {
-        // specifically used instead of test_log::test to prevent
-        // outputting timestamps
-        // install global subscriber configured based on RUST_LOG envvar.
-        let format = tracing_subscriber::fmt::format()
-            .with_level(false) // don't include levels in formatted output
-            .with_target(false) // don't include targets
-            .with_thread_ids(true) // include the thread ID of the current thread
-            .with_thread_names(true) // include the name of the current thread
-            .compact(); // use the `Compact` formatting style.
-
-        // Create a `fmt` subscriber that uses our custom event format, and set it
-        // as the default.
-        tracing_subscriber::fmt()
-            .with_test_writer()
-            .event_format(format)
-            .with_env_filter("sky=warn,end_to_end_test=debug,rpc=warn")
-            .init();
-
+    pub fn ping() {
         let sim = Sim::new_with_config(end_to_end_test::sim::Config {
             // need to increase otherwise machine will end up stuck in WouldBlock loop
-            nic_capacity: 100000,
-            udp_capacity: 100000,
-            ip_hop_capacity: 100000,
+            nic_capacity: 1000,
+            udp_capacity: 1000,
+            ip_hop_capacity: 1000,
             tick_amount: Duration::from_millis(10),
             ..Default::default()
         });
         sim.enter_runtime(|| {
+            // Create a `fmt` subscriber that uses our custom event format, and set it
+            // as the default.
+            tracing_subscriber::fmt()
+                .pretty()
+                .with_test_writer()
+                .with_timer(tokio_uptime())
+                .with_env_filter("sky=debug,end_to_end_test=debug,rpc=warn")
+                .init();
             let net = Sim::add_machine(ip::Network::new());
             let server = create_server();
 
