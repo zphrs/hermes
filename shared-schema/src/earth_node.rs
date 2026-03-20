@@ -2,25 +2,40 @@ pub mod candidate;
 pub mod message;
 pub mod rpc;
 
-use std::time::Duration;
+use tokio::time::Duration;
 
-use crypto_bigint::U256;
-use kademlia::Id;
+use crypto_bigint::{NonZero, U256};
+use kademlia::{HasId, HasServerId as _, Id};
 use maxlen::MaxLen;
+use tracing::debug;
 
-use crate::sky_node::SkyId;
+use crate::{SkyNode, sky_node::SkyId};
 
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
+#[derive(Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub struct EarthNode {
     #[n(0)]
     id: EarthId,
 }
 
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, PartialEq, Eq, MaxLen)]
+impl EarthNode {
+    pub fn new(id: EarthId) -> Self {
+        Self { id }
+    }
+
+    pub fn earth_id(&self) -> &EarthId {
+        &self.id
+    }
+}
+
+#[derive(
+    Debug, Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, PartialEq, Eq, MaxLen,
+)]
 #[cbor(transparent)]
 pub struct EarthId(#[n(0)] Id<32>);
 
 impl EarthId {
+    pub const ZERO: EarthId = EarthId(Id::ZERO);
+
     /// Converts to a sky id to allow comparisons between earth and sky ids. The
     /// result of this transformation changes over time to ensure that earth
     /// nodes change their sky nodes throughout the day.
@@ -30,9 +45,44 @@ impl EarthId {
     /// consistently online.
     pub fn to_sky_id(&self, since_epoch: Duration) -> SkyId {
         const ONE_DAY: Duration = Duration::from_hours(24);
-        let today_offset: U256 = (since_epoch.as_millis() / ONE_DAY.as_millis()).into();
-        let offset = today_offset.wrapping_mul(&U256::MAX);
+        let one_day_millis: u128 = ONE_DAY.as_millis();
+        let time_within_day: U256 = (since_epoch.as_millis() % one_day_millis).into();
+        let step = U256::MAX.wrapping_div(&NonZero::new(U256::from(one_day_millis)).unwrap());
+        let offset = step.wrapping_mul(&time_within_day);
         let id: U256 = U256::from_be_slice(self.0.bytes());
-        SkyId(Id::from((id + offset).to_be_bytes()))
+        SkyId(Id::from(id.wrapping_add(&offset).to_be_bytes()))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use tokio::time::Duration;
+
+    #[test]
+    fn test_to_sky_id() {
+        let earth_id = EarthId(Id::from([0u8; 32]));
+        let since_epoch = Duration::from_secs(0);
+        let sky_id = earth_id.to_sky_id(since_epoch);
+        expect_test::expect![[r#"
+            SkyId(
+                Id(),
+            )
+        "#]]
+        .assert_debug_eq(&sky_id);
+
+        let earth_id = EarthId(Id::from([0u8; 32]));
+        let since_epoch = Duration::from_secs(100000);
+        let sky_id = earth_id.to_sky_id(since_epoch);
+        expect_test::expect![[r#"
+            SkyId(
+                Id(
+                    284BDA12F684BDA1
+                    2F684BDA12F684BD
+                    A12F684BDA12F684,
+                ),
+            )
+        "#]]
+        .assert_debug_eq(&sky_id);
     }
 }

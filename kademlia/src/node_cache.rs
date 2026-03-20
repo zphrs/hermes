@@ -9,13 +9,11 @@ use crate::{Distance, HasId, Id, RequestHandler};
 pub trait Cullable<Client, Node, const ID_LEN: usize> {
     type CullSet;
 
-    fn find_removal_candidates<'a>(
+    fn find_removal_candidates(
         &self,
-        nodes: impl Iterator<Item = &'a Node>,
+        nodes: impl Iterator<Item = Node>,
         handler: &impl RequestHandler<Client, Node, ID_LEN>,
-    ) -> impl Future<Output = Self::CullSet>
-    where
-        Node: 'a;
+    ) -> impl Future<Output = Self::CullSet>;
 
     fn remove_candidates(&mut self, candidates: Self::CullSet);
 }
@@ -25,7 +23,7 @@ pub trait NodeCache<Client, Node: HasId<ID_LEN>, const ID_LEN: usize>:
 {
     fn add_nodes(&mut self, nodes: impl IntoIterator<Item = Node>);
 
-    fn on_node_lookup(&mut self, id: &Id<ID_LEN>) {}
+    fn on_node_lookup(&mut self, _id: &Id<ID_LEN>) {}
 
     // finds the nearest known nodes to a specific address
     fn nearby_nodes<'a>(&'a self, address: &Id<ID_LEN>) -> impl Iterator<Item = &'a Node>

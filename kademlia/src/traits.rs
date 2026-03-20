@@ -20,11 +20,11 @@ pub trait HasId<const N: usize> {
 }
 
 pub trait HasServerId<Server: HasId<N>, const N: usize> {
-    fn server_id(&self) -> &Id<N>;
+    fn server_id(&self) -> Id<N>;
 }
 
 impl<Server: HasId<N>, const N: usize> HasServerId<Server, N> for Server {
-    fn server_id(&self) -> &Id<N> {
-        self.id()
+    fn server_id(&self) -> Id<N> {
+        self.id().clone()
     }
 }

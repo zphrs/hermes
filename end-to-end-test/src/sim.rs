@@ -142,6 +142,21 @@ impl Sim {
         })
     }
 
+    pub fn active() -> bool {
+        SIM.is_set()
+    }
+
+    pub fn is_in_machine_type<M: Machine>() -> bool {
+        SIM.with(|v| {
+            let type_id = std::any::TypeId::of::<M>();
+            let machines = v.machines.borrow();
+            let Some(of_type) = machines.get(&type_id) else {
+                return false;
+            };
+            ACTIVE_MACHINE_ID.with(|id| of_type.contains_key(id))
+        })
+    }
+
     pub fn remove_machine<M: Machine>(machine_ref: MachineRef<M>) -> M {
         SIM.with(|v| {
             let id = machine_ref.id();

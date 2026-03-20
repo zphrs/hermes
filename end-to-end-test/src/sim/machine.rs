@@ -13,10 +13,11 @@ use tokio::{
     runtime::Runtime,
     sync::mpsc::{self, Receiver, Sender},
     task::{AbortHandle, JoinSet, LocalSet},
+    time::Instant,
 };
 use tracing::instrument;
 
-use crate::host::Result;
+use crate::{host::Result, sim::Sim};
 
 #[derive(Clone)]
 pub struct MachineNic {
@@ -96,6 +97,7 @@ pub struct BasicMachine {
     local: LocalSet,
     js: RefCell<JoinSet<Result>>,
     curr_byte_buf: Bytes,
+    start_time: tokio::time::Instant,
 }
 
 impl BasicMachine {
@@ -109,6 +111,9 @@ impl BasicMachine {
             .build()
             .unwrap();
 
+        // enter runtime here to ensure that the start_time is the start_time of the machine
+        let _guard = rt.enter();
+
         Self {
             nic: MachineNic::new(tx, id),
             id,
@@ -117,7 +122,15 @@ impl BasicMachine {
             local: LocalSet::new(),
             js: Default::default(),
             curr_byte_buf: Default::default(),
+            start_time: Instant::now(),
         }
+    }
+
+    pub fn sys_time(&self) -> std::time::SystemTime {
+        use std::time::SystemTime;
+        SystemTime::UNIX_EPOCH
+            .checked_add(self.start_time.elapsed())
+            .unwrap()
     }
 
     pub fn poll_read_bytes(&self, cx: &mut Context<'_>) -> Poll<Option<bytes::Bytes>> {

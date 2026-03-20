@@ -1,22 +1,19 @@
 use std::{
-    cmp::min,
     collections::HashSet,
     fmt::Debug,
     ops::{Deref, DerefMut},
     sync::Arc,
-    time::Duration,
 };
 
 use futures::{prelude::*, stream::FuturesUnordered};
 // sync is runtime agnostic;
 // see https://docs.rs/tokio/latest/tokio/sync/index.html#runtime-compatibility
-use tokio::sync::{RwLock, RwLockWriteGuard};
-use tracing::{Instrument, instrument, trace, trace_span};
+use tokio::sync::RwLock;
+use tracing::{Instrument, debug, instrument, trace, trace_span};
 
 use crate::{
-    Distance, DistancePair, HasId, Id, RequestHandler, RoutingTable,
+    DistancePair, HasId, Id, RequestHandler,
     node_cache::{MaintnenceLookupAddrs, NodeCache},
-    routing_table,
     traits::HasServerId,
 };
 
@@ -102,7 +99,7 @@ impl<
         Client: MaintnenceLookupAddrs<Client, Node, Cache, ID_LEN>,
     {
         // we always at least start by looking up the node to get a basis of the net around us
-        self.node_lookup(self.local.server_id()).await;
+        self.node_lookup(&self.local.server_id()).await;
         let bootstrap_addrs = self.local.bootstrap_addrs(self.cache.read().await);
         let lookups = FuturesUnordered::new();
         for addr in bootstrap_addrs {
@@ -125,7 +122,7 @@ impl<
             let read_lock = self.cache.read().await;
 
             read_lock
-                .find_removal_candidates(nodes.iter(), &self.handler)
+                .find_removal_candidates(nodes.clone().into_iter(), &self.handler)
                 .await
         };
 
@@ -144,7 +141,11 @@ impl<
         write_lock.add_nodes(nodes);
     }
 
-    pub async fn find_node(&self, from: Option<Node>, id: &Id<ID_LEN>) -> Vec<Node> {
+    pub async fn find_node(&self, from: Option<Node>, id: &Id<ID_LEN>) -> Vec<Node>
+    where
+        Node: Send,
+    {
+        trace!("FINDING NODES");
         let pinned: std::pin::Pin<Box<_>> = Box::pin(async {
             if let Some(from) = from {
                 self.add_node(from.clone()).await;
@@ -162,11 +163,13 @@ impl<
             Vec::from_iter(out.into_iter().map(DistancePair::into_node))
         });
 
-        return pinned.await;
+        let out = pinned.await;
+        trace!(?out);
+
+        return out;
     }
-    #[instrument(level = "trace", skip_all, fields(%id, dst=%id^self.local.server_id()))]
+    #[instrument(level = "debug", skip_all, fields(%id, dst=%id^&self.local.server_id()))]
     pub async fn node_lookup(&self, id: &Id<ID_LEN>) -> Vec<Node> {
-        trace!("nli started");
         let mut closest_nodes: Vec<DistancePair<Node, ID_LEN>> = {
             let mut lock = self.cache.write().await;
             lock.on_node_lookup(id);

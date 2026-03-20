@@ -23,11 +23,13 @@ pub enum Node {
 #[derive(Debug)]
 pub struct MaxSizedVec<T, const N: usize>(arrayvec::ArrayVec<T, N>);
 
-impl<T, const N: usize> Deref for MaxSizedVec<T, N> {
-    type Target = arrayvec::ArrayVec<T, N>;
-
-    fn deref(&self) -> &Self::Target {
+impl<T, const N: usize> MaxSizedVec<T, N> {
+    pub fn inner(&self) -> &arrayvec::ArrayVec<T, N> {
         &self.0
+    }
+
+    pub fn into_inner(self) -> arrayvec::ArrayVec<T, N> {
+        self.0
     }
 }
 

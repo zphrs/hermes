@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
 };
+use tracing::{instrument, trace};
 
 use crate::{DistancePair, HasId, Id, RequestHandler, RoutingTable};
 
@@ -28,20 +29,17 @@ impl<Node: Debug + Eq + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         }
     }
 
-    async fn find_removal_candidates<'a>(
+    async fn find_removal_candidates(
         &self,
-        nodes: impl IntoIterator<Item = &'a Node>,
+        nodes: impl IntoIterator<Item = Node>,
         handler: &impl RequestHandler<Node, Node, ID_LEN>,
-    ) -> Self::CullSet
-    where
-        Node: 'a,
-    {
+    ) -> Self::CullSet {
         let offline_siblings = self
             .table
             .find_dead_siblings_list_nodes(&self.local, handler)
             .await;
         // leading zeroes to distance pair
-        let mut buckets_to_remove_from: HashMap<usize, Vec<&'a Node>> = HashMap::new();
+        let mut buckets_to_remove_from: HashMap<usize, Vec<Node>> = HashMap::new();
         for node in nodes.into_iter() {
             let leading_zeros = node.id().xor_distance(self.local.id()).leading_zeros();
             buckets_to_remove_from
@@ -82,7 +80,10 @@ impl<Node, const ID_LEN: usize, const BUCKET_SIZE: usize> super::NodeCache<Node,
 where
     Node: HasId<ID_LEN> + Debug + Eq + Clone,
 {
+    #[instrument(skip(self, nodes))]
     fn add_nodes(&mut self, nodes: impl IntoIterator<Item = Node>) {
+        trace!("before {:?}", self.table);
+
         let nodes: Vec<_> = nodes
             .into_iter()
             .filter(|v| v.id() != self.local.id())
@@ -92,6 +93,8 @@ where
                 !leaf.contains(&dist_pair)
             })
             .collect();
+
+        trace!(?nodes);
 
         // now if there are any leftover, they are all alive nodes that
         // overflowed the siblings list
@@ -120,6 +123,7 @@ where
                 let _res = leaf.try_insert(pair);
             }
         }
+        trace!("after {:?}", self.table);
     }
 
     fn on_node_lookup(&mut self, id: &Id<ID_LEN>) {

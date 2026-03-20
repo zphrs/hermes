@@ -3,7 +3,6 @@ mod leaf;
 
 use std::cmp::min;
 use std::collections::hash_map;
-use std::num;
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -15,7 +14,9 @@ use thiserror::Error;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use tracing::instrument;
+use tracing::trace;
 
+use crate::BUCKET_SIZE;
 use crate::Id;
 use crate::routing_table::leaf::Leaf;
 use crate::{
@@ -212,7 +213,7 @@ impl<Node: Eq + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: usize>
         to_remove.filter_map(|v| async move { v }).collect().await
     }
 
-    pub async fn remove_siblings_list_nodes(&mut self, to_remove_set: &HashSet<Id<ID_LEN>>) {
+    pub fn remove_siblings_list_nodes(&mut self, to_remove_set: &HashSet<Id<ID_LEN>>) {
         self.nearest_siblings_list = self
             .nearest_siblings_list
             .drain(..)
