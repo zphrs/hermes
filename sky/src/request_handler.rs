@@ -12,7 +12,7 @@ use minicbor::CborLen as _;
 use rpc::{Call, Caller, Client as _, ClientError, Transport};
 use shared_schema::{MaxSizedVec, SkyNode, ping, sky_node::SkyId};
 use tokio::task::JoinSet;
-use tracing::{Instrument as _, trace, trace_span};
+use tracing::{Instrument as _, debug, instrument, trace, trace_span};
 
 use crate::quinn_transport::{self, get_public_ip};
 
@@ -53,6 +53,12 @@ impl From<Vec<SkyNode>> for FindNodesResponse {
         Self {
             sky_nodes: sky_nodes.into_iter().collect(),
         }
+    }
+}
+
+impl From<FindNodesResponse> for Vec<SkyNode> {
+    fn from(res: FindNodesResponse) -> Self {
+        res.sky_nodes.into_inner().into_iter().collect()
     }
 }
 
@@ -97,7 +103,7 @@ impl kademlia::RequestHandler<SkyNode, SkyNode, 32> for KadHandler {
 
         true
     }
-
+    #[instrument(skip(self))]
     async fn find_node(
         &self,
         from: &SkyNode,
@@ -107,6 +113,8 @@ impl kademlia::RequestHandler<SkyNode, SkyNode, 32> for KadHandler {
         let Ok(conn) = self.transport.connect(to).await else {
             return vec![];
         };
+
+        debug!("QUERYINGGG");
 
         let Ok(nodes) = conn
             .query::<FindNodesMethod, RootRequest>(FindNodesRequest {
@@ -122,7 +130,7 @@ impl kademlia::RequestHandler<SkyNode, SkyNode, 32> for KadHandler {
             return vec![];
         };
 
-        todo!()
+        nodes.into()
     }
 }
 
@@ -162,6 +170,7 @@ impl<'a> rpc::Method for FindNodesMethod<'a> {
 }
 
 impl<'a> rpc::Call for FindNodesMethod<'a> {
+    #[instrument(skip(self))]
     async fn call(&mut self, value: Self::Req) -> Result<FindNodesResponse, Infallible> {
         let sky_id: kademlia::Id<32> = value.sky_id.into();
         let owned = value.from.map(Cow::into_owned);
@@ -169,7 +178,10 @@ impl<'a> rpc::Call for FindNodesMethod<'a> {
             let out = self.rpc_manager.find_node(owned, &sky_id).await;
             Ok(out.into())
         });
-        pinned.await
+
+        let out = pinned.await;
+        trace!(?out);
+        out
     }
 }
 
@@ -265,6 +277,7 @@ impl SkyServer {
             .await;
 
         let (handler, tp) = self.into_parts();
+
         loop {
             let incoming_client: quinn_transport::Incoming =
                 tp.accept().await.map_err(ClientError::Transport)?;

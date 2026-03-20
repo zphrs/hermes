@@ -44,7 +44,7 @@ impl HasServerId<SkyNode, 32> for WrappedEarthNode {
     }
 }
 
-fn get_system_time() -> SystemTime {
+pub fn get_system_time() -> SystemTime {
     #[cfg(test)]
     let curr_time = {
         use end_to_end_test::{OsShim, sim::Sim};
