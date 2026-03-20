@@ -84,7 +84,7 @@ struct RpcAdapter {
     num_rpcs: Arc<AtomicUsize>,
 }
 
-impl RequestHandler<Node, Node, ID_LEN> for RpcAdapter {
+impl RequestHandler<Node, ID_LEN> for RpcAdapter {
     #[tracing::instrument(skip_all, fields(from=_from.addr))]
     async fn ping(&self, _from: &Node, to: &Node) -> bool {
         self.num_rpcs.fetch_add(1, Ordering::Relaxed);
@@ -93,7 +93,7 @@ impl RequestHandler<Node, Node, ID_LEN> for RpcAdapter {
         self.network.manager(to).is_some()
     }
 
-    #[tracing::instrument(skip_all, fields(from=?from))]
+    #[tracing::instrument(skip_all, fields(from=from.addr))]
     async fn find_node(&self, from: &Node, to: &Node, id: &Id<ID_LEN>) -> Vec<Node> {
         self.num_rpcs.fetch_add(1, Ordering::Relaxed);
         // tracing::debug!(num_rpcs = self.num_rpcs.load(Ordering::Relaxed));
@@ -101,7 +101,7 @@ impl RequestHandler<Node, Node, ID_LEN> for RpcAdapter {
             return vec![];
         };
         // tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        manager.find_node(from.cloned(), id).await
+        manager.find_node(from.clone(), id).await
     }
 }
 
