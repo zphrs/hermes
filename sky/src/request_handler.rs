@@ -57,8 +57,24 @@ impl From<Vec<SkyNode>> for FindNodesResponse {
 }
 
 #[derive(Clone)]
-struct KadHandler {
+pub struct KadHandler {
     transport: quinn_transport::Transport,
+}
+
+impl From<quinn_transport::Transport> for KadHandler {
+    fn from(transport: quinn_transport::Transport) -> Self {
+        Self { transport }
+    }
+}
+
+impl KadHandler {
+    pub fn new(transport: quinn_transport::Transport) -> Self {
+        Self { transport }
+    }
+
+    pub(crate) fn transport(&self) -> &quinn_transport::Transport {
+        &self.transport
+    }
 }
 
 impl kademlia::RequestHandler<SkyNode, SkyNode, 32> for KadHandler {
@@ -147,12 +163,13 @@ impl<'a> rpc::Method for FindNodesMethod<'a> {
 
 impl<'a> rpc::Call for FindNodesMethod<'a> {
     async fn call(&mut self, value: Self::Req) -> Result<FindNodesResponse, Infallible> {
-        let out: FindNodesResponse = self
-            .rpc_manager
-            .find_node(value.from.map(Cow::into_owned), &value.sky_id.into())
-            .await
-            .into();
-        Ok(out)
+        let sky_id: kademlia::Id<32> = value.sky_id.into();
+        let owned = value.from.map(Cow::into_owned);
+        let pinned: std::pin::Pin<Box<_>> = Box::pin(async {
+            let out = self.rpc_manager.find_node(owned, &sky_id).await;
+            Ok(out.into())
+        });
+        pinned.await
     }
 }
 
@@ -220,6 +237,7 @@ impl SkyServer {
             .await
             .map_err(ClientError::Transport)?;
         let handler = RootHandler::new(&tp).await.unwrap();
+
         Ok(Self {
             handler,
             transport: tp,
@@ -229,7 +247,7 @@ impl SkyServer {
     pub fn into_parts(self) -> (RootHandler<'static>, quinn_transport::Transport) {
         (self.handler, self.transport)
     }
-    pub async fn add_nodes(&self, nodes: impl IntoIterator<Item = SkyNode>) {
+    pub async fn add_nodes(&self, nodes: Vec<SkyNode>) {
         self.handler
             .find_nodes_handler
             .rpc_manager
@@ -251,7 +269,8 @@ impl SkyServer {
             let incoming_client: quinn_transport::Incoming =
                 tp.accept().await.map_err(ClientError::Transport)?;
             let handler = handler.clone();
-            let span = trace_span!("from client", client = %incoming_client.remote_address());
+            let span =
+                trace_span!("from client", client = %incoming_client.inner().remote_address());
             js.spawn( async move {
 
                 let conn = rpc::Incoming::accept(incoming_client)

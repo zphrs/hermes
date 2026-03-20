@@ -344,10 +344,8 @@ impl rpc::Transport for Transport {
     type Incoming = Incoming;
 }
 
-impl Deref for Transport {
-    type Target = quinn::Endpoint;
-
-    fn deref(&self) -> &Self::Target {
+impl Transport {
+    pub fn inner(&self) -> &quinn::Endpoint {
         &self.endpoint
     }
 }
@@ -356,10 +354,8 @@ pub struct Incoming {
     incoming: quinn::Incoming,
 }
 
-impl Deref for Incoming {
-    type Target = quinn::Incoming;
-
-    fn deref(&self) -> &Self::Target {
+impl Incoming {
+    pub fn inner(&self) -> &quinn::Incoming {
         &self.incoming
     }
 }
@@ -420,18 +416,14 @@ pub struct Client {
     conn: quinn::Connection,
 }
 
-impl Deref for Client {
-    type Target = quinn::Connection;
-
-    fn deref(&self) -> &Self::Target {
+impl Client {
+    pub fn inner(&self) -> &quinn::Connection {
         &self.conn
     }
 }
 
-impl Deref for Caller {
-    type Target = quinn::Connection;
-
-    fn deref(&self) -> &Self::Target {
+impl Caller {
+    pub fn inner(&self) -> &quinn::Connection {
         &self.conn
     }
 }
