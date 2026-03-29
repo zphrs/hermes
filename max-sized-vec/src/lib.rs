@@ -2,7 +2,7 @@ use arrayvec::ArrayVec;
 use maxlen::MaxLen;
 use minicbor::{CborLen, Decode};
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct MaxSizedVec<T, const N: usize>(arrayvec::ArrayVec<T, N>);
 
 impl<T, const N: usize> MaxSizedVec<T, N> {
