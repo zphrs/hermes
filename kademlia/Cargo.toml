@@ -7,6 +7,7 @@ rust-version = "1.91"
 [dependencies]
 arrayvec = "0.7.6"
 futures = "0.3.31"
+futures-time = "3.0.1"
 maxlen = { version = "0.1.0", path = "../maxlen", optional = true }
 minicbor = { version = "2.1.3", features = [
     "alloc",

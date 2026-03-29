@@ -17,7 +17,7 @@ pub struct MessageLoss {
 
 impl Default for MessageLoss {
     fn default() -> Self {
-        Self { fail_rate: 0.01 }
+        Self { fail_rate: 0.001 }
     }
 }
 
@@ -57,9 +57,9 @@ impl Latency {
 impl Default for Latency {
     fn default() -> Self {
         Self {
-            min_message_latency: Duration::from_millis(50),
-            max_message_latency: Duration::from_millis(500),
-            latency_distribution: Exp::new(10.0).unwrap(),
+            min_message_latency: Duration::from_millis(10),
+            max_message_latency: Duration::from_millis(1000),
+            latency_distribution: Exp::new(50.0).unwrap(),
         }
     }
 }
@@ -100,14 +100,14 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             // can only buffer 100 outgoing messages at a time on any given socket, otherwise drops msg on floor
-            udp_capacity: 100,
+            udp_capacity: 1000000,
             // can only buffer 100 messages at a time, otherwise drops msg on floor
-            ip_hop_capacity: 100,
+            ip_hop_capacity: 1000000,
             // can only buffer 1000 messages at a time, otherwise reports a WouldBlock error
-            nic_capacity: 100,
+            nic_capacity: 1000000,
             // granularity of tick(), it's necessary to tick to simulate clock skew between
             // hosts
-            tick_amount: Duration::from_millis(10),
+            tick_amount: Duration::from_millis(1),
             latency: Default::default(),
             message_loss: Default::default(),
         }

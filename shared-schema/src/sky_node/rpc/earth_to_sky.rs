@@ -1,7 +1,7 @@
 use crate::{
-    EarthNode, MaxSizedVec, SkyNode,
-    earth_node::{EarthId, candidate::Candidate},
+    earth_node::{candidate::Candidate, EarthId},
     sky_node::rpc::lookup::FindSkyNodeResponse,
+    EarthNode, SkyNode,
 };
 use maxlen::MaxLen;
 
@@ -50,7 +50,8 @@ where
 }
 
 pub mod response {
-    use crate::{EarthNode, MaxSizedVec, SkyNode, earth_node::candidate::Candidate};
+    use crate::{earth_node::candidate::Candidate, EarthNode, SkyNode};
+    use max_sized_vec::MaxSizedVec;
     use maxlen::MaxLen;
 
     #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
@@ -90,7 +91,7 @@ pub enum EarthToSkyResponseValue {
     /// node or this sky node is missing the requested information. Connection
     /// to earth node should be `stopped()` after this message.
     #[n(2)]
-    NearbyEarthNodes(#[n(0)] MaxSizedVec<EarthNode, 20>),
+    NearbyEarthNodes(#[n(0)] max_sized_vec::MaxSizedVec<EarthNode, 20>),
     #[n(3)]
     Redirect(#[n(0)] FindSkyNodeResponse),
 }

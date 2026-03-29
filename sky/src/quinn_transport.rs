@@ -4,8 +4,7 @@ mod skip_server_verification;
 
 #[cfg(test)]
 use end_to_end_test::sim::RNG;
-use quinn::{ConnectionId, ConnectionIdGenerator, EndpointStats};
-use rand::Rng;
+use quinn::EndpointStats;
 
 use skip_server_verification::SkipServerVerification;
 
@@ -13,19 +12,18 @@ use skip_server_verification::SkipServerVerification;
 pub use end_to_end_test::UdpSocket;
 #[cfg(not(test))]
 pub use tokio::net::UdpSocket;
-use tokio::{runtime::Handle, time::sleep_until};
-use tracing::{info, trace, warn};
+use tokio::task::JoinHandle;
+use tracing::{Instrument, debug, instrument};
 
 use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
-    ops::Deref,
     sync::Arc,
     time::Duration,
     u64, usize,
 };
 
-use quinn::{EndpointConfig, Runtime, ServerConfig, VarInt, crypto::rustls::QuicClientConfig};
+use quinn::{EndpointConfig, ServerConfig, VarInt, crypto::rustls::QuicClientConfig};
 use rpc::BiStream;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use shared_schema::{
@@ -105,9 +103,6 @@ mod test_utils {
 
     impl quinn::Runtime for TokioRuntime {
         fn new_timer(&self, i: std::time::Instant) -> std::pin::Pin<Box<dyn quinn::AsyncTimer>> {
-            let sleeping_for = i.saturating_duration_since(self.now());
-
-            trace!("quinn sleeping for {:?}", sleeping_for);
             Box::pin(sleep_until(i.into()))
         }
 
@@ -135,14 +130,35 @@ mod test_utils {
 impl Transport {
     fn transport_config() -> quinn::TransportConfig {
         let mut transport = quinn::TransportConfig::default();
-        transport.max_idle_timeout(Some(VarInt::from(30_000u32).into()));
+        transport.max_idle_timeout(Some(VarInt::from(15_000u32).into()));
+        // transport.max_idle_timeout(None);
+
         transport.send_fairness(false);
         transport
+    }
+
+    fn client_config(keep_alive: bool) -> quinn::ClientConfig {
+        let mut client_config = quinn::ClientConfig::new(Arc::new(
+            QuicClientConfig::try_from(
+                rustls::ClientConfig::builder()
+                    .dangerous()
+                    .with_custom_certificate_verifier(SkipServerVerification::new())
+                    .with_no_client_auth(),
+            )
+            .unwrap(),
+        ));
+        let mut transport = Self::transport_config();
+        if keep_alive {
+            transport.keep_alive_interval(Some(Duration::new(10, 0)));
+        }
+        client_config.transport_config(transport.into());
+        client_config
     }
 
     fn endpoint_config() -> quinn::EndpointConfig {
         #[cfg(test)]
         {
+            use rand::Rng;
             let mut endpoint_config: EndpointConfig = Default::default();
             endpoint_config.rng_seed(Some(RNG.with(|rng| rng.borrow_mut().random())));
             endpoint_config.cid_generator(|| Box::new(test_utils::SeededCidGenerator));
@@ -160,20 +176,14 @@ impl Transport {
         let hashed_id = SkyId::from(public_ip);
 
         let url = hashed_id.to_url();
-
         let cert = rcgen::generate_simple_self_signed(vec![url])?;
         let cert_der = CertificateDer::from(cert.cert);
         let key = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
-        Self::bind_with_cert(
-            vec![cert_der],
-            key.into(),
-            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), PORT),
-        )
-        .await
+        Self::bind_with_cert(vec![cert_der], key.into(), SocketAddr::new(public_ip, PORT)).await
     }
 
     pub async fn client() -> Result<Self, Error> {
-        Self::client_with_keepalive(true).await
+        Self::client_with_keepalive(false).await
     }
 
     pub async fn client_with_keepalive(keepalive: bool) -> Result<Self, Error> {
@@ -202,20 +212,7 @@ impl Transport {
             Arc::new(quinn::TokioRuntime),
         )?;
 
-        let mut client_config = quinn::ClientConfig::new(Arc::new(
-            QuicClientConfig::try_from(
-                rustls::ClientConfig::builder()
-                    .dangerous()
-                    .with_custom_certificate_verifier(SkipServerVerification::new())
-                    .with_no_client_auth(),
-            )
-            .unwrap(),
-        ));
-        let mut transport = Self::transport_config();
-        if keepalive {
-            transport.keep_alive_interval(Some(Duration::new(10, 0)));
-        }
-        client_config.transport_config(transport.into());
+        let client_config = Self::client_config(keepalive);
         endpoint.set_default_client_config(client_config);
         Ok(Self {
             endpoint,
@@ -251,7 +248,7 @@ impl Transport {
 
         server_config.transport_config(transport.into());
         let endpoint_config = Self::endpoint_config();
-        let endpoint = quinn::Endpoint::new_with_abstract_socket(
+        let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
             endpoint_config,
             Some(server_config),
             abstract_sock,
@@ -260,7 +257,8 @@ impl Transport {
             #[cfg(not(test))]
             Arc::new(quinn::TokioRuntime),
         )?;
-        info!("hosting on {:?}", endpoint.local_addr());
+        endpoint.set_default_client_config(Self::client_config(false));
+
         Ok(Self {
             endpoint,
             open_conns: Default::default(),
@@ -292,43 +290,62 @@ impl rpc::Transport for Transport {
     type Error = Error;
 
     type Caller = Caller;
+    #[instrument(skip(self))]
+    async fn connect(&self, to: &Self::Address) -> Result<Self::Caller, Self::Error> {
+        let cloned_self = self.clone();
+        let to = to.clone();
+        let mut read_lock = cloned_self.open_conns.clone().read_owned().await;
+        if let Some(conn_mutex) = read_lock.get(&to.socket_address()) {
+            let mut conn_lock = conn_mutex.lock().await;
+            if let Some(conn) = &*conn_lock {
+                if conn.close_reason().is_none() {
+                    debug!("reusing connection");
 
-    fn connect(
-        &self,
-        to: &Self::Address,
-    ) -> impl Future<Output = Result<Self::Caller, Self::Error>> + Send {
-        async {
-            let mut read_lock = self.open_conns.read().await;
-            let maybe_conn_mutex = read_lock.get(&to.socket_address());
-            if let Some(conn_mutex) = maybe_conn_mutex {
-                let conn = conn_mutex.lock().await;
-                if let Some(conn) = &*conn
-                    && conn.close_reason().is_none()
-                {
                     return Ok(conn.clone().into());
+                } else {
+                    *conn_lock = None;
                 }
             }
-
-            // now we need to hold lock on open_conns[to.socket_address()] so we only init a conn once
-            let conn_mutex = match maybe_conn_mutex {
-                Some(m) => m,
-                None => {
-                    // implicit maybe_conn_mutex drop
-                    drop(read_lock);
-                    let mut write_lock = self.open_conns.write().await;
-                    write_lock.insert(to.socket_address(), Default::default());
-                    read_lock = tokio::sync::RwLockWriteGuard::downgrade(write_lock);
-                    read_lock.get(&to.socket_address()).unwrap()
-                }
-            };
-
-            let mut conn_lock = conn_mutex.lock().await;
-
-            let url = to.sky_id().to_url();
-            let new_conn = self.endpoint.connect(to.socket_address(), &url)?.await?;
-            *conn_lock = Some(new_conn.clone());
-            Ok(new_conn.into())
         }
+        let jh: JoinHandle<Result<Self::Caller, Self::Error>> = tokio::spawn(
+            async move {
+                // now we need to get a lock on open_conns[to.socket_address()] so we only init a conn once
+                let conn_mutex = match read_lock.get(&to.socket_address()) {
+                    Some(m) => m,
+                    None => {
+                        // implicit maybe_conn_mutex drop
+                        drop(read_lock);
+                        debug!("opening a connection with {to:?}");
+                        let mut write_lock = cloned_self.open_conns.write_owned().await;
+                        debug!("got write lock");
+
+                        // theoretically someone could have filled it because we dropped the read lock
+                        // momentarily
+                        write_lock.entry(to.socket_address()).or_default();
+                        read_lock = tokio::sync::OwnedRwLockWriteGuard::downgrade(write_lock);
+                        read_lock.get(&to.socket_address()).unwrap()
+                    }
+                };
+
+                let mut conn_lock = conn_mutex.lock().await;
+                // someone could have beaten us here
+                if let Some(conn) = &*conn_lock {
+                    return Ok(conn.clone().into());
+                }
+                debug!("creating new connection");
+
+                let url = to.sky_id().to_url();
+                let new_conn = cloned_self
+                    .endpoint
+                    .connect(to.socket_address(), &url)?
+                    .await?;
+                *conn_lock = Some(new_conn.clone());
+                Ok(new_conn.into())
+            }
+            .instrument(tracing::span::Span::current()),
+        );
+
+        Ok(jh.await.unwrap()?)
     }
 
     type Client = Client;
@@ -388,7 +405,7 @@ pub struct Caller {
 
 impl rpc::Close for Caller {
     async fn close(self) {
-        self.conn.close(VarInt::from_u32(0), b"");
+        self.conn.close(VarInt::from_u32(10), b"");
     }
 }
 
@@ -449,7 +466,7 @@ impl rpc::Client for Client {
 
 impl rpc::Close for Client {
     async fn close(self) {
-        self.conn.close(VarInt::from_u32(0), b"");
+        self.conn.close(VarInt::from_u32(20), b"");
     }
 }
 
@@ -481,7 +498,9 @@ mod tests {
         ) -> Result<rpc::ReplyReceipt, rpc::ClientError<TransportError, Self::Error>> {
             trace!("Handling client");
             let res = ping::Method.call(root).await?;
-            let out = replier.reply(res).await?;
+            let out = replier
+                .reply::<_, _, shared_schema::ping::Method>(res)
+                .await?;
             trace!("finished handling client");
             Ok(out)
         }

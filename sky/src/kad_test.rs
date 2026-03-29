@@ -1,19 +1,20 @@
-use kademlia::HasId as _;
-use std::time::{Duration, SystemTime};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use end_to_end_test::{
     Host, OsShim,
     net::ip,
     sim::{MachineRef, Sim},
 };
-use rpc::{Caller, Transport as _};
+
+use kademlia::HasId;
+
+use rand::seq::SliceRandom;
 use shared_schema::{EarthNode, SkyNode, earth_node::EarthId};
+use tracing::{Instrument, info, info_span, trace};
 
 use crate::{
-    client::{KadClient, get_system_time},
-    quinn_transport::Transport,
-    request_handler::{FindNodesMethod, RootHandler, RootRequest, SkyServer},
-    tokio_uptime,
+    client::SkyClient, get_system_time::since_epoch, quinn_transport::Transport,
+    request_handler::SkyServer, tokio_uptime,
 };
 
 #[test]
@@ -27,167 +28,178 @@ fn kad() {
             .with_test_writer()
             .with_timer(tokio_uptime::tokio_uptime())
             .with_env_filter(
-                "sky=debug,kademlia=trace,shared_schema=debug,end_to_end_test=warn,rpc=warn",
+                "sky=info,kademlia=debug,shared_schema=debug,end_to_end_test=info,rpc[{addr=\"92.168.0.140\"}]=debug",
             )
             .init();
         let net = Sim::add_machine(ip::Network::new());
-        let bootstrap = new_node(net, vec![]);
 
-        let bootstrap_addr = bootstrap.get().borrow().public_ip().unwrap();
-
-        let mut servers: Vec<_> = (0..100)
-            .map(|_| new_node(net, vec![bootstrap_addr.into()]))
-            .collect();
-
-        servers.push(bootstrap);
-
-        let client = OsShim::new(Host::new(move || {
-            let servers = servers.clone();
-            async move {
-                let tp = Transport::client().await?;
-                tokio::time::sleep(Duration::from_secs(200)).await;
-                tokio::time::advance(Duration::from_mins(10000)).await;
-                // choose 1/10 of the servers
-                let server_addrs: Vec<SkyNode> = servers
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| i % 10 == 0)
-                    .filter_map(|(_, s)| s.get().borrow().public_ip())
-                    .map(|addr| SkyNode::from(addr))
-                    .collect();
-                let kad_client = KadClient::new(EarthNode::new(EarthId::ZERO), server_addrs, tp);
-                let mut res = kad_client.node_lookup(EarthId::ZERO).await;
-                let earth_server_id: kademlia::Id<32> = EarthId::ZERO
-                    .to_sky_id(
-                        get_system_time()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .unwrap(),
-                    )
-                    .into();
-                res.sort_by_key(|n| n.id() ^ &earth_server_id);
-                expect_test::expect![[r#"
-                    [
-                        SkyNode {
-                            address: 192.168.0.42,
-                            id: Id(
-                                D4F919569577E03F
-                                E7C99582D8A999CF
-                                A11F32482DFB2359
-                                9B43DAC116E5C8AC,
-                            ),
-                        },
-                        SkyNode {
-                            address: 192.168.0.62,
-                            id: Id(
-                                DBF83026CED2044D
-                                93FFB63BCCC5D41A
-                                06BF8E28E463AECC
-                                2683121E43FF786E,
-                            ),
-                        },
-                        SkyNode {
-                            address: 192.168.0.92,
-                            id: Id(
-                                DBBDBD8F5E7F8DFA
-                                3DE5C5C391105B47
-                                6264CC97A4E26059
-                                E575190106F1360A,
-                            ),
-                        },
-                        SkyNode {
-                            address: 192.168.0.2,
-                            id: Id(
-                                89F837189AD27E2A
-                                A809A00AD5C22757
-                                5F70C91C384DBB1E
-                                43BC297F926EA707,
-                            ),
-                        },
-                        SkyNode {
-                            address: 192.168.0.22,
-                            id: Id(
-                                8C239005AACD4269
-                                9C45FCD33B873A7A
-                                4F334F7065120A02
-                                55DF28C01075FA79,
-                            ),
-                        },
-                        SkyNode {
-                            address: 192.168.0.72,
-                            id: Id(
-                                7E72D6270DD0A27E
-                                388F2C8D569DBC8B
-                                A02CAFDCD3F32306
-                                248A13AF228B1C3A,
-                            ),
-                        },
-                        SkyNode {
-                            address: 192.168.0.1,
-                            id: Id(
-                                65B6B02D8CB9CA36
-                                2E22849EABDF63E1
-                                6BF5590C1562BAD2
-                                BF87106BF35002CD,
-                            ),
-                        },
-                        SkyNode {
-                            address: 192.168.0.32,
-                            id: Id(
-                                6CFD1B448ACC1F12
-                                06E801C03C22B0D0
-                                E4D9B433EA8E1644
-                                1F9BFBC0B83F4D1F,
-                            ),
-                        },
-                        SkyNode {
-                            address: 192.168.0.82,
-                            id: Id(
-                                54DF240288936334
-                                14F3D4C1B8E45F64
-                                1D03019DC5E645E2
-                                885E18A9CCE0C2CA,
-                            ),
-                        },
-                        SkyNode {
-                            address: 192.168.0.52,
-                            id: Id(
-                                3D92CACEAE3ADA33
-                                052F39387234921E
-                                89EE2E041E3CD9EA
-                                DE17FC9C6D95250D,
-                            ),
-                        },
-                        SkyNode {
-                            address: 192.168.0.12,
-                            id: Id(
-                                24717EC09AD8A44A
-                                F954610BF0D98092
-                                464EFBBB1E59AF97
-                                B641EE108E1A7DD5,
-                            ),
-                        },
-                    ]
-                "#]]
-                .assert_debug_eq(&res);
-                Ok(())
+        trace!("bootstrapped first node");
+        let num_inited = Rc::new(RefCell::new(0));
+        let mut bootstrap_servers: Vec<MachineRef<OsShim>> = vec![];
+        let mut machine_addresses: Vec<SkyNode> = vec![];
+        // join servers in 10 rounds of 2^i
+        let mut spawned_so_far = 0;
+        for i in 0..10 {
+            let round_size = 2usize.pow(i);
+            let mut prev_bootstrap_addresses = machine_addresses.clone();
+            for j in 0..round_size {
+                let (sample_of_machine_addresses, _) =
+                    prev_bootstrap_addresses.partial_shuffle(&mut rand::rng(), 10);
+                let new_server = create_sky_node(
+                    net,
+                    sample_of_machine_addresses.into(),
+                    spawned_so_far,
+                    num_inited.clone(),
+                );
+                let addr = new_server.get().borrow().public_ip().unwrap();
+                machine_addresses.push(addr.into());
+                bootstrap_servers.push(new_server);
             }
-        }));
-        let addr = client.get().borrow().connect_to_net(net);
-        client.get().borrow().set_public_ip(addr);
-        let idle_list = [client];
-        Sim::run_until_idle(|| idle_list.iter()).unwrap();
+            spawned_so_far += round_size;
+        }
+
+        let (sample_of_servers, _) =
+            bootstrap_servers.partial_shuffle(&mut rand::rng(), 10);
+
+        let client1 = create_client(
+            net,
+            sample_of_servers.into(),
+            machine_addresses.clone(),
+            EarthId::ZERO,
+            num_inited.clone(),
+        );
+        let client2 = create_client(
+            net,
+            sample_of_servers.into(),
+            machine_addresses,
+            EarthId::from_array([128u8; 32]),
+            num_inited,
+        );
+        trace!("spawned {spawned_so_far} nodes");
+        let idle_list = [client1, client2];
+
+        match Sim::run_until_idle(|| idle_list.iter()) {
+            Ok(_) => {}
+            Err(e) => {
+                println!("{e}");
+                panic!()
+            }
+        }
     })
 }
 
-fn new_node(net: MachineRef<ip::Network>, bootstrap_nodes: Vec<SkyNode>) -> MachineRef<OsShim> {
-    let node = OsShim::new(Host::new(move || {
-        let nodes = bootstrap_nodes.clone();
+fn create_client(
+    net: MachineRef<ip::Network>,
+    servers: Vec<MachineRef<OsShim>>,
+    all_server_addrs: Vec<SkyNode>,
+    nearby: EarthId,
+    num_inited: Rc<RefCell<usize>>,
+) -> MachineRef<OsShim> {
+    let client = OsShim::new(Host::new(move || {
+        let servers = servers.clone();
+        let nearby = nearby.clone();
+        let all_server_addrs = all_server_addrs.clone();
+        let num_inited = num_inited.clone();
         async move {
-            let server = SkyServer::new().await?;
-            server.add_nodes(nodes).await;
-            server.run().await?;
+            trace!("running client");
+            let tp = Transport::client().await?;
+            while *num_inited.borrow() < all_server_addrs.len() {
+                tokio::time::sleep(Duration::from_secs(100)).await;
+                info!(
+                    "{}/{} spawned!",
+                    *num_inited.borrow(),
+                    all_server_addrs.len()
+                )
+            }
+            // make sure there's time for nodes to refresh their buckets
+            info!("All spawned! sleeping for a bit");
+            tokio::time::sleep(Duration::from_secs(60 * 11)).await;
+            info!("Finished sleeping");
+
+            let server_addrs: Vec<SkyNode> = servers
+                .iter()
+                .enumerate()
+                .filter_map(|(_, s)| s.get().borrow().public_ip())
+                .map(|addr| SkyNode::from(addr))
+                .collect();
+
+            let sky_client = SkyClient::new(server_addrs);
+
+            let nearby_sky_id = nearby.to_sky_id(since_epoch()).into();
+            let span = info_span!("client_lookup");
+            let res = tokio::time::timeout(
+                Duration::from_secs(30),
+                sky_client
+                    .node_lookup(
+                        tp,
+                        EarthNode::new(EarthId::ZERO).into(),
+                        nearby.to_sky_id(since_epoch()),
+                    )
+                    .instrument(span),
+            )
+            .await
+            .unwrap();
+
+            info!("client lookup");
+
+            let mut all_server_addrs: Vec<_> = all_server_addrs
+                .into_iter()
+                .map(|n| (n.id().xor_distance(&nearby_sky_id), n))
+                .collect();
+
+            let mut res: Vec<_> = res
+                .into_iter()
+                .map(|n| (n.id().xor_distance(&nearby_sky_id), n))
+                .collect();
+
+            all_server_addrs.sort_by_key(|v| v.0.clone());
+            res.sort_by_key(|v| v.0.clone());
+            let comp_len = res.len().min(10);
+
+            assert_eq!(&res[..comp_len], &all_server_addrs[..comp_len]);
 
             Ok(())
+        }
+    }));
+    let addr = client.get().borrow().connect_to_net(net);
+    client.get().borrow().set_public_ip(addr);
+    client
+}
+
+fn create_sky_node(
+    net: MachineRef<ip::Network>,
+    bootstrap_nodes: Vec<SkyNode>,
+    offset: usize,
+    num_inited: Rc<RefCell<usize>>,
+) -> MachineRef<OsShim> {
+    let node = OsShim::new(Host::new(move || {
+        let nodes = bootstrap_nodes.clone();
+        let num_inited = num_inited.clone();
+        async move {
+            let span = info_span!(
+                "sky node",
+                addr = %Sim::get_current_machine::<OsShim>()
+                    .borrow()
+                    .public_ip()
+                    .unwrap()
+            );
+            async {
+                let server = SkyServer::new().await?;
+                let jh = server.run();
+                while *num_inited.borrow() < offset {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                }
+                tokio::time::sleep(Duration::from_secs(rand::random_range(0..10))).await;
+                server.add_nodes(nodes).await;
+                server.bootstrap().await;
+                tracing::info!("ready for client");
+                *num_inited.borrow_mut() += 1;
+
+                jh.await.unwrap()?;
+                Ok(())
+            }
+            .instrument(span)
+            .await
         }
     }));
     let addr = node.get().borrow().connect_to_net(net);

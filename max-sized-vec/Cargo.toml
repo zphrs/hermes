@@ -1,0 +1,9 @@
+[package]
+name = "max-sized-vec"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arrayvec = "0.7.6"
+maxlen = { version = "0.1.0", path = "../maxlen" }
+minicbor = "2.2.1"

@@ -1,186 +1,194 @@
-use rpc::Caller as _;
-use std::time::{Duration, SystemTime};
-
-use kademlia::{
-    HasServerId, RpcManager,
-    node_cache::{Cullable, NodeCache},
+use std::{
+    borrow::Cow,
+    time::{Duration, UNIX_EPOCH},
 };
-use rpc::Transport;
-use shared_schema::{EarthNode, SkyNode, earth_node::EarthId, sky_node::SkyId};
-use tracing::{debug, trace, warn};
+
+use kademlia::HasId;
+use rpc::{Caller, Transport};
+use shared_schema::{EarthNode, SkyNode, sky_node::SkyId};
+use tracing::{debug, instrument, warn};
 
 use crate::{
+    get_system_time::get_system_time,
     quinn_transport,
-    request_handler::{FindNodesMethod, FindNodesRequest, KadHandler, RootRequest},
+    request_handler::{self, FindNodesRequest, RootRequest},
 };
-#[derive(Clone)]
-struct WrappedEarthNode {
-    inner: EarthNode,
+
+pub struct SkyClient {
+    bootstrap_nodes: Vec<SkyNode>,
 }
 
-impl From<EarthNode> for WrappedEarthNode {
-    fn from(inner: EarthNode) -> Self {
-        Self { inner }
+struct Handler {
+    transport: quinn_transport::Transport,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SkyOrEarth {
+    Sky(SkyNode),
+    Earth(EarthNode),
+}
+
+#[derive(Clone, Debug, Eq)]
+pub struct SkyOrEarthNode {
+    id: kademlia::Id<32>,
+    inner: SkyOrEarth,
+}
+
+impl From<SkyNode> for SkyOrEarthNode {
+    fn from(value: SkyNode) -> Self {
+        Self::sky(value)
     }
 }
 
-impl WrappedEarthNode {
-    pub fn new(inner: EarthNode) -> Self {
-        Self { inner }
-    }
-
-    pub fn into_inner(self) -> EarthNode {
-        self.inner
+impl From<EarthNode> for SkyOrEarthNode {
+    fn from(value: EarthNode) -> Self {
+        Self::earth(value)
     }
 }
 
-impl HasServerId<SkyNode, 32> for WrappedEarthNode {
-    fn server_id(&self) -> kademlia::Id<32> {
-        let curr_time = get_system_time();
-        let since_epoch = curr_time
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO);
-        self.inner.earth_id().to_sky_id(since_epoch).into()
+impl PartialEq for SkyOrEarthNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
     }
 }
 
-pub fn get_system_time() -> SystemTime {
-    #[cfg(test)]
-    let curr_time = {
-        use end_to_end_test::{OsShim, sim::Sim};
-
-        if Sim::is_in_machine_type::<OsShim>() {
-            use end_to_end_test::Machine;
-
-            let shim = Sim::get_current_machine::<OsShim>();
-            let systime = shim.borrow().basic_machine().sys_time();
-            debug!(?systime);
-            systime
-        } else {
-            panic!()
-        }
-    };
-    #[cfg(not(test))]
-    let curr_time = {
-        use std::time::SystemTime;
-        SystemTime::now()
-    };
-    curr_time
-}
-
-pub struct KadClient {
-    manager: RpcManager<WrappedEarthNode, SkyNode, KadHandler, Cache, 32, 20>,
-}
-
-impl KadClient {
-    pub fn new(local: EarthNode, bootstraps: Vec<SkyNode>, tp: quinn_transport::Transport) -> Self {
-        let handler: KadHandler = tp.into();
-        let cache = Cache { bootstraps };
+impl SkyOrEarthNode {
+    pub fn sky(sky: SkyNode) -> Self {
         Self {
-            manager: RpcManager::new(handler, WrappedEarthNode { inner: local }, cache),
+            id: sky.id().clone(),
+            inner: SkyOrEarth::Sky(sky),
+        }
+    }
+    pub fn earth(earth: EarthNode) -> Self {
+        let id = earth
+            .earth_id()
+            .to_sky_id(get_system_time().duration_since(UNIX_EPOCH).unwrap());
+        Self {
+            id: id.into(),
+            inner: SkyOrEarth::Earth(earth),
         }
     }
 
-    pub async fn node_lookup(&self, near: EarthId) -> Vec<SkyNode> {
-        let sky_id = near.to_sky_id(
-            get_system_time()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap(),
-        );
-        debug!("nli for {:?} (sky equiv: {})", near, sky_id);
-        self.manager.node_lookup(&sky_id.into()).await
+    pub fn as_sky(&self) -> Option<&SkyNode> {
+        match &self.inner {
+            SkyOrEarth::Sky(sky_node) => Some(sky_node),
+            _ => None,
+        }
+    }
+
+    pub fn as_earth(&self) -> Option<&EarthNode> {
+        match &self.inner {
+            SkyOrEarth::Earth(earth) => Some(earth),
+            _ => None,
+        }
+    }
+
+    pub fn into_sky(self) -> Option<SkyNode> {
+        match self.inner {
+            SkyOrEarth::Sky(sky) => Some(sky),
+            _ => None,
+        }
     }
 }
 
-// for now simply store the bootstrap list, eventually should query
-// for the bootstraps
-struct Cache {
-    bootstraps: Vec<SkyNode>,
-}
-
-impl Cache {
-    pub fn new(bootstraps: Vec<SkyNode>) -> Self {
-        Self { bootstraps }
+impl HasId<32> for SkyOrEarthNode {
+    fn id(&self) -> &kademlia::Id<32> {
+        &self.id
     }
 }
 
-impl Cullable<WrappedEarthNode, SkyNode, 32> for Cache {
-    type CullSet = ();
+impl kademlia::RequestHandler<SkyOrEarthNode, 32> for Handler {
+    #[instrument(skip(self))]
+    async fn ping(&self, _from: &SkyOrEarthNode, node: &SkyOrEarthNode) -> bool {
+        debug!("pinging");
+        let Some(sky_node) = node.as_sky() else {
+            warn!("earth lookup");
+            return false; // this is a client for the sky, doesn't make sense to ping an earth node
+        };
+        let Ok(conn) = self.transport.connect(sky_node).await else {
+            return false;
+        };
 
-    async fn find_removal_candidates(
-        &self,
-        _nodes: impl Iterator<Item = SkyNode>,
-        _handler: &impl kademlia::RequestHandler<WrappedEarthNode, SkyNode, 32>,
-    ) -> Self::CullSet {
-        warn!("actually return dead sky nodes here!");
-        ()
-    }
-
-    fn remove_candidates(&mut self, _candidates: Self::CullSet) {
-        warn!("actually return dead sky nodes here!");
-        ()
-    }
-}
-
-impl NodeCache<WrappedEarthNode, SkyNode, 32> for Cache {
-    fn add_nodes(&mut self, _nodes: impl IntoIterator<Item = SkyNode>) {
-        warn!("no-op: should eventually have this store nodes uniformly throughout the hash space")
-    }
-
-    fn nearby_nodes<'a>(&'a self, _address: &kademlia::Id<32>) -> impl Iterator<Item = &'a SkyNode>
-    where
-        SkyNode: 'a,
-    {
-        self.bootstraps.iter()
-    }
-}
-
-impl kademlia::RequestHandler<WrappedEarthNode, SkyNode, 32> for KadHandler {
-    async fn ping(&self, from: &WrappedEarthNode, node: &SkyNode) -> bool {
-        if node.last_reached_at().elapsed() < Duration::from_secs(120) {
+        if let Ok(_v) = conn
+            .query::<shared_schema::ping::Method, crate::request_handler::RootRequest>(
+                shared_schema::ping::Request,
+            )
+            .await
+        {
             return true;
         }
-        let Ok(conn) = self.transport().connect(node).await else {
-            trace!("failed to ping {node:?}");
-            return false;
-        };
-
-        let Ok(_) = conn
-            .query::<shared_schema::ping::Method, RootRequest>(shared_schema::ping::Request)
-            .await
-        else {
-            trace!("failed to ping {node:?}");
-            return false;
-        };
-
-        true
+        return false;
     }
-
+    #[instrument(skip(self))]
     async fn find_node(
         &self,
-        _from: &WrappedEarthNode,
-        to: &SkyNode,
+        from: &SkyOrEarthNode,
+        to: &SkyOrEarthNode,
         address: &kademlia::Id<32>,
-    ) -> Vec<SkyNode> {
-        let Ok(conn) = self.transport().connect(to).await else {
-            return vec![];
+    ) -> Vec<SkyOrEarthNode> {
+        debug!("finding node");
+        let Some(to) = to.as_sky() else {
+            return vec![]; // this is a client for the sky, doesn't make sense to find through earth nodes
         };
 
-        let Ok(nodes) = conn
-            .query::<FindNodesMethod, RootRequest>(FindNodesRequest {
-                sky_id: unsafe {
-                    // SAFETY: We're only querying for sky nodes using RpcManager.
-                    // Node lookup requests from earth node space are converted before
-                    // being sent into RpcManager.
-                    SkyId::from_kademlia_id_unchecked(address.clone())
-                },
-                from: None,
+        let Ok(conn) = self.transport.connect(to).await else {
+            return vec![]; // unreachable
+        };
+
+        let Ok(v): Result<
+            request_handler::FindNodesResponse,
+            rpc::CallerError<quinn_transport::Error>,
+        > = conn
+            .query::<request_handler::FindNodesMethod, RootRequest>(FindNodesRequest {
+                sky_id: unsafe { SkyId::from_kademlia_id_unchecked(address.clone()) },
+                from: from.as_sky().map(Cow::Borrowed),
             })
             .await
         else {
             return vec![];
         };
+        v.into_inner()
+            .into_iter()
+            .map(SkyOrEarthNode::sky)
+            .collect()
+    }
+}
 
-        nodes.sky_nodes.into_inner().into_iter().collect()
+impl SkyClient {
+    pub fn new(bootstrap_nodes: Vec<SkyNode>) -> Self {
+        Self { bootstrap_nodes }
+    }
+
+    /// searches net for the node closest to id
+    pub async fn node_lookup(
+        &self,
+        tp: quinn_transport::Transport,
+        from: SkyOrEarthNode,
+        id: SkyId,
+    ) -> Vec<SkyNode> {
+        debug!("looking up node");
+        let table =
+            kademlia::RpcManager::<SkyOrEarthNode, _, 32, 20>::new(Handler { transport: tp }, from);
+        table
+            .add_nodes(
+                self.bootstrap_nodes
+                    .iter()
+                    .cloned()
+                    .map(SkyOrEarthNode::sky),
+            )
+            .await;
+
+        let out = table
+            .node_lookup(&id.into())
+            .await
+            .into_iter()
+            .map(|v| v.into_sky())
+            .filter_map(|v| v)
+            .collect();
+
+        warn!(
+            "should add back to the bootstrap_nodes list at some point based on the kademlia dump of nodes"
+        );
+
+        out
     }
 }

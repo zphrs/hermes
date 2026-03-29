@@ -12,7 +12,6 @@ fn fill_bytes(buf: &mut [u8]) -> std::result::Result<(), getrandom::Error> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
 
     #[test]
     fn test_fill_bytes() {

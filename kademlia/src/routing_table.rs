@@ -4,7 +4,7 @@ mod leaf;
 use std::cmp::min;
 use std::collections::hash_map;
 use std::sync::LazyLock;
-use std::time::Instant;
+use tokio::time::Instant;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -34,7 +34,7 @@ pub struct RoutingTable<Node: HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_S
     // because of the likelihood of having poor rotating codes
     nearest_siblings_list: Vec<id::DistancePair<Node, ID_LEN>>,
     // when each bucket has last been looked_up
-    bucket_updated_at: HashMap<usize, Instant>,
+    bucket_updated_at: HashMap<usize, tokio::time::Instant>,
 }
 #[derive(Debug, Error)]
 pub enum Error<Node, const ID_LEN: usize> {
@@ -139,7 +139,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         self.bucket_updated_at
             .iter()
             .filter(|(_, at)| {
-                std::time::Instant::now().duration_since(**at) < *duration
+                tokio::time::Instant::now().duration_since(**at) < *duration
                     || **at == *STARTUP_INSTANT
             })
             .map(|(idx, _)| *idx)
@@ -188,7 +188,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     fn bucket_entry<'a>(
         bucket_updated_at: &'a mut HashMap<usize, Instant>,
         distance: &Distance<ID_LEN>,
-    ) -> hash_map::Entry<'a, usize, std::time::Instant> {
+    ) -> hash_map::Entry<'a, usize, tokio::time::Instant> {
         bucket_updated_at.entry(Self::bucket_id(distance))
     }
 
@@ -196,11 +196,11 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         bucket_updated_at_entry!(self, distance).insert_entry(Instant::now());
     }
 
-    pub async fn remove_unreachable_siblings_list_nodes(
-        &mut self,
+    pub async fn get_unreachable_siblings_list_nodes(
+        &self,
         local_node: &Node,
         handler: &impl RequestHandler<Node, ID_LEN>,
-    ) {
+    ) -> HashSet<id::Id<ID_LEN>> {
         // Ping all nodes concurrently and collect the ones that respond.
         let mut to_remove_set = HashSet::new();
         {
@@ -222,7 +222,13 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
                 }
             }
         }
+        to_remove_set
+    }
 
+    pub fn remove_unreachable_siblings_list_nodes(
+        &mut self,
+        to_remove_set: HashSet<id::Id<ID_LEN>>,
+    ) {
         self.nearest_siblings_list = self
             .nearest_siblings_list
             .drain(..)
@@ -274,7 +280,7 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 #[cfg(test)]
 mod tests {
     use expect_test::expect;
-    use tracing::trace;
+    use tracing::{debug, trace};
     use tracing_test::traced_test;
 
     use crate::{HasId, RoutingTable, node::Node};
@@ -333,6 +339,6 @@ mod tests {
             ]
         "#]]
         .assert_debug_eq(table.sibling_list());
-        trace!("{:#?}", table.sibling_list());
+        debug!("{:#?}", table.sibling_list());
     }
 }

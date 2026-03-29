@@ -5,9 +5,9 @@ mod example;
 use futures_io::{AsyncRead, AsyncWrite};
 
 use maxlen::MaxLen;
-use minicbor::{Decode, Encode};
+use minicbor::{CborLen, Decode, Encode};
 use minicbor_io::AsyncWriter;
-use tracing::{trace, warn};
+use tracing::debug;
 
 pub trait RpcMessage: Debug + for<'a> Decode<'a, ()> + Encode<()> + maxlen::MaxLen {}
 
@@ -44,7 +44,7 @@ pub trait Call: Method {
                 .call(request)
                 .await
                 .map_err(|e| crate::ClientError::App(Error::from(e)))?;
-            replier.reply(res).await
+            replier.reply::<_, _, Self>(res).await
         }
     }
 }
@@ -136,28 +136,32 @@ pub trait Caller: Send + Sync + BiStream + Sized {
         &self,
     ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> + Send;
 
-    fn query<M: Method, Root: RpcMessage + From<M::Req> + Send>(
+    fn query<M: Method, Root: RpcMessage + From<M::Req> + Send + Debug>(
         &self,
         req: M::Req,
     ) -> impl Future<Output = Result<M::Res, CallerError<Self::Error>>> + Send {
         async {
             let (write, read) = self.open_stream().await.map_err(CallerError::Transport)?;
+            debug!("sending query");
+
             {
                 let root = Root::from(req);
                 let mut sender = minicbor_io::AsyncWriter::new(write);
-
                 sender.write(root).await.map_err(RpcError::from)?;
                 // drops write here to indicate no more writes will occur
             }
-            trace!("sent query");
+            debug!("sent query");
 
             let mut receiver = minicbor_io::AsyncReader::new(read);
+
             receiver.set_max_len(<M::Res as MaxLen>::max_len() as u32);
-            Ok(receiver
+            let out = receiver
                 .read::<M::Res>()
                 .await
                 .map_err(RpcError::from)?
-                .ok_or(RpcError::Closed)?)
+                .ok_or(RpcError::Closed)?;
+            debug!("received message");
+            Ok(out)
         }
     }
 
@@ -170,6 +174,7 @@ pub trait Caller: Send + Sync + BiStream + Sized {
             let (mut write, read) = self.open_stream().await.map_err(CallerError::Transport)?;
 
             let root = Root::from(req);
+            assert!(root.cbor_len(&mut ()) <= Root::max_len());
             let mut sender = minicbor_io::AsyncWriter::new(&mut write);
             sender.write(root).await.map_err(RpcError::from)?;
             Ok(InitializedMessageStream::new((write, read).into()))
@@ -222,6 +227,15 @@ pub enum ClientError<T, E> {
     App(#[from] E),
 }
 
+impl<T, E> ClientError<T, E> {
+    pub fn from_caller(err: CallerError<T>) -> Self {
+        match err {
+            CallerError::Rpc(rpc_error) => Self::Rpc(rpc_error),
+            CallerError::Transport(t) => Self::Transport(t),
+        }
+    }
+}
+
 pub trait Client: Send + Sync + BiStream {
     type Error: Send;
     fn accept_stream(
@@ -239,6 +253,7 @@ pub trait Client: Send + Sync + BiStream {
         async move {
             let (write, read) = self.accept_stream().await.map_err(ClientError::Transport)?;
             let mut receiver = minicbor_io::AsyncReader::new(read);
+
             receiver.set_max_len(Root::max_len() as u32);
 
             let Some(root) = receiver
@@ -311,12 +326,13 @@ impl<'a, T: AsyncWrite + Unpin + Send + Sync> Replier<'a, T> {
     pub(crate) fn new(client: &'a mut minicbor_io::AsyncWriter<T>) -> Self {
         Self { client }
     }
-    pub fn reply<TransportError, Error>(
+    pub fn reply<TransportError, Error, M: Method + ?Sized>(
         self,
-        res: impl Encode<()> + Send,
+        res: impl Encode<()> + CborLen<()> + Send,
     ) -> impl Future<Output = Result<ReplyReceipt, crate::ClientError<TransportError, Error>>> + Send
     {
         async {
+            assert!(res.cbor_len(&mut ()) <= M::Res::max_len());
             let res = self.client.write(res).await;
             res.map(|_| ReplyReceipt(()))
                 .map_err(|e| ClientError::Rpc(RpcError::from(e)))
@@ -333,7 +349,7 @@ impl<'a, T: AsyncWrite + Unpin + Send + Sync> Replier<'a, T> {
         Error: From<M::Error>,
     {
         async {
-            self.reply(
+            self.reply::<_, _, M>(
                 handler
                     .call(req)
                     .await
@@ -370,6 +386,7 @@ mod tests {
     use maxlen::MaxLen;
 
     use crate::{Call as _, RpcError};
+
     use std::convert::Infallible;
 
     use crate::ReplyReceipt;
@@ -453,6 +470,20 @@ mod tests {
             maxlen::MaxLen,
         )]
         pub struct Response;
+
+        pub struct Method;
+
+        impl crate::Method for Method {
+            type Req = Request;
+            type Res = Response;
+            type Error = std::convert::Infallible;
+        }
+
+        impl crate::Call for Method {
+            async fn call(&mut self, _value: Self::Req) -> Result<Self::Res, Self::Error> {
+                Ok(Response)
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -465,7 +496,7 @@ mod tests {
     }
 
     impl crate::RootHandler<Root> for RootHandler {
-        type Error = Infallible;
+        type Error = std::convert::Infallible;
 
         async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError>(
             &mut self,
@@ -473,8 +504,16 @@ mod tests {
             replier: crate::Replier<'_, T>,
         ) -> Result<ReplyReceipt, crate::ClientError<TransportError, Self::Error>> {
             match root {
-                Root::Ping(request) => replier.reply(ping::Method.call(request).await?).await,
-                Root::Other(_request) => replier.reply(other_ping::Response).await,
+                Root::Ping(request) => {
+                    replier
+                        .reply::<_, _, ping::Method>(ping::Method.call(request).await?)
+                        .await
+                }
+                Root::Other(_request) => {
+                    replier
+                        .reply::<_, _, other_ping::Method>(other_ping::Response)
+                        .await
+                }
             }
         }
     }

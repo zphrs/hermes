@@ -77,7 +77,7 @@ impl Network {
         self.inner_machine.spawn_local(
             async move {
                 if dropped {
-                    warn!("dropped message due to chance");
+                    trace!("dropped message due to chance");
                     return Ok(());
                 }
                 trace!("waiting to send for {:?}", jitter);

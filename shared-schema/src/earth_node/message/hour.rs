@@ -29,7 +29,7 @@ impl Div<Hour> for SystemTime {
     type Output = SinceEpoch;
 
     fn div(self, rhs: Hour) -> Self::Output {
-        const SECS_IN_HOUR: u64 = 60 * 60;
+        const SECS_IN_HOUR: u64 = 60;
         SinceEpoch(
             (self
                 .duration_since(UNIX_EPOCH)

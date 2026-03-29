@@ -101,7 +101,7 @@ impl RequestHandler<Node, ID_LEN> for RpcAdapter {
             return vec![];
         };
         // tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        manager.find_node(from.clone(), id).await
+        manager.find_node(Some(from.clone()), id).await
     }
 }
 
@@ -436,7 +436,7 @@ async fn find_nonexistent_peer_returns_closest() {
                         format!("{:?}", result_manager.routing_table.read().await)
                     };
 
-                    // assert_eq!(result[0], next_closest_node);
+                    assert_eq!(result[0], next_closest_node);
 
                     (
                         result[0].clone(),

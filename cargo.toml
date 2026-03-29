@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["earth", "shared-schema", "sky", "end-to-end-test", "maxlen", "maxlen-derive", "rpc"]
+members = ["earth", "shared-schema", "sky", "end-to-end-test", "maxlen", "maxlen-derive", "rpc", "max-sized-vec"]
 
 [profile.dev.package]
 expect-test.opt-level = 3
@@ -21,6 +21,12 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.minicbor]
+opt-level = 3
+
+[profile.dev.package.kademlia]
+opt-level = 3
+
+[profile.dev.package.maxlen]
 opt-level = 3
 
 

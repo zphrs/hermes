@@ -4,7 +4,7 @@ use futures::{prelude::*, stream::FuturesUnordered};
 // sync is runtime agnostic;
 // see https://docs.rs/tokio/latest/tokio/sync/index.html#runtime-compatibility
 use tokio::sync::{RwLock, RwLockWriteGuard};
-use tracing::{Instrument, instrument, trace, trace_span};
+use tracing::{Instrument, debug, instrument, trace, trace_span};
 
 use crate::{Distance, DistancePair, HasId, Id, RequestHandler, RoutingTable};
 
@@ -38,6 +38,10 @@ impl<
             routing_table: Arc::new(RwLock::new(routing_table)),
             local_node,
         }
+    }
+
+    pub fn local_node(&self) -> &Node {
+        &self.local_node
     }
 
     fn get_shifted_target_id(&self, shift_by: usize) -> Id<ID_LEN> {
@@ -88,7 +92,7 @@ impl<
         let lz_count = left.leading_zeros();
         let shift_by = ID_LEN * 8 - right.leading_zeros() - lz_count;
         let lookups = FuturesUnordered::new();
-        trace!("refreshing {} buckets", lz_count);
+        debug!("refreshing {} buckets", lz_count);
         for shift_by in shift_by..(shift_by + lz_count) {
             // reverse engineer distance to id
             let target_id = self.get_shifted_target_id(shift_by);
@@ -97,10 +101,7 @@ impl<
             });
         }
         // await all refreshes
-        let _ = lookups
-            .count()
-            // .timeout(futures_time::time::Duration::from_secs(10))
-            .await;
+        let _ = lookups.count().await;
     }
     async fn refresh_buckets_after(&self, after: &Distance<ID_LEN>) {
         self.refresh_buckets_between(after, &Distance::MAX).await
@@ -140,7 +141,7 @@ impl<
         self.add_nodes([node]).await
     }
 
-    async fn remove_and_insert_into_tree(
+    fn remove_and_insert_into_tree(
         &self,
         insertion_candidates: Vec<Option<Id<ID_LEN>>>,
         mut pairs: Vec<DistancePair<Node, ID_LEN>>,
@@ -227,30 +228,34 @@ impl<
     /// their write, read, write stages in synchronicity when inserting.
     #[instrument(skip_all)]
     pub async fn add_nodes(&self, nodes: impl IntoIterator<Item = Node>) {
-        let mut write_lock = self.routing_table.write().await;
         // first remove unreachable siblings list nodes
-        write_lock
-            .remove_unreachable_siblings_list_nodes(&self.local_node, &self.handler)
-            .await;
-        let nodes: Vec<_> = nodes
-            .into_iter()
-            .filter(|v| v.id() != self.local_addr())
-            .filter(|n| {
-                let dist_pair: DistancePair<Node, ID_LEN> = (n.clone(), self.local_addr()).into();
-                let leaf = write_lock.get_leaf(dist_pair.distance());
-                !leaf.contains(&dist_pair)
-            })
-            .collect();
+        let remove_set = {
+            let read_lock = self.routing_table.read().await;
+            read_lock
+                .get_unreachable_siblings_list_nodes(&self.local_node, &self.handler)
+                .await
+        };
+        let leftover: Vec<_> = {
+            let mut write_lock = self.routing_table.write().await;
+            write_lock.remove_unreachable_siblings_list_nodes(remove_set);
+            let nodes: Vec<_> = nodes
+                .into_iter()
+                .filter(|v| v.id() != self.local_addr())
+                .filter(|n| {
+                    let dist_pair: DistancePair<Node, ID_LEN> =
+                        (n.clone(), self.local_addr()).into();
+                    let leaf = write_lock.get_leaf(dist_pair.distance());
+                    !leaf.contains(&dist_pair)
+                })
+                .collect();
 
-        // now if there are any leftover, they are all alive nodes that
-        // overflowed the siblings list
+            // now if there are any leftover, they are all alive nodes that
+            // overflowed the siblings list
 
-        let leftover: Vec<_> = self
-            .maybe_add_nodes_to_siblings_list(nodes, &mut write_lock)
-            .into_iter()
-            .collect();
-
-        drop(write_lock);
+            self.maybe_add_nodes_to_siblings_list(nodes, &mut write_lock)
+                .into_iter()
+                .collect()
+        };
         // collect pairs into buckets
         let mut buckets: Vec<Vec<DistancePair<Node, ID_LEN>>> =
             vec![Vec::with_capacity(BUCKET_SIZE); Id::<ID_LEN>::BITS];
@@ -271,8 +276,7 @@ impl<
         {
             let mut write_lock = self.routing_table.write().await;
             for (to_remove, bucket) in to_removes {
-                self.remove_and_insert_into_tree(to_remove, bucket, &mut write_lock)
-                    .await;
+                self.remove_and_insert_into_tree(to_remove, bucket, &mut write_lock);
             }
         }
     }
@@ -330,9 +334,12 @@ impl<
             self.insert_into_tree(pair, &mut write_lock);
         }
     }
-
-    pub async fn find_node(&self, from: Node, id: &Id<ID_LEN>) -> Vec<Node> {
-        self.add_node(from.clone()).await;
+    /// Note: should always separately add the requesting node in
+    pub async fn find_node(&self, from: Option<Node>, id: &Id<ID_LEN>) -> Vec<Node> {
+        // TODO: uncomment
+        if let Some(from) = from {
+            self.add_nodes_without_removing([from.clone()]).await;
+        }
         let lock = self.routing_table.read().await;
         let mut out: Vec<DistancePair<Node, ID_LEN>> = self
             .find_node_with_lock(id, &lock)
@@ -348,7 +355,7 @@ impl<
     }
     #[instrument(level = "trace", skip_all, fields(%id, dst=%id^self.local_addr()))]
     pub async fn node_lookup(&self, id: &Id<ID_LEN>) -> Vec<Node> {
-        trace!("nli started");
+        debug!("node lookup started");
         let mut closest_nodes: Vec<DistancePair<Node, ID_LEN>> = {
             let mut lock = self.routing_table.write().await;
             lock.mark_bucket_as_looked_up(&(self.local_node.id() ^ id));
@@ -374,12 +381,12 @@ impl<
             querying.push(self.node_lookup_inner(node, id, &k_closest, &queried_ids));
         }
         // wait for all to finish, don't care about result
-        trace!("awaiting query");
+        debug!("awaiting query");
         querying.count().await;
-        trace!("query finished");
+        debug!("query finished");
         let mut write_lock = queried_ids.write().await;
         write_lock.extend(queried);
-        // stage 2 where we continously query all k remaining which haven't been
+        // stage 2 where we continuously query all k remaining which haven't been
         // queried until all k remaining have been queried
         let mut remaining: Vec<_> = {
             let queried_ids_lock = write_lock.downgrade();
@@ -395,7 +402,7 @@ impl<
         };
 
         while !remaining.is_empty() {
-            trace!("querying remaining {} unqueried nodes", remaining.len());
+            debug!("querying remaining {} unqueried nodes", remaining.len());
             let querying = FuturesUnordered::new();
             {
                 let mut queried_ids_lock = queried_ids.write().await;
@@ -495,9 +502,9 @@ impl<
                 .map(|node| self.node_lookup_inner(node, target_id, k_closest, queried_node_ids)),
         );
 
-        trace!("querying");
+        debug!("querying");
         let round_succeeded = querying.any(|b| async move { b }).await;
-        trace!("finished querying");
+        debug!("finished querying");
 
         queried_node_ids.write().await.extend(queried_ids);
 
@@ -513,16 +520,13 @@ impl<
         node: Node,
         target_id: &Id<ID_LEN>,
         k_closest: &'a RwLock<Vec<DistancePair<Node, ID_LEN>>>,
-    ) -> (
-        tokio::sync::RwLockWriteGuard<'a, Vec<DistancePair<Node, ID_LEN>>>,
-        bool,
-    ) {
-        trace!("finding nearest nodes");
+    ) -> (RwLockWriteGuard<'a, Vec<DistancePair<Node, ID_LEN>>>, bool) {
+        debug!("finding nearest nodes");
         let closest_nodes = self
             .handler
             .find_node(&self.local_node, &node, target_id)
             .await;
-
+        debug!("found nearest nodes");
         trace!(closest_nodes=?closest_nodes.iter().cloned().map(|n| DistancePair::from((n, target_id))).collect::<Vec<_>>());
 
         // try to add all these nodes

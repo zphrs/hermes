@@ -47,14 +47,17 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize>
             return; // makes sure we never have less than 1 leaf by never
             // merging if we have less than 2 leaves
         }
-        let last_leaf_ind = self.leaves.len() - 1;
-        let second_last_leaf_ind = self.leaves.len() - 2;
-        while self.leaves[last_leaf_ind].len() + self.leaves[second_last_leaf_ind].len()
-            < BUCKET_SIZE / 4
+        let mut last_leaf_ind = self.leaves.len() - 1;
+        let mut second_last_leaf_ind = self.leaves.len() - 2;
+        while self.leaves.len() > 2
+            && self.leaves[last_leaf_ind].len() + self.leaves[second_last_leaf_ind].len()
+                < BUCKET_SIZE / 4
         {
             let mut last_leaf = self.leaves.pop().unwrap();
             let new_last_leaf = &mut self.leaves[second_last_leaf_ind];
             new_last_leaf.extend(last_leaf.drain());
+            last_leaf_ind -= 1;
+            second_last_leaf_ind -= 1;
         }
     }
 

@@ -5,16 +5,24 @@ pub mod rpc;
 use tokio::time::Duration;
 
 use crypto_bigint::{NonZero, U256};
-use kademlia::{HasId, HasServerId as _, Id};
+use kademlia::{HasId, Id};
 use maxlen::MaxLen;
 use tracing::debug;
 
 use crate::{SkyNode, sky_node::SkyId};
 
-#[derive(Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
+#[derive(Debug, Clone, Eq, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub struct EarthNode {
     #[n(0)]
     id: EarthId,
+}
+
+/// Manually defined because it's likely earth node will get more fields and
+/// using ids for equality is fine
+impl PartialEq for EarthNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
 }
 
 impl EarthNode {
@@ -51,6 +59,10 @@ impl EarthId {
         let offset = step.wrapping_mul(&time_within_day);
         let id: U256 = U256::from_be_slice(self.0.bytes());
         SkyId(Id::from(id.wrapping_add(&offset).to_be_bytes()))
+    }
+
+    pub fn from_array(arr: [u8; 32]) -> EarthId {
+        Self(Id::from(arr))
     }
 }
 

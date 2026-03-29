@@ -13,7 +13,7 @@ macro_rules! etc {
     };
 }
 
-pub struct Dir {}
+pub struct Dir;
 
 impl Dir {
     pub fn data() -> &'static impl Deref<Target = PathBuf> {

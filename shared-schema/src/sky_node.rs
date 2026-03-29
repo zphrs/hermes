@@ -120,7 +120,7 @@ impl MaxLen for SkyNode {
 // considered equal
 impl PartialEq for SkyNode {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.id() == other.id()
     }
 }
 

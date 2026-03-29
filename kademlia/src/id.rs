@@ -94,7 +94,7 @@ impl<const N: usize> Index<usize> for Id<N> {
 #[cfg(feature = "maxlen")]
 impl<const N: usize> maxlen::MaxLen for Id<N> {
     fn biggest_instantiation() -> Self {
-        Self::ZERO
+        [255; N].into()
     }
 }
 
