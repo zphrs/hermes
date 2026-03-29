@@ -196,6 +196,15 @@ impl MaxLen for IpAddr {
     }
 }
 
+impl<T> MaxLen for Box<T>
+where
+    T: MaxLen,
+{
+    fn biggest_instantiation() -> Self {
+        Box::new(T::biggest_instantiation())
+    }
+}
+
 // Primitive type implementations
 
 /// MaxLen implementation for u8.
