@@ -255,6 +255,7 @@ impl Sim {
             CONFIG.set(&self.config, || RNG.set(&self.rng.clone(), f))
         })
     }
+
     /// The passed in iterator just determines which machines' [`Machine::is_idle()`]
     /// status is checked in order to stop ticking.
     /// The sim will run all machines in lockstep.

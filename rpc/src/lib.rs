@@ -1,6 +1,6 @@
 use std::fmt::Debug;
-#[cfg(test)]
-mod example;
+
+pub mod in_memory_transport;
 
 use futures_io::{AsyncRead, AsyncWrite};
 
@@ -384,10 +384,12 @@ pub trait StreamTypes {
 #[cfg(test)]
 mod tests {
     use maxlen::MaxLen;
+    use tokio::task::JoinSet;
 
-    use crate::{Call as _, RpcError};
-
-    use std::convert::Infallible;
+    use crate::{
+        Call as _, Caller, Client, Incoming, RpcError, Transport,
+        in_memory_transport::{self, MemoryTransport},
+    };
 
     use crate::ReplyReceipt;
 
@@ -517,8 +519,29 @@ mod tests {
             }
         }
     }
-    #[test]
-    pub fn test() {
-        // let tp;
+    #[tokio::test]
+    async fn test() {
+        let network = in_memory_transport::Network::new();
+
+        let mut js = JoinSet::new();
+        let net1 = network.clone();
+        // server
+        let tp = MemoryTransport::new(&net1);
+        let server_addr = tp.address();
+        js.spawn(async move {
+            let incoming = tp.accept().await.unwrap();
+            let conn = incoming.accept().await.unwrap();
+            let _ = conn.handle_client(RootHandler).await;
+        });
+        // client
+        js.spawn(async move {
+            let tp = MemoryTransport::new(&network);
+            let conn = tp.connect(&server_addr).await.unwrap();
+            let _res = conn
+                .query::<ping::Method, Root>(ping::Request)
+                .await
+                .unwrap();
+        });
+        js.join_all().await;
     }
 }
