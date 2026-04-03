@@ -328,7 +328,7 @@ impl<'a, T: AsyncWrite + Unpin + Send + Sync> Replier<'a, T> {
     }
     pub fn reply<TransportError, Error, M: Method + ?Sized>(
         self,
-        res: impl Encode<()> + CborLen<()> + Send,
+        res: M::Res,
     ) -> impl Future<Output = Result<ReplyReceipt, crate::ClientError<TransportError, Error>>> + Send
     {
         async {
@@ -411,7 +411,6 @@ mod tests {
     mod ping {
         use maxlen::MaxLen;
         use std::convert::Infallible;
-
         #[derive(
             Debug,
             minicbor_derive::Encode,

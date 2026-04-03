@@ -1,7 +1,7 @@
 use crate::{
-    earth_node::{candidate::Candidate, EarthId},
-    sky_node::rpc::lookup::FindSkyNodeResponse,
     EarthNode, SkyNode,
+    earth_node::{EarthId, candidate::Candidate},
+    sky_node::rpc::lookup::FindSkyNodeResponse,
 };
 use maxlen::MaxLen;
 
@@ -50,7 +50,7 @@ where
 }
 
 pub mod response {
-    use crate::{earth_node::candidate::Candidate, EarthNode, SkyNode};
+    use crate::{EarthNode, SkyNode, earth_node::candidate::Candidate};
     use max_sized_vec::MaxSizedVec;
     use maxlen::MaxLen;
 
