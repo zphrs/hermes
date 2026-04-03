@@ -54,7 +54,7 @@ pub struct MemoryTransport {
 }
 
 impl MemoryTransport {
-    pub fn new(network: &Network) -> Self {
+    pub fn new(network: Network) -> Self {
         network.new_transport()
     }
 
