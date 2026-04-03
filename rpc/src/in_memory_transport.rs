@@ -14,10 +14,12 @@ use futures::AsyncRead;
 
 type StreamChannelTx = tokio::sync::mpsc::Sender<(SendStream, RecvStream)>;
 type StreamChannelRx = tokio::sync::mpsc::Receiver<(SendStream, RecvStream)>;
+type IncomingChannelTx = tokio::sync::mpsc::Sender<([u8; 32], StreamChannelRx)>;
+type IncomingChannelRx = tokio::sync::mpsc::Receiver<([u8; 32], StreamChannelRx)>;
 
 #[derive(Clone)]
 pub struct Network {
-    registry: Arc<Mutex<HashMap<[u8; 32], tokio::sync::mpsc::Sender<StreamChannelRx>>>>,
+    registry: Arc<Mutex<HashMap<[u8; 32], IncomingChannelTx>>>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -50,7 +52,7 @@ impl Network {
 pub struct MemoryTransport {
     address: [u8; 32],
     network: Network,
-    incoming_rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<StreamChannelRx>>>,
+    incoming_rx: Arc<tokio::sync::Mutex<IncomingChannelRx>>,
 }
 
 impl MemoryTransport {
@@ -78,8 +80,12 @@ impl Transport for MemoryTransport {
             .cloned()
             .expect("Peer not found");
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(1024);
-        let _ = tx.send(stream_rx).await;
-        Ok(Caller { stream_tx })
+        let _ = tx.send((self.address, stream_rx)).await;
+        Ok(Caller {
+            stream_tx,
+            remote_addr: *to,
+            local_addr: self.address,
+        })
     }
 
     type Client = Client;
@@ -88,12 +94,25 @@ impl Transport for MemoryTransport {
     async fn accept(&self) -> Result<Self::Incoming, Self::Error> {
         Ok(Incoming {
             rx: self.incoming_rx.clone(),
+            local_addr: self.address,
         })
     }
 }
 
 pub struct Client {
     stream_rx: Arc<tokio::sync::Mutex<StreamChannelRx>>,
+    remote_addr: [u8; 32],
+    local_addr: [u8; 32],
+}
+
+impl Client {
+    pub fn remote_addr(&self) -> &[u8; 32] {
+        &self.remote_addr
+    }
+
+    pub fn local_addr(&self) -> &[u8; 32] {
+        &self.local_addr
+    }
 }
 
 impl crate::BiStream for Client {
@@ -118,6 +137,18 @@ impl crate::Client for Client {
 
 pub struct Caller {
     stream_tx: StreamChannelTx,
+    remote_addr: [u8; 32],
+    local_addr: [u8; 32],
+}
+
+impl Caller {
+    pub fn remote_addr(&self) -> &[u8; 32] {
+        &self.remote_addr
+    }
+
+    pub fn local_addr(&self) -> &[u8; 32] {
+        &self.local_addr
+    }
 }
 
 impl crate::BiStream for Caller {
@@ -218,7 +249,8 @@ impl futures::AsyncWrite for SendStream {
 }
 
 pub struct Incoming {
-    rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<StreamChannelRx>>>,
+    rx: Arc<tokio::sync::Mutex<IncomingChannelRx>>,
+    local_addr: [u8; 32],
 }
 
 impl crate::Incoming for Incoming {
@@ -226,7 +258,7 @@ impl crate::Incoming for Incoming {
     type Error = std::io::Error;
 
     async fn accept(self) -> Result<Self::Client, Self::Error> {
-        let stream_rx = self
+        let (remote_addr, stream_rx) = self
             .rx
             .lock()
             .await
@@ -235,6 +267,8 @@ impl crate::Incoming for Incoming {
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))?;
         Ok(Client {
             stream_rx: Arc::new(tokio::sync::Mutex::new(stream_rx)),
+            remote_addr,
+            local_addr: self.local_addr,
         })
     }
 }
