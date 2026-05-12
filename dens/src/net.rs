@@ -130,6 +130,61 @@ mod tests {
         sim::Config,
     };
 
+    async fn holepunch(server_addr: Ipv4Addr) -> anyhow::Result<udp::UdpSocket> {
+        let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
+        tokio::time::sleep(Duration::from_millis(1)).await; // to make sure server gets inited
+        socket.connect((server_addr, 3000)).await?;
+        socket.send(b"hello").await?;
+        let mut buf = BytesMut::new();
+        socket.recv_buf_from(&mut buf).await?;
+        let other_addr: SocketAddr = String::from_utf8_lossy(&buf).parse().unwrap();
+        trace!("c1 got other addr! {other_addr}");
+
+        socket.connect(other_addr).await?;
+        let mut buf = BytesMut::new();
+        socket.send(b"hello").await?;
+        socket.send(b"hello").await?;
+        if let Ok(res) =
+            tokio::time::timeout(Duration::from_millis(50), socket.recv_buf(&mut buf)).await
+        {
+            res?;
+        } else {
+            trace!("timed out receive");
+        }
+
+        sleep(Duration::from_millis(50)).await;
+        while socket.try_recv(&mut buf).is_ok() {}
+        Ok(socket)
+    }
+
+    fn create_server() -> crate::sim::MachineRef<OsShim> {
+        OsShim::new(Host::new(move || async move {
+            let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
+            let mut c1_addr: Option<SocketAddr> = None;
+            // every two clients will get paired up with one another
+            loop {
+                match c1_addr {
+                    Some(c1_addr) => {
+                        let mut buf = BytesMut::new();
+                        let Ok((_, addr)) = socket.recv_buf_from(&mut buf).await else {
+                            continue;
+                        };
+
+                        socket.send_to(c1_addr.to_string().as_bytes(), addr).await?;
+                        socket.send_to(addr.to_string().as_bytes(), c1_addr).await?;
+                    }
+                    None => {
+                        let mut buf = BytesMut::new();
+                        let Ok((_, addr)) = socket.recv_buf_from(&mut buf).await else {
+                            continue;
+                        };
+                        c1_addr = Some(addr);
+                    }
+                };
+            }
+        }))
+    }
+
     #[test_log::test]
     fn nat_basic() {
         let s = Sim::new_with_config(Config {
@@ -178,7 +233,6 @@ mod tests {
             assert!(client.get().borrow().is_idle());
         })
     }
-
     #[test_log::test]
     fn nat_hole_punch() {
         let s = Sim::new_with_config(Config {
@@ -191,97 +245,48 @@ mod tests {
             let net = Sim::add_machine(Network::new_with_ipv4_prefix(
                 Ipv4Prefix::new([192, 0, 2, 0].into(), 24).unwrap(),
             ));
-            let server = OsShim::new(Host::new(move || async move {
-                let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
-                let mut c1_addr: Option<SocketAddr> = None;
-                // every two clients will get paired up with one another
-                loop {
-                    match c1_addr {
-                        Some(c1_addr) => {
-                            let mut buf = BytesMut::new();
-                            let Ok((_, addr)) = socket.recv_buf_from(&mut buf).await else {
-                                continue;
-                            };
-
-                            socket.send_to(c1_addr.to_string().as_bytes(), addr).await?;
-                            socket.send_to(addr.to_string().as_bytes(), c1_addr).await?;
-                        }
-                        None => {
-                            let mut buf = BytesMut::new();
-                            let Ok((_, addr)) = socket.recv_buf_from(&mut buf).await else {
-                                continue;
-                            };
-                            c1_addr = Some(addr);
-                        }
-                    };
-                }
-            }));
+            let server = create_server();
             let server_addr = Ipv4Addr::from_octets([192, 0, 2, 0]);
             server.get().borrow().connect_to_net(net);
             info!("server address: {server_addr}");
-            let nat1 = Sim::add_machine(nat::Nat::<nat::easy::PortRestrictedCone>::new(net));
+            let nat1 = Sim::add_machine(nat::Nat::<nat::hard::Symmetric>::new(net));
             trace!("inited server");
             let c1 = OsShim::new(Host::new(move || async move {
-                let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
-                tokio::time::sleep(Duration::from_millis(1)).await; // to make sure server gets inited
-                socket.connect((server_addr, 3000)).await?;
-                socket.send(b"hello").await?;
+                let socket = holepunch(server_addr).await?;
+                trace!("c1 hole punched");
                 let mut buf = BytesMut::new();
-                socket.recv_buf_from(&mut buf).await?;
-                let other_addr: SocketAddr = String::from_utf8_lossy(&buf).parse().unwrap();
-                trace!("c1 got other addr! {other_addr}");
-
-                socket.connect(other_addr).await?;
-                let mut buf = BytesMut::new();
-                socket.send(b"hello").await?;
-                socket.send(b"hello").await?;
-                socket.recv_buf(&mut buf).await?;
-
-                sleep(Duration::from_millis(50)).await;
-                while socket.try_recv(&mut buf).is_ok() {}
-                // now we're hole punched
-                buf.clear();
 
                 socket.send(b"hello client 2").await?;
-                socket.recv_buf(&mut buf).await?;
+                // wait for send from c2
+                sleep(Duration::from_millis(50)).await;
+                socket.try_recv_buf(&mut buf)?;
                 assert_eq!(b"hello client 1", &buf[..]);
-
                 Ok(())
             }));
             c1.get().borrow().connect_to_net(nat1.get().borrow().lan());
 
-            let nat2 = Sim::add_machine(nat::Nat::<nat::easy::PortRestrictedCone>::new(net));
+            let nat2 = Sim::add_machine(nat::Nat::<nat::hard::Symmetric>::new(net));
 
             let c2 = OsShim::new(Host::new(move || async move {
-                let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
-                tokio::time::sleep(Duration::from_millis(1)).await; // to make sure server gets inited
-                socket.connect((server_addr, 3000)).await?;
-                socket.send(b"hello").await?;
-                let mut buf = BytesMut::new();
-                socket.recv_buf_from(&mut buf).await?;
-                let other_addr: SocketAddr = String::from_utf8_lossy(&buf).parse().unwrap();
-                trace!("c2 got other addr! {other_addr}");
+                let socket = holepunch(server_addr).await?;
 
-                socket.connect(other_addr).await?;
-                buf.clear();
-                socket.send(b"hello").await?;
-                socket.send(b"hello").await?;
-                socket.recv_buf(&mut buf).await?;
-
-                sleep(Duration::from_millis(50)).await;
-                while socket.try_recv(&mut buf).is_ok() {}
                 // now we're hole punched
-                buf.clear();
-                socket.recv_buf(&mut buf).await?;
-                assert_eq!(b"hello client 2", &buf[..]);
+                trace!("c2 hole punched");
+
+                let mut buf = BytesMut::new();
+                // wait for send from c1
+                sleep(Duration::from_millis(50)).await;
+                socket.try_recv_buf(&mut buf)?;
+                assert_eq!(b"hello client 1", &buf[..]);
                 socket.send(b"hello client 1").await?;
 
                 Ok(())
             }));
             c2.get().borrow().connect_to_net(nat2.get().borrow().lan());
-            for _ in 0..100 {
+            for _ in 0..100000 {
                 Sim::tick().unwrap();
             }
+            // both clients should hang since both are behind a hard nat
             assert!(c1.get().borrow().is_idle());
             assert!(c2.get().borrow().is_idle());
         })
@@ -299,63 +304,16 @@ mod tests {
             let net = Sim::add_machine(Network::new_with_ipv4_prefix(
                 Ipv4Prefix::new([192, 0, 2, 0].into(), 24).unwrap(),
             ));
-            let server = OsShim::new(Host::new(move || async move {
-                let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
-                let mut c1_addr: Option<SocketAddr> = None;
-                // every two clients will get paired up with one another
-                loop {
-                    match c1_addr {
-                        Some(c1_addr) => {
-                            let mut buf = BytesMut::new();
-                            let Ok((_, addr)) = socket.recv_buf_from(&mut buf).await else {
-                                continue;
-                            };
-
-                            socket.send_to(c1_addr.to_string().as_bytes(), addr).await?;
-                            socket.send_to(addr.to_string().as_bytes(), c1_addr).await?;
-                        }
-                        None => {
-                            let mut buf = BytesMut::new();
-                            let Ok((_, addr)) = socket.recv_buf_from(&mut buf).await else {
-                                continue;
-                            };
-                            c1_addr = Some(addr);
-                        }
-                    };
-                }
-            }));
+            let server = create_server();
             let server_addr = Ipv4Addr::from_octets([192, 0, 2, 0]);
             server.get().borrow().connect_to_net(net);
             info!("server address: {server_addr}");
             let nat1 = Sim::add_machine(nat::Nat::<nat::hard::Symmetric>::new(net));
             trace!("inited server");
             let c1 = OsShim::new(Host::new(move || async move {
-                let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
-                tokio::time::sleep(Duration::from_millis(1)).await; // to make sure server gets inited
-                socket.connect((server_addr, 3000)).await?;
-                socket.send(b"hello").await?;
-                let mut buf = BytesMut::new();
-                socket.recv_buf_from(&mut buf).await?;
-                let other_addr: SocketAddr = String::from_utf8_lossy(&buf).parse().unwrap();
-                trace!("c1 got other addr! {other_addr}");
-
-                socket.connect(other_addr).await?;
-                let mut buf = BytesMut::new();
-                socket.send(b"hello").await?;
-                socket.send(b"hello").await?;
-                if let Ok(res) =
-                    tokio::time::timeout(Duration::from_millis(50), socket.recv_buf(&mut buf)).await
-                {
-                    res?;
-                } else {
-                    trace!("timed out receive")
-                }
-
-                sleep(Duration::from_millis(50)).await;
-                while socket.try_recv(&mut buf).is_ok() {}
+                let socket = holepunch(server_addr).await?;
                 trace!("c1 hole punched");
-                buf.clear();
-
+                let mut buf = BytesMut::new();
                 socket.send(b"hello client 2").await?;
                 // wait for send from c2
                 sleep(Duration::from_millis(50)).await;
@@ -370,32 +328,10 @@ mod tests {
             let nat2 = Sim::add_machine(nat::Nat::<nat::hard::Symmetric>::new(net));
 
             let c2 = OsShim::new(Host::new(move || async move {
-                let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
-                tokio::time::sleep(Duration::from_millis(1)).await; // to make sure server gets inited
-                socket.connect((server_addr, 3000)).await?;
-                socket.send(b"hello").await?;
-                let mut buf = BytesMut::new();
-                socket.recv_buf_from(&mut buf).await?;
-                let other_addr: SocketAddr = String::from_utf8_lossy(&buf).parse().unwrap();
-                trace!("c2 got other addr! {other_addr}");
-
-                socket.connect(other_addr).await?;
-                buf.clear();
-                socket.send(b"hello").await?;
-                socket.send(b"hello").await?;
-                if let Ok(res) =
-                    tokio::time::timeout(Duration::from_millis(50), socket.recv_buf(&mut buf)).await
-                {
-                    res?;
-                } else {
-                    trace!("timed out receive")
-                }
-
-                sleep(Duration::from_millis(50)).await;
-                while socket.try_recv(&mut buf).is_ok() {}
+                let socket = holepunch(server_addr).await?;
                 // now we're hole punched
                 trace!("c2 hole punched");
-                buf.clear();
+                let mut buf = BytesMut::new();
                 // wait for send from c1
                 sleep(Duration::from_millis(50)).await;
                 let res = socket.try_recv_buf(&mut buf);
