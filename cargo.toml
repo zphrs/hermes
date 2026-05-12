@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["earth", "shared-schema", "sky", "end-to-end-test", "maxlen", "maxlen-derive", "rpc", "max-sized-vec"]
+members = ["earth", "shared-schema", "sky", "dens", "maxlen", "maxlen-derive", "rpc", "max-sized-vec"]
 
 [profile.dev.package]
 expect-test.opt-level = 3
@@ -14,7 +14,7 @@ getrandom4 = { git = 'https://github.com/zphrs/getrandom-twizzler.git', package 
 getrandom3 = { git = 'https://github.com/zphrs/getrandom-twizzler.git', package = 'getrandom',  branch = "getrandom-v0.2" }
 getrandom2 = { git = 'https://github.com/zphrs/getrandom-twizzler.git', package = 'getrandom',  branch = "getrandom-v0.3.5" }
 
-[profile.dev.package.end-to-end-test]
+[profile.dev.package.dens]
 opt-level = 3
 
 [profile.dev.package.rpc]
