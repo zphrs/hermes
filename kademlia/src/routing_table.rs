@@ -279,8 +279,10 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
     use expect_test::expect;
-    use tracing::{debug, trace};
+    use tracing::debug;
     use tracing_test::traced_test;
 
     use crate::{HasId, RoutingTable, node::Node};
@@ -289,7 +291,7 @@ mod tests {
     pub fn siblings() {
         let mut table: RoutingTable<_, _, 1> = RoutingTable::new();
         // generate 1k nodes in a loop
-        let self_node = Node::new("0.0.0.0:0".parse().unwrap());
+        let self_node = Node::new(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)));
         for _ in 0..10 {
             let nodes = (1..1001).map(|port| {
                 (
