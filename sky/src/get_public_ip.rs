@@ -1,10 +1,13 @@
-use std::{net::IpAddr, sync::Arc};
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+};
 
 use tokio::{
     net::UdpSocket,
     task::{JoinSet, LocalSet},
 };
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 // this pings out to STUN servers to get IP. Also pings dns and api providers like ipify et. al.
 pub async fn get_public_ip() -> Option<IpAddr> {
@@ -22,6 +25,8 @@ pub async fn get_public_ip() -> Option<IpAddr> {
     let ip_addrs_2: Vec<_> = ls.run_until(jh2).await.unwrap_or_default();
     // return most frequent from all sources who returned as a "best guess" for pub ip.
     // this way any ip address provider can't create a DOS
+    // TODO: get both v4 and v6 addresses and return both of them
+    warn!("get both v4 and v6 addresses and return both of them");
     let mut hm: HashMap<IpAddr, usize> = HashMap::new();
     for ip_addr in ip_addrs.into_iter().chain(ip_addrs_2) {
         *hm.entry(ip_addr).or_default() += 1
@@ -35,7 +40,7 @@ pub async fn get_public_ip_mock() -> Option<IpAddr> {
     use dens::{OsShim, sim::Sim};
     let curr_os = Sim::get_current_machine::<OsShim>();
     trace!("got current os shim address");
-    curr_os.borrow().public_ip()
+    curr_os.borrow().public_ips().map(|v| IpAddr::V4(v.0))
 }
 
 // returns first ip returned from any of the default stun servers
@@ -59,7 +64,7 @@ async fn query_stun_server() -> Vec<IpAddr> {
             js.spawn_local(async move {
                 let (handler_tx, mut handler_rx) = tokio::sync::mpsc::unbounded_channel();
 
-                let conn = UdpSocket::bind("0.0.0.0:0").await?;
+                let conn = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
                 trace!("Local address: {}", conn.local_addr()?);
 
                 trace!("Connecting to: {conn:?}");

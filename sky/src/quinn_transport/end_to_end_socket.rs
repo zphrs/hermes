@@ -30,7 +30,7 @@ impl AsyncUdpSocket for EndToEndSocket {
         self.sock
             .lock()
             .unwrap()
-            .try_send_to_with_ecn(&transmit.contents, transmit.destination, transmit.ecn)
+            .try_send_to(&transmit.contents, transmit.destination)
             .map(|_| ())
     }
 
@@ -47,14 +47,14 @@ impl AsyncUdpSocket for EndToEndSocket {
         for i in 0..bufs.len().min(meta.len()) {
             let mut buf = tokio::io::ReadBuf::new(&mut bufs[i]);
             let sock_lock = self.sock.lock().unwrap();
-            match sock_lock.poll_recv_from_with_ecn(cx, &mut buf) {
-                std::task::Poll::Ready(Ok((addr, ecn))) => {
+            match sock_lock.poll_recv_from(cx, &mut buf) {
+                std::task::Poll::Ready(Ok(addr)) => {
                     let len = buf.filled().len();
                     meta[i] = quinn::udp::RecvMeta {
                         addr,
                         len,
                         stride: len,
-                        ecn: ecn,
+                        ecn: None,
                         dst_ip: Some(sock_lock.local_addr().unwrap().ip()),
                     };
                     count += 1;

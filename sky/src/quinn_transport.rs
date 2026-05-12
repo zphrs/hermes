@@ -58,7 +58,6 @@ mod test_utils {
     use quinn::{ConnectionId, ConnectionIdGenerator, Runtime as _};
     use rand::Rng as _;
     use tokio::time::sleep_until;
-    use tracing::trace;
     #[derive(Debug)]
     pub struct TokioRuntime;
 
@@ -130,7 +129,7 @@ mod test_utils {
 impl Transport {
     fn transport_config() -> quinn::TransportConfig {
         let mut transport = quinn::TransportConfig::default();
-        transport.max_idle_timeout(Some(VarInt::from(15_000u32).into()));
+        transport.max_idle_timeout(Some(VarInt::from(10_000u32).into()));
         // transport.max_idle_timeout(None);
 
         transport.send_fairness(false);
@@ -303,6 +302,12 @@ impl rpc::Transport for Transport {
 
                     return Ok(conn.clone().into());
                 } else {
+                    debug!("close reason: {}", conn.close_reason().unwrap());
+                    conn.close(
+                        VarInt::from_u32(500),
+                        format!("conn already close bc {}", conn.close_reason().unwrap())
+                            .as_bytes(),
+                    );
                     *conn_lock = None;
                 }
             }
@@ -429,6 +434,7 @@ impl rpc::Caller for Caller {
     }
 }
 
+#[derive(Clone)]
 pub struct Client {
     conn: quinn::Connection,
 }
@@ -477,6 +483,7 @@ mod tests {
     use rpc::{Call, Caller, Client, Close, Incoming, Transport as _};
     use std::convert::Infallible;
 
+    use std::net::IpAddr;
     use std::time::Duration;
     use tracing::trace;
     use tracing::{Instrument, Level, span};
@@ -519,7 +526,8 @@ mod tests {
 
                     let client = tp.accept().await?.accept().await?;
                     trace!("accepted client conn");
-                    client.handle_one_request(&mut PingHandler).await?;
+                    let stream = client.accept_stream().await?;
+                    client.handle_one_request(stream, &mut PingHandler).await?;
 
                     trace!("handled client");
                     tp.close().await;
@@ -529,7 +537,6 @@ mod tests {
             }));
 
             let server_addr = server.get().borrow().connect_to_net(net);
-            server.get().borrow().set_public_ip(server_addr);
             Sim::tick_machine(server).unwrap();
 
             let client = OsShim::new(Host::new(move || {
@@ -538,7 +545,7 @@ mod tests {
                     trace!("running");
 
                     let tp = Transport::client().await?;
-                    let conn = tp.connect(&server_addr.into()).await?;
+                    let conn = tp.connect(&IpAddr::from(server_addr.0).into()).await?;
                     conn.query::<shared_schema::ping::Method, shared_schema::ping::Request>(
                         shared_schema::ping::Request,
                     )
@@ -551,8 +558,7 @@ mod tests {
                 }
                 .instrument(span)
             }));
-            let client_ip = client.get().borrow().connect_to_net(net);
-            client.get().borrow().set_public_ip(client_ip);
+            let _client_ip = client.get().borrow().connect_to_net(net);
             let arr = [client, server];
             Sim::run_until_idle(|| arr.iter()).unwrap();
         })
@@ -567,7 +573,8 @@ mod tests {
                 async {
                     let tp = Transport::self_signed_server().await?;
                     let client = tp.accept().await?.accept().await?;
-                    client.handle_one_request(&mut PingHandler).await?;
+                    let stream = client.accept_stream().await?;
+                    client.handle_one_request(stream, &mut PingHandler).await?;
                     tp.close().await;
                     Ok(())
                 }
@@ -575,14 +582,13 @@ mod tests {
             }));
 
             let server_addr = server.get().borrow().connect_to_net(net);
-            server.get().borrow().set_public_ip(server_addr);
             Sim::tick_machine(server).unwrap();
 
             let client = OsShim::new(Host::new(move || {
                 let span = span!(Level::TRACE, "client");
                 async move {
                     let tp = Transport::client_with_keepalive(false).await?;
-                    let conn = tp.connect(&server_addr.into()).await?;
+                    let conn = tp.connect(&IpAddr::from(server_addr.0).into()).await?;
                     conn.query::<shared_schema::ping::Method, shared_schema::ping::Request>(
                         shared_schema::ping::Request,
                     )
@@ -592,11 +598,11 @@ mod tests {
                             net,
                             Sim::get_current_machine::<OsShim>()
                                 .borrow()
-                                .public_ip()
+                                .public_ip_arr()
                                 .unwrap(),
                             Sim::get_current_machine::<OsShim>()
                                 .borrow()
-                                .public_ip()
+                                .public_ip_arr()
                                 .unwrap(),
                         );
                         tokio::time::sleep(Duration::from_secs(40)).await;
@@ -607,9 +613,59 @@ mod tests {
                 }
                 .instrument(span)
             }));
-            let client_ip = client.get().borrow().connect_to_net(net);
-            client.get().borrow().set_public_ip(client_ip);
+            let _client_ips = client.get().borrow().connect_to_net(net);
             let arr = [client];
+            Sim::run_until_idle(|| arr.iter()).unwrap();
+        })
+    }
+
+    #[test_log::test]
+    pub fn drop_server_conn() {
+        let sim = Sim::new();
+        sim.enter_runtime(|| {
+            let net = Sim::add_machine(ip::Network::new());
+            let server = OsShim::new(Host::new(move || {
+                let span = span!(Level::TRACE, "server");
+                async {
+                    let tp = Transport::self_signed_server().await?;
+                    trace!("server inited");
+
+                    let client = tp.accept().await?.accept().await?;
+                    trace!("accepted client conn");
+                    let stream = client.accept_stream().await?;
+                    client.handle_one_request(stream, &mut PingHandler).await?;
+
+                    trace!("handled client");
+                    tp.close().await;
+                    Ok(())
+                }
+                .instrument(span)
+            }));
+
+            let server_addr = server.get().borrow().connect_to_net(net);
+            Sim::tick_machine(server).unwrap();
+
+            let client = OsShim::new(Host::new(move || {
+                let span = span!(Level::TRACE, "client");
+                async move {
+                    trace!("running");
+
+                    let tp = Transport::client().await?;
+                    let conn = tp.connect(&IpAddr::from(server_addr.0).into()).await?;
+                    conn.query::<shared_schema::ping::Method, shared_schema::ping::Request>(
+                        shared_schema::ping::Request,
+                    )
+                    .await?;
+                    trace!("got response");
+
+                    conn.close().await;
+
+                    Ok(())
+                }
+                .instrument(span)
+            }));
+            let _client_ip = client.get().borrow().connect_to_net(net);
+            let arr = [client, server];
             Sim::run_until_idle(|| arr.iter()).unwrap();
         })
     }

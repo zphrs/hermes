@@ -1,4 +1,6 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+#[cfg(test)]
+use std::time::{Duration, UNIX_EPOCH};
 
 pub fn get_system_time() -> SystemTime {
     #[cfg(test)]
@@ -25,6 +27,7 @@ pub fn get_system_time() -> SystemTime {
     curr_time
 }
 
+#[cfg(test)]
 pub fn since_epoch() -> Duration {
     get_system_time().duration_since(UNIX_EPOCH).unwrap()
 }

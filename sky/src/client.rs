@@ -21,6 +21,7 @@ pub struct SkyClient {
 struct Handler {
     transport: quinn_transport::Transport,
 }
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SkyOrEarth {
     Sky(SkyNode),
@@ -99,11 +100,15 @@ impl HasId<32> for SkyOrEarthNode {
 impl kademlia::RequestHandler<SkyOrEarthNode, 32> for Handler {
     #[instrument(skip(self))]
     async fn ping(&self, _from: &SkyOrEarthNode, node: &SkyOrEarthNode) -> bool {
-        debug!("pinging");
         let Some(sky_node) = node.as_sky() else {
             warn!("earth lookup");
             return false; // this is a client for the sky, doesn't make sense to ping an earth node
         };
+        if sky_node.last_reached_at().elapsed() < Duration::from_secs(60) {
+            return true;
+        }
+
+        debug!("pinging");
         let Ok(conn) = self.transport.connect(sky_node).await else {
             return false;
         };
@@ -114,10 +119,12 @@ impl kademlia::RequestHandler<SkyOrEarthNode, 32> for Handler {
             )
             .await
         {
+            sky_node.reset_last_reached_at();
             return true;
         }
         return false;
     }
+
     #[instrument(skip(self))]
     async fn find_node(
         &self,
@@ -167,7 +174,7 @@ impl SkyClient {
     ) -> Vec<SkyNode> {
         debug!("looking up node");
         let table =
-            kademlia::RpcManager::<SkyOrEarthNode, _, 32, 20>::new(Handler { transport: tp }, from);
+            kademlia::RpcManager::<SkyOrEarthNode, _, 32, 1>::new(Handler { transport: tp }, from);
         table
             .add_nodes(
                 self.bootstrap_nodes

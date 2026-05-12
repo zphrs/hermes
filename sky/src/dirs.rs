@@ -12,10 +12,11 @@ macro_rules! etc {
         .unwrap()
     };
 }
-
+#[allow(dead_code)]
 pub struct Dir;
 
 impl Dir {
+    #[allow(dead_code)]
     pub fn data() -> &'static impl Deref<Target = PathBuf> {
         static ONCE_LOCK: LazyLock<PathBuf> = LazyLock::new(|| {
             let path = etc!().data_dir();
@@ -24,6 +25,7 @@ impl Dir {
         });
         &ONCE_LOCK
     }
+    #[allow(dead_code)]
     pub fn config() -> &'static impl Deref<Target = PathBuf> {
         static ONCE_LOCK: LazyLock<PathBuf> = LazyLock::new(|| {
             let path = etc!().config_dir();
@@ -32,6 +34,7 @@ impl Dir {
         });
         &ONCE_LOCK
     }
+    #[allow(dead_code)]
     pub fn cache() -> &'static impl Deref<Target = PathBuf> {
         static ONCE_LOCK: LazyLock<PathBuf> = LazyLock::new(|| {
             let path = etc!().cache_dir();

@@ -1,9 +1,9 @@
 # The Sky
 
-The sky is a service based on a hashring. The hashring has nodes based on from
-IP addresses (or domain names). Clients of the sky connect to the sky for two
-purposes; one to advertise that they are online, and two to send requests to
-initiate NAT hole punched connections to other nodes.
+The sky is a service based on a hashring. The hashring has nodes based on IP
+addresses. Clients of the sky connect to the sky for two purposes; one to
+advertise that they are online, and two to send requests to initiate NAT hole
+punched connections to other nodes.
 
 # Server Steps
 
