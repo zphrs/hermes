@@ -3,13 +3,13 @@ mod end_to_end_socket;
 mod skip_server_verification;
 
 #[cfg(test)]
-use end_to_end_test::sim::RNG;
+use dens::sim::RNG;
 use quinn::EndpointStats;
 
 use skip_server_verification::SkipServerVerification;
 
 #[cfg(test)]
-pub use end_to_end_test::UdpSocket;
+pub use dens::UdpSocket;
 #[cfg(not(test))]
 pub use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
@@ -54,7 +54,7 @@ pub use crate::get_public_ip::get_public_ip_mock as get_public_ip;
 mod test_utils {
     use std::{sync::Arc, time::Duration};
 
-    use end_to_end_test::sim::RNG;
+    use dens::sim::RNG;
     use quinn::{ConnectionId, ConnectionIdGenerator, Runtime as _};
     use rand::Rng as _;
     use tokio::time::sleep_until;
@@ -481,7 +481,7 @@ mod tests {
     use tracing::trace;
     use tracing::{Instrument, Level, span};
 
-    use end_to_end_test::{Host, OsShim, net::ip, sim::Sim};
+    use dens::{Host, OsShim, net::ip, sim::Sim};
     use shared_schema::ping;
 
     use crate::quinn_transport::Transport;

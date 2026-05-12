@@ -40,7 +40,7 @@ capnpc = "0.21"
 prost-build = "0.14.3"
 
 [dev-dependencies]
-end-to-end-test = { version = "0.1.0", path = "../end-to-end-test" }
+dens = { version = "0.1.0", path = "../dens" }
 expect-test = "1.5.1"
 getrandom2 = { package = "getrandom", version = "0.2.18", features = ["unsafe_deterministic_testing"]}
 getrandom3 = {package = "getrandom", version = "0.3.5", features = ["unsafe_deterministic_testing"]}

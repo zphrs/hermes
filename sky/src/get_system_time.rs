@@ -3,10 +3,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub fn get_system_time() -> SystemTime {
     #[cfg(test)]
     let curr_time = {
-        use end_to_end_test::{OsShim, sim::Sim};
+        use dens::{OsShim, sim::Sim};
 
         if Sim::is_in_machine_type::<OsShim>() {
-            use end_to_end_test::Machine;
+            use dens::Machine;
             use tracing::debug;
 
             let shim = Sim::get_current_machine::<OsShim>();

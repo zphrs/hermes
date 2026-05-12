@@ -3,7 +3,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-pub use end_to_end_test::UdpSocket;
+#[cfg(test)]
+pub use dens::UdpSocket;
+#[cfg(not(test))]
+pub use tokio::net::UdpSocket;
 
 use quinn::{AsyncUdpSocket, UdpPoller};
 

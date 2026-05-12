@@ -444,7 +444,7 @@ mod tests {
     use tokio::task::JoinSet;
     use tracing::{Instrument, Level, span, trace};
 
-    use end_to_end_test::{
+    use dens::{
         Host, OsShim,
         net::ip,
         sim::{MachineRef, RNG, Sim},
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     pub fn ping() {
-        let sim = Sim::new_with_config(end_to_end_test::sim::Config {
+        let sim = Sim::new_with_config(dens::sim::Config {
             // need to increase otherwise machine will end up stuck in WouldBlock loop
             nic_capacity: 1000,
             udp_capacity: 1000,
