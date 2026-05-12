@@ -3,7 +3,6 @@ mod checksum;
 pub mod error;
 pub mod ip;
 pub use ip::Ipv4Prefix;
-pub mod nat;
 pub mod udp;
 
 use crate::sim::{
@@ -123,8 +122,8 @@ mod tests {
     use crate::{
         Host, Machine, OsShim, Sim,
         host::net::udp,
-        net::{
-            ip::Network,
+        net::ip::{
+            Network,
             nat::{self},
         },
         sim::Config,
@@ -132,7 +131,7 @@ mod tests {
 
     async fn holepunch(server_addr: Ipv4Addr) -> anyhow::Result<udp::UdpSocket> {
         let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
-        tokio::time::sleep(Duration::from_millis(1)).await; // to make sure server gets inited
+        tokio::time::sleep(Duration::from_millis(1)).await;
         socket.connect((server_addr, 3000)).await?;
         socket.send(b"hello").await?;
         let mut buf = BytesMut::new();
@@ -212,7 +211,7 @@ mod tests {
             // in other words, we need an ip that is not an internal network ip address
             let (server_addr, _) = server.get().borrow().connect_to_net(net);
             info!("server address: {server_addr}");
-            let nat = Sim::add_machine(nat::Nat::<nat::hard::Symmetric>::new(net));
+            let nat = Sim::add_machine(nat::HardNat::new(net));
             let client = OsShim::new(Host::new(move || async move {
                 let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
                 tokio::time::sleep(Duration::from_millis(1)).await; // to make sure server gets inited
@@ -249,7 +248,7 @@ mod tests {
             let server_addr = Ipv4Addr::from_octets([192, 0, 2, 0]);
             server.get().borrow().connect_to_net(net);
             info!("server address: {server_addr}");
-            let nat1 = Sim::add_machine(nat::Nat::<nat::hard::Symmetric>::new(net));
+            let nat1 = Sim::add_machine(nat::EasyNat::new(net));
             trace!("inited server");
             let c1 = OsShim::new(Host::new(move || async move {
                 let socket = holepunch(server_addr).await?;
@@ -265,7 +264,7 @@ mod tests {
             }));
             c1.get().borrow().connect_to_net(nat1.get().borrow().lan());
 
-            let nat2 = Sim::add_machine(nat::Nat::<nat::hard::Symmetric>::new(net));
+            let nat2 = Sim::add_machine(nat::EasyNat::new(net));
 
             let c2 = OsShim::new(Host::new(move || async move {
                 let socket = holepunch(server_addr).await?;
@@ -308,7 +307,7 @@ mod tests {
             let server_addr = Ipv4Addr::from_octets([192, 0, 2, 0]);
             server.get().borrow().connect_to_net(net);
             info!("server address: {server_addr}");
-            let nat1 = Sim::add_machine(nat::Nat::<nat::hard::Symmetric>::new(net));
+            let nat1 = Sim::add_machine(nat::HardNat::new(net));
             trace!("inited server");
             let c1 = OsShim::new(Host::new(move || async move {
                 let socket = holepunch(server_addr).await?;
@@ -325,7 +324,7 @@ mod tests {
             }));
             c1.get().borrow().connect_to_net(nat1.get().borrow().lan());
 
-            let nat2 = Sim::add_machine(nat::Nat::<nat::hard::Symmetric>::new(net));
+            let nat2 = Sim::add_machine(nat::HardNat::new(net));
 
             let c2 = OsShim::new(Host::new(move || async move {
                 let socket = holepunch(server_addr).await?;

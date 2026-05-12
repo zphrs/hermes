@@ -1,3 +1,4 @@
+pub mod nat;
 mod network;
 pub use network::Ipv4Prefix;
 pub use network::Network;

@@ -3,7 +3,8 @@ use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use rand::Rng as _;
 use tokio::time::Instant;
 
-use crate::{Sim, net::nat::map::Map};
+use super::Map;
+use crate::Sim;
 
 use super::Mappable;
 

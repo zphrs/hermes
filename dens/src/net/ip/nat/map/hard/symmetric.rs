@@ -1,6 +1,5 @@
+use super::super::edn_nat::EdnNatMapping;
 use std::net::SocketAddr;
-
-use crate::net::nat::map::edn_nat::EdnNatMapping;
 
 use super::super::GenericNat;
 

@@ -45,7 +45,7 @@ impl<
     }
 }
 
-pub trait Map {
+pub(super) trait Map {
     fn external_port_to_internal_addr(&mut self, port: u16, dst: SocketAddr) -> Option<SocketAddr>;
     fn internal_addr_to_external_port(&mut self, src: SocketAddr, dst: SocketAddr) -> u16;
 }

@@ -56,9 +56,13 @@
 //! })
 //!
 //! ```
+//!
 //! While you likely want to use the OsShim most of the time, it is also
 //! possible to define a machine, such as a router, which has different logic
-//! for manipulating packets than the logic which an OS has by default.
+//! for manipulating packets than the logic which an OS has by default. For an
+//! example of using the primitives exposed in this library (namely
+//! [`ip::Network`], [`BasicMachine`]) to create a more complex machine, see
+//! [`Nat`].
 //!
 //! Specifically the [OsShim] assumes that the machine has a finite list of IP
 //! addresses (one for each network) while the more abstract [BasicMachine]
@@ -72,6 +76,7 @@ pub mod net;
 pub mod sim;
 pub use host::Host;
 pub use net::Network;
+pub use net::ip;
 pub use sim::Sim;
 pub use sim::machine::BasicMachine;
 

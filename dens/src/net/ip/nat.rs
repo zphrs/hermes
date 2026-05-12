@@ -7,22 +7,27 @@ use std::{marker::PhantomData, net::IpAddr, rc::Rc};
 
 use tracing::info;
 
-use bytes::BytesMut;
-use ip_network::{Ipv4Network, Ipv6Network};
-use tracing::warn;
-
 use crate::{
     BasicMachine, Machine, Sim,
-    net::{ip::Network, nat::map::Map, udp},
+    net::{ip::Network, udp},
     sim::{MachineRef, machine::HasNic},
 };
+use bytes::BytesMut;
+use ip_network::{Ipv4Network, Ipv6Network};
+use map::Map;
+use tracing::warn;
 
+#[expect(private_bounds)]
 pub struct Nat<Mapping: Map> {
     internal: MachineRef<Network>,
     _marker: PhantomData<Mapping>,
     inner_machine: Rc<BasicMachine>,
 }
 
+pub type HardNat = Nat<hard::Symmetric>;
+pub type EasyNat = Nat<easy::PortRestrictedCone>;
+
+#[expect(private_bounds)]
 impl<Mapping: Map + 'static> Nat<Mapping> {
     pub fn new(external_network: MachineRef<Network>) -> Self
     where
