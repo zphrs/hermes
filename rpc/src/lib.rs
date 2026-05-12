@@ -241,8 +241,10 @@ pub trait Client: Send + Sync + BiStream {
     fn accept_stream(
         &self,
     ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> + Send;
+
     fn handle_one_request<'a, Root: RpcMessage, Rh: RootHandler<Root> + 'a>(
         &'a self,
+        stream: (Self::SendStream, Self::RecvStream),
         handler: &mut Rh,
     ) -> impl Future<Output = Result<(), ClientError<Self::Error, Rh::Error>>> + Send
     where
@@ -251,7 +253,7 @@ pub trait Client: Send + Sync + BiStream {
         Root: Debug,
     {
         async move {
-            let (write, read) = self.accept_stream().await.map_err(ClientError::Transport)?;
+            let (write, read) = stream;
             let mut receiver = minicbor_io::AsyncReader::new(read);
 
             receiver.set_max_len(Root::max_len() as u32);
@@ -275,22 +277,6 @@ pub trait Client: Send + Sync + BiStream {
         }
     }
 
-    fn handle_client<'a, Root: RpcMessage, Rh: RootHandler<Root> + 'a>(
-        &'a self,
-        mut handler: Rh,
-    ) -> impl Future<Output = Result<(), ClientError<Self::Error, Rh::Error>>> + Send
-    where
-        Rh::Error: Send,
-        <Self as BiStream>::SendStream: Sync,
-        Root: Debug,
-    {
-        async move {
-            loop {
-                self.handle_one_request::<Root, Rh>(&mut handler).await?;
-            }
-        }
-    }
-
     fn reply<T: AsyncWrite + Unpin + Send, TransportError>(
         sender: &mut AsyncWriter<T>,
         res: impl Encode<()>,
@@ -306,6 +292,12 @@ pub trait Client: Send + Sync + BiStream {
     }
 }
 
+/// Returned when you call [`reply`](Call::reply) on a [Method] that implements
+/// [Call].
+///
+/// Used to enforce calling [`reply`](Call::reply) at some point within the
+/// [`handle`](RootHandler::handle) function as all possible request types
+/// should be replied to.
 pub struct ReplyReceipt(());
 
 #[derive(Debug, thiserror::Error)]
@@ -339,7 +331,7 @@ impl<'a, T: AsyncWrite + Unpin + Send + Sync> Replier<'a, T> {
         }
     }
 
-    pub fn reply_with<TransportError: Send, Error, M: Call + Method>(
+    pub fn reply_with<TransportError: Send, Error, M: Call>(
         self,
         handler: &mut M,
         req: M::Req,
@@ -530,7 +522,8 @@ mod tests {
         js.spawn(async move {
             let incoming = tp.accept().await.unwrap();
             let conn = incoming.accept().await.unwrap();
-            let _ = conn.handle_client(RootHandler).await;
+            let stream = conn.accept_stream().await.unwrap();
+            let _ = conn.handle_one_request(stream, &mut RootHandler).await;
         });
         // client
         js.spawn(async move {
