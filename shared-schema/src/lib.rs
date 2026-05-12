@@ -2,13 +2,7 @@ pub mod earth_node;
 pub mod ping;
 pub mod sky_node;
 
-use std::ops::Deref;
-
-use arrayvec::ArrayVec;
 pub use earth_node::EarthNode;
-use maxlen::MaxLen;
-use minicbor::CborLen;
-use minicbor::Decode;
 pub use sky_node::SkyNode;
 
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]

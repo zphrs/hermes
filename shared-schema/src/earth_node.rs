@@ -5,11 +5,10 @@ pub mod rpc;
 use tokio::time::Duration;
 
 use crypto_bigint::{NonZero, U256};
-use kademlia::{HasId, Id};
+use kademlia::Id;
 use maxlen::MaxLen;
-use tracing::debug;
 
-use crate::{SkyNode, sky_node::SkyId};
+use crate::sky_node::SkyId;
 
 #[derive(Debug, Clone, Eq, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub struct EarthNode {
