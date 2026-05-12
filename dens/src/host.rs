@@ -16,7 +16,7 @@ use crate::sim::{
 };
 
 pub(crate) type Software<'a> = Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result>>> + 'static>;
-pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub(crate) type Result<T = (), E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
 pub struct Host {
     entrypoint: Software<'static>,
@@ -33,6 +33,21 @@ impl Debug for Host {
 }
 
 impl Host {
+    /// Creates a new Host.
+    ///
+    /// The Host is on by default.
+    /// If you'd instead like to have the Host
+    /// enter the sim stoppped, then call [`Host::stop()`].
+    ///
+    /// Example:
+    ///
+    /// ```
+    /// # use dens::Host;
+    /// # use dens::Sim;
+    /// # Sim::new().enter_runtime(|| {
+    /// Sim::add_machine(Host::new(|| async { Ok(()) }));
+    /// # })
+    /// ```
     pub fn new<F, Fut>(software: F) -> Self
     where
         F: Fn() -> Fut + 'static,

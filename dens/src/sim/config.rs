@@ -77,6 +77,18 @@ impl Config {
     pub fn latency(&self) -> &Latency {
         &self.latency
     }
+    pub fn new_with_sync_network() -> Self {
+        Self {
+            tick_amount: Duration::from_millis(1),
+            latency: Latency {
+                min_message_latency: Duration::ZERO,
+                max_message_latency: Duration::ZERO,
+                latency_distribution: Exp::new(1.0).unwrap(),
+            },
+            message_loss: MessageLoss { fail_rate: 0.0 },
+            ..Default::default()
+        }
+    }
     pub fn udp_capacity(&self) -> usize {
         self.udp_capacity
     }
@@ -99,12 +111,12 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            // can only buffer 100 outgoing messages at a time on any given socket, otherwise drops msg on floor
-            udp_capacity: 1000000,
-            // can only buffer 100 messages at a time, otherwise drops msg on floor
-            ip_hop_capacity: 1000000,
-            // can only buffer 1000 messages at a time, otherwise reports a WouldBlock error
-            nic_capacity: 1000000,
+            // up to this many packets can be buffered in the OS, otherwise drops msg on floor
+            udp_capacity: tokio::sync::Semaphore::MAX_PERMITS,
+            // up to this many packets can be buffered in any network hop, otherwise drops msg on floor
+            ip_hop_capacity: tokio::sync::Semaphore::MAX_PERMITS,
+            // up to this many packets can be buffered in the Nic hop, otherwise drops msg on floor
+            nic_capacity: tokio::sync::Semaphore::MAX_PERMITS,
             // granularity of tick(), it's necessary to tick to simulate clock skew between
             // hosts
             tick_amount: Duration::from_millis(1),

@@ -4,10 +4,12 @@
 //! machines in order to allow Turmoil-like simulations but with arbitrary
 //! network interfaces.
 //!
-//! Out of the box there is the [OsShim] which can be used to shim out UDP
-//! sockets by substituting out [Tokio's UDP socket](tokio::net::UdpSocket) with [UdpSocket](host::net::udp::UdpSocket).
+//! Out of the box there is the [OsShim] which can be used to shim out tokio UDP
+//! sockets by substituting out Tokio's [UdpSocket](tokio::net::UdpSocket) with
+//! [UdpSocket].
 //!
-//! Example test:
+//! Ping client example:
+//!
 //! ```rust
 //! # use std::time::Duration;
 //! # use dens::sim::{self, Sim, Config, config::MessageLoss};
@@ -54,7 +56,13 @@
 //! })
 //!
 //! ```
+//! While you likely want to use the OsShim most of the time, it is also
+//! possible to define a machine, such as a router, which has different logic
+//! for manipulating packets than the logic which an OS has by default.
 //!
+//! Specifically the [OsShim] assumes that the machine has a finite list of IP
+//! addresses (one for each network) while the more abstract [BasicMachine]
+//! allows arbitrary manipulation of IP packets.
 //!
 mod deterministic_rand;
 mod error;
@@ -63,6 +71,9 @@ pub use host::net::udp::UdpSocket;
 pub mod net;
 pub mod sim;
 pub use host::Host;
+pub use net::Network;
+pub use sim::Sim;
+pub use sim::machine::BasicMachine;
 
 pub use host::os_shim::OsShim;
 
@@ -86,7 +97,6 @@ mod tests {
         time::Duration,
     };
     use tracing::trace;
-    use tracing_test::traced_test;
 
     #[test]
     fn quinn() {}
@@ -101,7 +111,7 @@ mod tests {
         let sim = Sim::new();
         sim.enter_runtime(|| {
             let shim = OsShim::new(Host::new(|| async {
-                let addr = "0.0.0.0:8080".parse::<SocketAddr>().unwrap();
+                let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 8080));
                 let peer = "127.0.0.1:11100".parse::<SocketAddr>().unwrap();
                 let sock = UdpSocket::bind(addr).await?;
                 sock.connect(peer).await?;
@@ -155,8 +165,7 @@ mod tests {
         })
     }
 
-    #[test]
-    #[traced_test]
+    #[test_log::test]
     fn os() {
         let sim = Sim::new_with_config(sim::Config {
             message_loss: MessageLoss { fail_rate: 0.0 },
@@ -164,12 +173,10 @@ mod tests {
         });
         sim.enter_runtime(|| {
             let net = Sim::add_machine(ip::Network::new());
-            const SERVER_ADDR: SocketAddr =
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::from_octets([192, 168, 0, 1])), 3000);
             let server = OsShim::new(Host::new(move || async move {
                 use crate::host::net::udp;
 
-                let socket = udp::UdpSocket::bind(SERVER_ADDR).await?;
+                let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
                 let mut messages = std::collections::HashSet::new();
 
                 let mut buf = [0u8; 13]; // max of "Hello world!" and "yay" lengths, but we need to handle variable sizes
@@ -185,15 +192,14 @@ mod tests {
                 Ok(())
             }));
 
-            let addr = server.get().borrow().connect_to_net(net);
-            server.get().borrow().set_public_ips(addr);
+            let (server_addr, _) = server.get().borrow().connect_to_net(net);
 
-            let client = OsShim::new(Host::new(|| async {
+            let client = OsShim::new(Host::new(move || async move {
                 use crate::host::net::udp;
                 let socket =
                     udp::UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).await?;
                 trace!("client socket inited");
-                socket.connect(SERVER_ADDR).await?;
+                socket.connect((server_addr, 3000)).await?;
                 trace!("client connected to server");
                 socket.send(b"Message 1").await?;
                 trace!("client sent message 2");
@@ -212,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
+    #[test_log::test]
     fn send_message() {
         let sim = Sim::new();
         sim.enter_runtime(|| {

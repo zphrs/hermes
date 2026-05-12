@@ -19,11 +19,12 @@ ip_network_table = "0.2.0"
 ip_network = "0.4.1"
 rand_distr = "0.5.1"
 futures-io = "0.3.32"
-tracing-test = "0.2.6"
 tracing-subscriber = "0.3.23"
 
 [dev-dependencies]
+anyhow = "1.0.102"
 expect-test = "1.5.1"
+test-log = { version = "0.2.20", features = ["trace"] }
 tokio = { version = "1.49.0", features = ["macros", "net", "rt", "sync", "test-util", "time", "rt-multi-thread"] }
 
 

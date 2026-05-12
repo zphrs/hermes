@@ -1,6 +1,5 @@
-mod generator;
 mod network;
-pub(crate) use generator::Generator;
+pub use network::Ipv4Prefix;
 pub use network::Network;
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};

@@ -102,12 +102,6 @@ impl<M: Machine> From<MachineId> for MachineRef<M> {
 }
 
 impl Sim {
-    /// Register a host with the simulation.
-    ///
-    /// This method takes a `Fn` that builds a future, as opposed to
-    /// [`Sim::client`] which just takes a future. The reason for this is we
-    /// might restart the host, and so need to be able to call the future
-    /// multiple times.
     pub fn new() -> Self {
         Default::default()
     }
@@ -301,6 +295,13 @@ impl Sim {
             }
         }
         Ok(())
+    }
+
+    pub fn with_rng<F, R>(f: F) -> R
+    where
+        F: FnOnce(&mut SmallRng) -> R,
+    {
+        RNG.with(|rng| f(&mut *rng.borrow_mut()))
     }
 
     pub(crate) fn on_machine<R>(server: MachineRef<impl Machine>, f: impl FnOnce() -> R) -> R {

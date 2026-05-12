@@ -98,7 +98,11 @@ impl InnerOsShim {
         let port = msg_header.get_dst_addr();
 
         let Some(listener) = self.sockets.get(&port) else {
-            tracing::warn!("packet dropped, port {} is not bound", port);
+            tracing::warn!(
+                "packet dropped, port {} is not bound. Packet {:?}",
+                port,
+                udp_packet
+            );
             return;
         };
 
@@ -297,13 +301,43 @@ impl OsShim {
         addr
     }
 
+    pub fn connect_to_net_with_ips(
+        &self,
+        net: MachineRef<ip::Network>,
+        addrs: (Ipv4Addr, Ipv6Addr),
+    ) {
+        net.get()
+            .borrow_mut()
+            .add_machine_with_range(self, addrs.0.into());
+        net.get()
+            .borrow_mut()
+            .add_machine_with_range(self, addrs.1.into());
+        let mut mut_borrow = self.inner.borrow_mut();
+        mut_borrow.add_net(addrs.0.into(), net);
+        mut_borrow.add_net(addrs.1.into(), net);
+        if mut_borrow.public_ips().is_none() {
+            trace!("set public ip to ({}, {})", addrs.0, addrs.1);
+            mut_borrow.set_public_ips(addrs);
+        }
+    }
+
+    pub fn connect_to_net_with_ipv4(&self, net: MachineRef<ip::Network>, addr: Ipv4Addr) {
+        let addrs = (addr, addr.to_ipv6_mapped());
+        self.connect_to_net_with_ips(net, addrs);
+    }
+
     pub fn set_public_ips(&self, ip: (Ipv4Addr, Ipv6Addr)) {
-        trace!("setting public ips to ({}, {})", ip.0, ip.1);
+        trace!("setting public IPs to ({}, {})", ip.0, ip.1);
         self.inner.borrow_mut().set_public_ips(ip);
     }
 
     pub fn public_ips(&self) -> Option<(Ipv4Addr, Ipv6Addr)> {
         self.inner.borrow().public_ips()
+    }
+
+    pub fn public_ip_arr(&self) -> Option<[IpAddr; 2]> {
+        let (v4, v6) = self.inner.borrow().public_ips()?;
+        Some([v4.into(), v6.into()])
     }
 
     pub fn bind_to_addr(
