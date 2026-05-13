@@ -4,6 +4,8 @@ use std::{
     net::IpAddr,
 };
 
+use tracing::trace;
+
 pub struct Dns {
     lookup: HashMap<String, Vec<IpAddr>>,
 }
@@ -30,12 +32,20 @@ impl Dns {
         Default::default()
     }
     pub fn lookup(&self, domain: &str) -> io::Result<Vec<IpAddr>> {
+        trace!("looking up dns");
         // ... and make the system look up the host.
         Ok(self.lookup.get(domain).ok_or(ErrorKind::NotFound)?.clone())
     }
 
-    pub fn insert(&mut self, domain: &str, addr: IpAddr) {
-        self.lookup.entry(domain.into()).or_default().push(addr);
+    pub fn insert(&mut self, domain: &str, addr: impl Into<IpAddr>) {
+        self.lookup
+            .entry(domain.into())
+            .or_default()
+            .push(addr.into());
+    }
+    /// removes all inserted entries for a given domain
+    pub fn remove(&mut self, domain: &str) {
+        self.lookup.entry(domain.into()).or_default().clear();
     }
     pub fn extend(&mut self, domain: &str, addr: impl IntoIterator<Item = IpAddr>) {
         self.lookup.entry(domain.into()).or_default().extend(addr);

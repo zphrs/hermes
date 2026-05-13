@@ -77,7 +77,7 @@ impl Config {
     pub fn latency(&self) -> &Latency {
         &self.latency
     }
-    pub fn new_with_sync_network() -> Self {
+    pub fn synchronous_network() -> Self {
         Self {
             tick_amount: Duration::from_millis(1),
             latency: Latency {

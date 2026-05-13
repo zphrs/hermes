@@ -2,7 +2,8 @@ pub mod config;
 pub mod machine;
 
 use crate::{
-    host::{Result, net::dns::Dns},
+    host::Result,
+    os_mock::net::Dns,
     sim::{
         config::CONFIG,
         machine::{BasicMachine, HasMachineId, Machine, MachineId},
@@ -55,10 +56,30 @@ impl Default for Sim {
     }
 }
 
+/// Can be used to get a reference to the machine via the borrow() and borrow_mut() functions.
 pub struct MachineRef<M: Machine + ?Sized> {
     id: MachineId,
     _phantom: PhantomData<M>,
 }
+
+pub trait IntoMachineRef: Machine {
+    /// Adds this machine to the simulator and returns a [MachineRef] to it.
+    ///
+    /// It is necessary to add machines to the sim in order to have a sim tick
+    /// also tick the machine.
+    ///
+    /// ```
+    /// let ref = BasicMachine::new().into_ref();
+    /// ```
+    fn into_ref(self) -> MachineRef<Self>
+    where
+        Self: Sized,
+    {
+        Sim::add_machine(self)
+    }
+}
+
+impl<M: Machine> IntoMachineRef for M {}
 
 impl<M: Machine> HasMachineId for MachineRef<M> {
     fn id(&self) -> MachineId {
@@ -187,6 +208,7 @@ impl Sim {
             other
         })
     }
+
     /// will panic if called outside of a machine instance / runtime
     pub fn get_current_machine<M: Machine>() -> Rc<RefCell<M>> {
         let curr_machine = ACTIVE_MACHINE_ID.with(|id| *id);
@@ -306,5 +328,49 @@ impl Sim {
 
     pub(crate) fn on_machine<R>(server: MachineRef<impl Machine>, f: impl FnOnce() -> R) -> R {
         ACTIVE_MACHINE_ID.set(&server.id, f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use crate::{
+        OsMock, Sim, ip,
+        os_mock::net::UdpSocket,
+        sim::{Config, IntoMachineRef as _},
+    };
+
+    #[test_log::test]
+    pub fn dns_example() {
+        let sim = Sim::new_with_config(Config::synchronous_network());
+
+        sim.enter_runtime(|| {
+            sim.dns_mut().insert("example.com", [10, 0, 0, 1]);
+            sim.dns_mut().insert(
+                "example.com",
+                Ipv4Addr::from([10, 0, 0, 1]).to_ipv6_mapped(),
+            );
+            let net = ip::Network::new().into_ref();
+            let server = OsMock::new(|| async {
+                let sock = UdpSocket::bind("example.com:3000").await?;
+                let mut buf = [0u8; b"hello".len()];
+                sock.recv(&mut buf).await?;
+                assert_eq!(b"hello", &buf);
+                Ok(())
+            });
+            server.connect_to_net_with_ipv4(net, [10, 0, 0, 1]);
+            let server = server.into_ref();
+            let client = OsMock::new(|| async {
+                let sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
+                sock.connect("example.com:3000").await?;
+                sock.send(b"hello").await?;
+                Ok(())
+            });
+            client.connect_to_net(net);
+            let client = client.into_ref();
+            let arr = [client, server];
+            Sim::run_until_idle(|| arr.iter()).unwrap();
+        });
     }
 }

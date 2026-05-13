@@ -1,6 +1,6 @@
-use crate::host::net::addr::sealed::OneOrMore;
-use crate::host::net::dns::Dns;
-use crate::host::net::macros::cfg_net;
+use crate::os_mock::net::addr::sealed::OneOrMore;
+use crate::os_mock::net::dns::Dns;
+use crate::os_mock::net::macros::cfg_net;
 
 use crate::sim::SIM;
 use std::io;
@@ -260,7 +260,7 @@ pub(crate) mod sealed {
     use std::net::SocketAddr;
     use std::{io, option, vec};
 
-    use crate::host::net::dns::Dns;
+    use crate::os_mock::net::dns::Dns;
 
     #[doc(hidden)]
     pub trait ToSocketAddrsPriv {

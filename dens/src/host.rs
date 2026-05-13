@@ -1,6 +1,3 @@
-pub mod net;
-pub mod os_shim;
-
 use std::{
     cell::RefCell,
     fmt::{Debug, from_fn},
@@ -45,7 +42,7 @@ impl Host {
     /// # use dens::Host;
     /// # use dens::Sim;
     /// # Sim::new().enter_runtime(|| {
-    /// Sim::add_machine(Host::new(|| async { Ok(()) }));
+    /// Host::new(|| async { Ok(()) });
     /// # })
     /// ```
     pub fn new<F, Fut>(software: F) -> Self

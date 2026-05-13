@@ -1,3 +1,5 @@
+pub mod net;
+
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -7,6 +9,18 @@ use std::{
     rc::Rc,
 };
 
+use crate::{
+    host::{Host, Result},
+    net::{
+        ip::{self},
+        udp,
+    },
+    sim::{
+        IntoMachineRef, MachineRef, Sim,
+        config::CONFIG,
+        machine::{HasNic, Machine},
+    },
+};
 use bytes::{Bytes, BytesMut};
 use tokio::{
     sync::mpsc::{self, Receiver},
@@ -14,32 +28,13 @@ use tokio::{
 };
 use tracing::{instrument, trace, warn};
 
-use crate::{
-    host::Host,
-    net::{
-        self,
-        ip::{self},
-        udp,
-    },
-    sim::{
-        MachineRef, Sim,
-        config::CONFIG,
-        machine::{HasNic, Machine},
-    },
-};
-
 /// internal send socket
 #[derive(Clone)]
 struct InnerSendSocket {
     io: mpsc::Sender<udp::Packet>,
 }
 
-pub struct OsShim {
-    host: Host,
-    inner: RefCell<InnerOsShim>,
-}
-
-struct InnerOsShim {
+struct InnerOsMock {
     sockets: HashMap<SocketAddr, InnerSendSocket>,
     // need to keep track of for when adding a new network interface
     wildcard_sockets: Vec<u16>,
@@ -52,7 +47,7 @@ struct InnerOsShim {
     ahs: Option<(AbortHandle, AbortHandle)>,
 }
 
-impl InnerOsShim {
+impl InnerOsMock {
     fn ephemeral_port_gen() -> Range<u16> {
         49152u16..65535u16
     }
@@ -78,8 +73,8 @@ impl InnerOsShim {
         ah2.abort();
     }
 
-    pub fn set_abort_handles(&mut self, ahs: (AbortHandle, AbortHandle)) {
-        self.ahs = Some(ahs.into());
+    pub fn set_abort_handles(&mut self, abort_handles: (AbortHandle, AbortHandle)) {
+        self.ahs = Some(abort_handles.into());
     }
 
     pub fn is_aborted(&self) -> bool {
@@ -215,22 +210,35 @@ impl InnerOsShim {
     }
 }
 
-impl HasNic for OsShim {
+pub struct OsMock {
+    host: Host,
+    inner: RefCell<InnerOsMock>,
+}
+
+impl HasNic for OsMock {
     fn nic(&self) -> crate::sim::machine::MachineNic {
         self.host.nic()
     }
 }
 
-impl OsShim {
-    pub fn new(host: Host) -> MachineRef<Self> {
-        let mut ipv4_loopback = net::ip::Network::new();
+impl OsMock {
+    pub fn new<F, Fut>(software: F) -> Self
+    where
+        F: Fn() -> Fut + 'static,
+        Fut: Future<Output = Result> + 'static,
+    {
+        let host = Host::new(software);
+        Self::new_with_host(host)
+    }
+    pub fn new_with_host(host: Host) -> Self {
+        let mut ipv4_loopback = ip::Network::new();
         ipv4_loopback.add_machine_with_range(&host, "127.0.0.0/8".parse().unwrap());
-        let mut ipv6_loopback = net::ip::Network::new();
+        let mut ipv6_loopback = ip::Network::new();
         ipv6_loopback.add_machine_with_range(&host, "::1/128".parse().unwrap());
         let mut nets = HashMap::new();
-        nets.insert(Ipv4Addr::LOCALHOST.into(), Sim::add_machine(ipv4_loopback));
-        nets.insert(Ipv6Addr::LOCALHOST.into(), Sim::add_machine(ipv6_loopback));
-        let inner = InnerOsShim::new(nets);
+        nets.insert(Ipv4Addr::LOCALHOST.into(), ipv4_loopback.into_ref());
+        nets.insert(Ipv6Addr::LOCALHOST.into(), ipv6_loopback.into_ref());
+        let inner = InnerOsMock::new(nets);
         let out = Self {
             host,
             inner: inner.into(),
@@ -238,7 +246,7 @@ impl OsShim {
 
         out.spawn_forwarding_tasks_if_aborted();
 
-        Sim::add_machine(out)
+        out
     }
 
     fn spawn_forwarding_tasks_if_aborted(&self) {
@@ -248,7 +256,7 @@ impl OsShim {
 
         // handle receiving a message from the network and forwarding it to the udp port
         let ah1 = self.host.inner().spawn_local(async move {
-            let machine = Sim::get_current_machine::<OsShim>();
+            let machine = Sim::get_current_machine::<OsMock>();
             let borrowed = machine.borrow();
             loop {
                 let Some(msg) = borrowed.host.inner().read().await else {
@@ -261,7 +269,7 @@ impl OsShim {
 
         // handle receiving a message from userspace and forwarding it to the network
         let ah2 = self.host.inner().spawn_local(async move {
-            let machine = Sim::get_current_machine::<OsShim>();
+            let machine = Sim::get_current_machine::<OsMock>();
             let borrowed = machine.borrow();
             loop {
                 let Some(msg) = borrowed
@@ -321,7 +329,12 @@ impl OsShim {
         }
     }
 
-    pub fn connect_to_net_with_ipv4(&self, net: MachineRef<ip::Network>, addr: Ipv4Addr) {
+    pub fn connect_to_net_with_ipv4(
+        &self,
+        net: MachineRef<ip::Network>,
+        addr: impl Into<Ipv4Addr>,
+    ) {
+        let addr = addr.into();
         let addrs = (addr, addr.to_ipv6_mapped());
         self.connect_to_net_with_ips(net, addrs);
     }
@@ -348,18 +361,14 @@ impl OsShim {
         self.inner.borrow_mut().bind_to_addr(addr)
     }
 
-    pub fn start(self) -> MachineRef<OsShim> {
+    pub fn start(&self) {
         self.spawn_forwarding_tasks_if_aborted();
         self.host.start();
-        let out = Sim::add_machine(self);
-        out
     }
 
-    pub fn stop(reference: MachineRef<Self>) -> Self {
-        let out = Sim::remove_machine(reference);
-        out.inner.borrow_mut().abort();
-        out.host.stop();
-        out
+    pub fn stop(&self) {
+        self.inner.borrow_mut().abort();
+        self.host.stop();
     }
 
     fn send_packet(&self, msg: udp::Packet) -> std::io::Result<()> {
@@ -367,7 +376,7 @@ impl OsShim {
     }
 }
 
-impl Machine for OsShim {
+impl Machine for OsMock {
     fn basic_machine(&self) -> Rc<crate::sim::machine::BasicMachine> {
         self.host.basic_machine()
     }

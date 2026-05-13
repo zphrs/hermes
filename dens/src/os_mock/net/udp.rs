@@ -1,23 +1,21 @@
-use bytes::BufMut;
-use bytes::Bytes;
-use tokio::io::Interest;
-use tokio::io::ReadBuf;
-use tokio::io::Ready;
-use tokio::sync::mpsc;
+use bytes::{BufMut, Bytes};
+use tokio::{
+    io::{Interest, ReadBuf, Ready},
+    sync::mpsc,
+};
 use tracing::trace;
 
-use std::cell::RefCell;
-use std::fmt;
-use std::io;
-use std::io::ErrorKind;
-use std::net::{self, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::ops::DerefMut;
-use std::task::{Context, Poll};
+use std::{
+    cell::RefCell,
+    fmt,
+    io::{self, ErrorKind},
+    net::{self, Ipv4Addr, Ipv6Addr, SocketAddr},
+    ops::DerefMut,
+    task::{Context, Poll},
+};
 
-use crate::OsShim;
-use crate::host::net::addr::ToSocketAddrs;
-use crate::host::net::addr::to_socket_addrs;
-use crate::sim::Sim;
+use super::addr::{ToSocketAddrs, to_socket_addrs};
+use crate::{OsMock, sim::Sim};
 
 /// A UDP socket.
 ///
@@ -190,7 +188,7 @@ impl UdpSocket {
     }
 
     fn bind_addr(addr: SocketAddr) -> io::Result<UdpSocket> {
-        let curr_os = Sim::get_current_machine::<OsShim>();
+        let curr_os = Sim::get_current_machine::<OsMock>();
         let (send, recv, local_addr) = curr_os.borrow().bind_to_addr(addr)?;
 
         Ok(Self {

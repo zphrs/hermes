@@ -4,28 +4,35 @@
 //! machines in order to allow Turmoil-like simulations but with arbitrary
 //! network interfaces.
 //!
-//! Out of the box there is the [OsShim] which can be used to shim out tokio UDP
-//! sockets by substituting out Tokio's [UdpSocket](tokio::net::UdpSocket) with
-//! [UdpSocket].
+//! Out of the box there is the [OsMock] which can be used to mock out tokio UDP
+//! sockets by substituting out use of Tokio's [UdpSocket](tokio::net::UdpSocket) with
+//! [UdpSocket] depending on whether the binary was compiled for tests:
+//!
+//! ```rust
+//! #[cfg(not(test))]
+//! use tokio::net::UdpSocket;
+//! #[cfg(test)]
+//! use dens::os_mock::net::UdpSocket;
 //!
 //! Ping client example:
 //!
 //! ```rust
-//! # use std::time::Duration;
-//! # use dens::sim::{self, Sim, Config, config::MessageLoss};
-//! # use dens::net::ip;
-//! # use dens::host::{Host, os_shim::OsShim};
+//! use std::time::Duration;
+//! use dens::sim::{self, Sim, Config, config::MessageLoss};
+//! use dens::net::ip;
+//! use dens::host::{Host, UdpSocket};
+//! use dens::
 //! # use std::net::{IpAddr, Ipv6Addr};
 //! let sim = Sim::new_with_config(sim::Config {
 //!     message_loss: MessageLoss { fail_rate: 0.0 },
 //!     ..Default::default()
 //! });
 //! sim.enter_runtime(|| {
-//!     let net = Sim::add_machine(ip::Network::new());
+//!     let net = ip::Network::new().into_ref();
 //!     let server = OsShim::new(Host::new(move || async move {
-//!         use dens::host::net::udp;
+//!         use dens::host::UdpSocket;
 //!         // bind
-//!         let socket = udp::UdpSocket::bind((Ipv6Addr::from(0u128), 3000)).await?;
+//!         let socket = UdpSocket::bind((Ipv6Addr::from(0u128), 3000)).await?;
 //!         // recv ping
 //!         let mut buf = [0u8; "ping".len()]; // max of "Hello world!" and "yay" lengths, but we need to handle variable sizes
 //!         let (_len, addr) = socket.recv_from(&mut buf).await?;
@@ -37,9 +44,9 @@
 //!     let (_, server_addr) = server.get().borrow().connect_to_net(net);
 //!
 //!     let client = OsShim::new(Host::new(move || async move {
-//!         use dens::host::net::udp;
+//!         use dens::host::UdpSocket;
 //!         // connect
-//!         let socket = udp::UdpSocket::bind((Ipv6Addr::from(0u128), 3000)).await?;
+//!         let socket = UdpSocket::bind((Ipv6Addr::from(0u128), 3000)).await?;
 //!         socket.connect((server_addr, 3000)).await?;
 //!         // send ping
 //!         let _len = socket.send(b"ping").await?;
@@ -71,7 +78,6 @@
 mod deterministic_rand;
 mod error;
 pub mod host;
-pub use host::net::udp::UdpSocket;
 pub mod net;
 pub mod sim;
 pub use host::Host;
@@ -80,7 +86,8 @@ pub use net::ip;
 pub use sim::Sim;
 pub use sim::machine::BasicMachine;
 
-pub use host::os_shim::OsShim;
+pub use os_mock::OsMock;
+pub mod os_mock;
 
 pub use net::udp::Packet;
 pub use sim::machine::Machine;
@@ -89,12 +96,13 @@ pub use sim::machine::Machine;
 #[cfg(test)]
 mod tests {
     use crate::{
-        host::{Host, os_shim::OsShim},
+        host::Host,
         net::{
             ip,
             udp::{self},
         },
-        sim::{self, Sim, config::MessageLoss, machine::Machine},
+        os_mock::{OsMock, net::UdpSocket},
+        sim::{self, IntoMachineRef as _, Sim, config::MessageLoss, machine::Machine},
     };
     use bytes::BytesMut;
     use std::{
@@ -108,21 +116,20 @@ mod tests {
 
     #[test]
     fn peer_addr() {
-        use crate::UdpSocket;
-        use crate::sim::Sim;
-        use crate::{Host, OsShim};
+        use crate::{Host, OsMock, os_mock::net::UdpSocket, sim::Sim};
         use std::net::SocketAddr;
 
         let sim = Sim::new();
         sim.enter_runtime(|| {
-            let shim = OsShim::new(Host::new(|| async {
+            let shim = OsMock::new(|| async {
                 let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 8080));
                 let peer = "127.0.0.1:11100".parse::<SocketAddr>().unwrap();
                 let sock = UdpSocket::bind(addr).await?;
                 sock.connect(peer).await?;
                 assert_eq!(peer, sock.peer_addr()?);
                 Ok(())
-            }));
+            })
+            .into_ref();
             let arr = [shim];
             Sim::run_until_idle(|| arr.iter()).unwrap();
         });
@@ -135,11 +142,11 @@ mod tests {
             ..Default::default()
         });
         sim.enter_runtime(|| {
-            let net = Sim::add_machine(ip::Network::new());
-            let server = OsShim::new(Host::new(move || async move {
-                use crate::host::net::udp;
+            let net = ip::Network::new().into_ref();
+            let server = OsMock::new(move || async move {
+                use crate::os_mock::net::UdpSocket;
                 // bind
-                let socket = udp::UdpSocket::bind((Ipv6Addr::from(0u128), 3000)).await?;
+                let socket = UdpSocket::bind((Ipv6Addr::from(0u128), 3000)).await?;
                 // recv ping
                 let mut buf = [0u8; "ping".len()]; // max of "Hello world!" and "yay" lengths, but we need to handle variable sizes
                 let (_len, addr) = socket.recv_from(&mut buf).await?;
@@ -147,13 +154,14 @@ mod tests {
                 // send pong
                 socket.send_to(b"pong", addr).await?;
                 Ok(())
-            }));
+            })
+            .into_ref();
             let (_, server_addr) = server.get().borrow().connect_to_net(net);
 
-            let client = OsShim::new(Host::new(move || async move {
-                use crate::host::net::udp;
+            let client = OsMock::new(move || async move {
+                use crate::os_mock::net::UdpSocket;
                 // connect
-                let socket = udp::UdpSocket::bind((Ipv6Addr::from(0u128), 3000)).await?;
+                let socket = UdpSocket::bind((Ipv6Addr::from(0u128), 3000)).await?;
                 socket.connect((server_addr, 3000)).await?;
                 // send ping
                 let _len = socket.send(b"ping").await?;
@@ -162,7 +170,8 @@ mod tests {
                 let _len = socket.recv(&mut buf).await?;
                 assert_eq!(&buf, b"pong");
                 Ok(())
-            }));
+            })
+            .into_ref();
             client.get().borrow().connect_to_net(net);
 
             let arr = [server, client];
@@ -177,11 +186,9 @@ mod tests {
             ..Default::default()
         });
         sim.enter_runtime(|| {
-            let net = Sim::add_machine(ip::Network::new());
-            let server = OsShim::new(Host::new(move || async move {
-                use crate::host::net::udp;
-
-                let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
+            let net = ip::Network::new().into_ref();
+            let server = OsMock::new(move || async move {
+                let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
                 let mut messages = std::collections::HashSet::new();
 
                 let mut buf = [0u8; 13]; // max of "Hello world!" and "yay" lengths, but we need to handle variable sizes
@@ -195,14 +202,13 @@ mod tests {
                 assert!(messages.contains("Message 1"));
                 assert!(messages.contains("Message 2"));
                 Ok(())
-            }));
+            })
+            .into_ref();
 
             let (server_addr, _) = server.get().borrow().connect_to_net(net);
 
-            let client = OsShim::new(Host::new(move || async move {
-                use crate::host::net::udp;
-                let socket =
-                    udp::UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).await?;
+            let client = OsMock::new(move || async move {
+                let socket = UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).await?;
                 trace!("client socket inited");
                 socket.connect((server_addr, 3000)).await?;
                 trace!("client connected to server");
@@ -210,7 +216,8 @@ mod tests {
                 trace!("client sent message 2");
                 socket.send(b"Message 2").await?;
                 Ok(())
-            }));
+            })
+            .into_ref();
             let addr = client.get().borrow().connect_to_net(net);
             client.get().borrow().set_public_ips(addr);
             let arr = [client, server];
@@ -227,7 +234,7 @@ mod tests {
     fn send_message() {
         let sim = Sim::new();
         sim.enter_runtime(|| {
-            let ipv4_net = Sim::add_machine(ip::Network::new());
+            let ipv4_net = ip::Network::new().into_ref();
             let server = Sim::add_machine(Host::new(move || {
                 #[allow(clippy::await_holding_refcell_ref)]
                 async move {

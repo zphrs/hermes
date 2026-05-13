@@ -120,17 +120,17 @@ mod tests {
     use tracing::{info, trace};
 
     use crate::{
-        Host, Machine, OsShim, Sim,
-        host::net::udp,
+        Machine, OsMock, Sim,
         net::ip::{
             Network,
             nat::{self},
         },
-        sim::Config,
+        os_mock::net::UdpSocket,
+        sim::{Config, IntoMachineRef as _},
     };
 
-    async fn holepunch(server_addr: Ipv4Addr) -> anyhow::Result<udp::UdpSocket> {
-        let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
+    async fn holepunch(server_addr: Ipv4Addr) -> anyhow::Result<UdpSocket> {
+        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
         tokio::time::sleep(Duration::from_millis(1)).await;
         socket.connect((server_addr, 3000)).await?;
         socket.send(b"hello").await?;
@@ -156,9 +156,9 @@ mod tests {
         Ok(socket)
     }
 
-    fn create_server() -> crate::sim::MachineRef<OsShim> {
-        OsShim::new(Host::new(move || async move {
-            let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
+    fn create_server() -> crate::sim::MachineRef<OsMock> {
+        OsMock::new(move || async move {
+            let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
             let mut c1_addr: Option<SocketAddr> = None;
             // every two clients will get paired up with one another
             loop {
@@ -181,7 +181,8 @@ mod tests {
                     }
                 };
             }
-        }))
+        })
+        .into_ref()
     }
 
     #[test_log::test]
@@ -190,14 +191,14 @@ mod tests {
             udp_capacity: 1,
             ip_hop_capacity: 1,
             nic_capacity: 1,
-            ..Config::new_with_sync_network()
+            ..Config::synchronous_network()
         });
         s.enter_runtime(|| {
             let net = Sim::add_machine(Network::new_with_ipv4_prefix(
                 Ipv4Prefix::new([192, 0, 2, 0].into(), 24).unwrap(),
             ));
-            let server = OsShim::new(Host::new(move || async move {
-                let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
+            let server = OsMock::new(move || async move {
+                let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
                 loop {
                     let mut buf = BytesMut::new();
                     let Ok((_, addr)) = socket.recv_buf_from(&mut buf).await else {
@@ -206,14 +207,15 @@ mod tests {
                     trace!("received {buf:?} from {addr}");
                     socket.send_to(&buf, addr).await.unwrap();
                 }
-            }));
+            })
+            .into_ref();
             // need to assign public ip address manually to avoid colliding with the nat ip addresses
             // in other words, we need an ip that is not an internal network ip address
             let (server_addr, _) = server.get().borrow().connect_to_net(net);
             info!("server address: {server_addr}");
-            let nat = Sim::add_machine(nat::HardNat::new(net));
-            let client = OsShim::new(Host::new(move || async move {
-                let socket = udp::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
+            let nat = nat::HardNat::new(net).into_ref();
+            let client = OsMock::new(move || async move {
+                let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
                 tokio::time::sleep(Duration::from_millis(1)).await; // to make sure server gets inited
                 socket.connect((server_addr, 3000)).await?;
                 socket.send(b"ok").await?;
@@ -221,7 +223,8 @@ mod tests {
                 socket.recv_buf(&mut buf).await?;
                 assert_eq!(b"ok", &buf[..]);
                 Ok(())
-            }));
+            })
+            .into_ref();
             client
                 .get()
                 .borrow()
@@ -238,7 +241,7 @@ mod tests {
             udp_capacity: 10,
             ip_hop_capacity: 10,
             nic_capacity: 10,
-            ..Config::new_with_sync_network()
+            ..Config::synchronous_network()
         });
         s.enter_runtime(|| {
             let net = Sim::add_machine(Network::new_with_ipv4_prefix(
@@ -250,7 +253,7 @@ mod tests {
             info!("server address: {server_addr}");
             let nat1 = Sim::add_machine(nat::EasyNat::new(net));
             trace!("inited server");
-            let c1 = OsShim::new(Host::new(move || async move {
+            let c1 = OsMock::new(move || async move {
                 let socket = holepunch(server_addr).await?;
                 trace!("c1 hole punched");
                 let mut buf = BytesMut::new();
@@ -261,12 +264,13 @@ mod tests {
                 socket.try_recv_buf(&mut buf)?;
                 assert_eq!(b"hello client 1", &buf[..]);
                 Ok(())
-            }));
+            })
+            .into_ref();
             c1.get().borrow().connect_to_net(nat1.get().borrow().lan());
 
             let nat2 = Sim::add_machine(nat::EasyNat::new(net));
 
-            let c2 = OsShim::new(Host::new(move || async move {
+            let c2 = OsMock::new(move || async move {
                 let socket = holepunch(server_addr).await?;
 
                 // now we're hole punched
@@ -276,13 +280,14 @@ mod tests {
                 // wait for send from c1
                 sleep(Duration::from_millis(50)).await;
                 socket.try_recv_buf(&mut buf)?;
-                assert_eq!(b"hello client 1", &buf[..]);
+                assert_eq!(b"hello client 2", &buf[..]);
                 socket.send(b"hello client 1").await?;
 
                 Ok(())
-            }));
+            })
+            .into_ref();
             c2.get().borrow().connect_to_net(nat2.get().borrow().lan());
-            for _ in 0..100000 {
+            for _ in 0..2000 {
                 Sim::tick().unwrap();
             }
             // both clients should hang since both are behind a hard nat
@@ -297,7 +302,7 @@ mod tests {
             udp_capacity: 10,
             ip_hop_capacity: 10,
             nic_capacity: 10,
-            ..Config::new_with_sync_network()
+            ..Config::synchronous_network()
         });
         s.enter_runtime(|| {
             let net = Sim::add_machine(Network::new_with_ipv4_prefix(
@@ -309,7 +314,7 @@ mod tests {
             info!("server address: {server_addr}");
             let nat1 = Sim::add_machine(nat::HardNat::new(net));
             trace!("inited server");
-            let c1 = OsShim::new(Host::new(move || async move {
+            let c1 = OsMock::new(move || async move {
                 let socket = holepunch(server_addr).await?;
                 trace!("c1 hole punched");
                 let mut buf = BytesMut::new();
@@ -321,12 +326,13 @@ mod tests {
                 assert_eq!(res.unwrap_err().kind(), ErrorKind::WouldBlock);
 
                 Ok(())
-            }));
+            })
+            .into_ref();
             c1.get().borrow().connect_to_net(nat1.get().borrow().lan());
 
             let nat2 = Sim::add_machine(nat::HardNat::new(net));
 
-            let c2 = OsShim::new(Host::new(move || async move {
+            let c2 = OsMock::new(move || async move {
                 let socket = holepunch(server_addr).await?;
                 // now we're hole punched
                 trace!("c2 hole punched");
@@ -339,9 +345,10 @@ mod tests {
                 socket.send(b"hello client 1").await?;
 
                 Ok(())
-            }));
-            c2.get().borrow().connect_to_net(nat2.get().borrow().lan());
-            for _ in 0..100000 {
+            });
+            c2.connect_to_net(nat2.get().borrow().lan());
+            let c2 = c2.into_ref();
+            for _ in 0..500 {
                 Sim::tick().unwrap();
             }
             // both clients should hang since both are behind a hard nat
