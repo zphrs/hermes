@@ -37,8 +37,8 @@ pub async fn get_public_ip() -> Option<IpAddr> {
 }
 #[cfg(test)]
 pub async fn get_public_ip_mock() -> Option<IpAddr> {
-    use dens::{OsShim, sim::Sim};
-    let curr_os = Sim::get_current_machine::<OsShim>();
+    use dens::{OsMock, sim::Sim};
+    let curr_os = Sim::get_current_machine::<OsMock>();
     trace!("got current os shim address");
     curr_os.borrow().public_ips().map(|v| IpAddr::V4(v.0))
 }

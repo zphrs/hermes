@@ -9,7 +9,7 @@ use quinn::EndpointStats;
 use skip_server_verification::SkipServerVerification;
 
 #[cfg(test)]
-pub use dens::UdpSocket;
+pub use dens::os_mock::net::UdpSocket;
 #[cfg(not(test))]
 pub use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
@@ -479,6 +479,7 @@ impl rpc::Close for Client {
 #[cfg(test)]
 mod tests {
 
+    use dens::sim::IntoMachineRef;
     use expect_test::expect;
     use rpc::{Call, Caller, Client, Close, Incoming, Transport as _};
     use std::convert::Infallible;
@@ -488,7 +489,7 @@ mod tests {
     use tracing::trace;
     use tracing::{Instrument, Level, span};
 
-    use dens::{Host, OsShim, net::ip, sim::Sim};
+    use dens::{Host, OsMock, net::ip, sim::Sim};
     use shared_schema::ping;
 
     use crate::quinn_transport::Transport;
@@ -518,7 +519,7 @@ mod tests {
         let sim = Sim::new();
         sim.enter_runtime(|| {
             let net = Sim::add_machine(ip::Network::new());
-            let server = OsShim::new(Host::new(move || {
+            let server = OsMock::new(move || {
                 let span = span!(Level::TRACE, "server");
                 async {
                     let tp = Transport::self_signed_server().await?;
@@ -534,12 +535,13 @@ mod tests {
                     Ok(())
                 }
                 .instrument(span)
-            }));
+            })
+            .into_ref();
 
             let server_addr = server.get().borrow().connect_to_net(net);
             Sim::tick_machine(server).unwrap();
 
-            let client = OsShim::new(Host::new(move || {
+            let client = OsMock::new(move || {
                 let span = span!(Level::TRACE, "client");
                 async move {
                     trace!("running");
@@ -557,7 +559,8 @@ mod tests {
                     Ok(())
                 }
                 .instrument(span)
-            }));
+            })
+            .into_ref();
             let _client_ip = client.get().borrow().connect_to_net(net);
             let arr = [client, server];
             Sim::run_until_idle(|| arr.iter()).unwrap();
@@ -568,7 +571,7 @@ mod tests {
         let sim = Sim::new();
         sim.enter_runtime(|| {
             let net = Sim::add_machine(ip::Network::new());
-            let server = OsShim::new(Host::new(move || {
+            let server = OsMock::new(move || {
                 let span = span!(Level::TRACE, "server");
                 async {
                     let tp = Transport::self_signed_server().await?;
@@ -579,12 +582,13 @@ mod tests {
                     Ok(())
                 }
                 .instrument(span)
-            }));
+            })
+            .into_ref();
 
             let server_addr = server.get().borrow().connect_to_net(net);
             Sim::tick_machine(server).unwrap();
 
-            let client = OsShim::new(Host::new(move || {
+            let client = OsMock::new(move || {
                 let span = span!(Level::TRACE, "client");
                 async move {
                     let tp = Transport::client_with_keepalive(false).await?;
@@ -596,11 +600,11 @@ mod tests {
                     {
                         let _guard = ip::Network::add_one_way_partition(
                             net,
-                            Sim::get_current_machine::<OsShim>()
+                            Sim::get_current_machine::<OsMock>()
                                 .borrow()
                                 .public_ip_arr()
                                 .unwrap(),
-                            Sim::get_current_machine::<OsShim>()
+                            Sim::get_current_machine::<OsMock>()
                                 .borrow()
                                 .public_ip_arr()
                                 .unwrap(),
@@ -612,7 +616,8 @@ mod tests {
                     Ok(())
                 }
                 .instrument(span)
-            }));
+            })
+            .into_ref();
             let _client_ips = client.get().borrow().connect_to_net(net);
             let arr = [client];
             Sim::run_until_idle(|| arr.iter()).unwrap();
@@ -624,7 +629,7 @@ mod tests {
         let sim = Sim::new();
         sim.enter_runtime(|| {
             let net = Sim::add_machine(ip::Network::new());
-            let server = OsShim::new(Host::new(move || {
+            let server = OsMock::new(move || {
                 let span = span!(Level::TRACE, "server");
                 async {
                     let tp = Transport::self_signed_server().await?;
@@ -640,12 +645,13 @@ mod tests {
                     Ok(())
                 }
                 .instrument(span)
-            }));
+            })
+            .into_ref();
 
             let server_addr = server.get().borrow().connect_to_net(net);
             Sim::tick_machine(server).unwrap();
 
-            let client = OsShim::new(Host::new(move || {
+            let client = OsMock::new(move || {
                 let span = span!(Level::TRACE, "client");
                 async move {
                     trace!("running");
@@ -663,7 +669,8 @@ mod tests {
                     Ok(())
                 }
                 .instrument(span)
-            }));
+            })
+            .into_ref();
             let _client_ip = client.get().borrow().connect_to_net(net);
             let arr = [client, server];
             Sim::run_until_idle(|| arr.iter()).unwrap();

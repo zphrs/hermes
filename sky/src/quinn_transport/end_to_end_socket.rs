@@ -4,7 +4,7 @@ use std::{
 };
 
 #[cfg(test)]
-pub use dens::UdpSocket;
+pub use dens::os_mock::net::UdpSocket;
 #[cfg(not(test))]
 pub use tokio::net::UdpSocket;
 

@@ -329,9 +329,9 @@ mod tests {
     use tracing::{Instrument, Level, span, trace};
 
     use dens::{
-        Host, OsShim,
+        Host, OsMock,
         net::ip,
-        sim::{MachineRef, RNG, Sim},
+        sim::{IntoMachineRef as _, MachineRef, RNG, Sim},
     };
 
     use crate::{
@@ -362,15 +362,14 @@ mod tests {
         assert!(RootRequest::max_len() as u32 >= find_nodes_variant.cbor_len(&mut ()) as u32);
     }
 
-    pub fn create_server() -> MachineRef<OsShim> {
-        let server = OsShim::new(Host::new(move || async {
-            Ok(SkyServer::new().await?.run().await??)
-        }));
+    pub fn create_server() -> MachineRef<OsMock> {
+        let server =
+            OsMock::new(move || async { Ok(SkyServer::new().await?.run().await??) }).into_ref();
         server
     }
 
-    pub fn create_ping_client(server_addr: std::net::IpAddr) -> MachineRef<OsShim> {
-        OsShim::new(Host::new(move || {
+    pub fn create_ping_client(server_addr: std::net::IpAddr) -> MachineRef<OsMock> {
+        OsMock::new(move || {
             let span = span!(Level::DEBUG, "client");
             async move {
                 let tp = Transport::client().await?;
@@ -428,7 +427,8 @@ mod tests {
                 Ok(())
             }
             .instrument(span)
-        }))
+        })
+        .into_ref()
     }
 
     #[test]

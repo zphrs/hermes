@@ -1,9 +1,9 @@
 use std::{cell::RefCell, net::IpAddr, rc::Rc, time::Duration};
 
 use dens::{
-    Host, OsShim,
+    Host, OsMock,
     net::ip,
-    sim::{MachineRef, Sim, machine::HasMachineId},
+    sim::{IntoMachineRef, MachineRef, Sim, machine::HasMachineId},
 };
 
 use kademlia::HasId;
@@ -28,7 +28,7 @@ fn kad() {
 
         trace!("bootstrapped first node");
         let num_inited = Rc::new(RefCell::new(0));
-        let mut bootstrap_servers: Vec<MachineRef<OsShim>> = vec![];
+        let mut bootstrap_servers: Vec<MachineRef<OsMock>> = vec![];
         let mut machine_addresses: Vec<SkyNode> = vec![];
         // join servers in 10 rounds of 2^i
         let mut spawned_so_far = 0;
@@ -98,19 +98,19 @@ fn kad() {
 
 fn create_client(
     net: MachineRef<ip::Network>,
-    servers: Vec<MachineRef<OsShim>>,
+    servers: Vec<MachineRef<OsMock>>,
     all_server_addrs: Vec<SkyNode>,
     nearby: EarthId,
     num_inited: Rc<RefCell<usize>>,
-) -> MachineRef<OsShim> {
-    let client = OsShim::new(Host::new(move || {
+) -> MachineRef<OsMock> {
+    let client = OsMock::new(move || {
         let servers = servers.clone();
         let nearby = nearby.clone();
         let all_server_addrs = all_server_addrs.clone();
         let num_inited = num_inited.clone();
         async move {
             let _dir = std::fs::create_dir_all("logs").unwrap();
-            let val = Sim::get_current_machine_ref::<OsShim>();
+            let val = Sim::get_current_machine_ref::<OsMock>();
             let num = val.id();
             let output_file = std::fs::File::create(format!("logs/client_{num}.log")).unwrap();
             async move {
@@ -185,7 +185,8 @@ fn create_client(
             )
             .await
         }
-    }));
+    })
+    .into_ref();
     let addr = client.get().borrow().connect_to_net(net);
     client.get().borrow().set_public_ips(addr);
     client
@@ -196,12 +197,12 @@ fn create_sky_node(
     bootstrap_nodes: Vec<SkyNode>,
     offset: usize,
     num_inited: Rc<RefCell<usize>>,
-) -> MachineRef<OsShim> {
-    let node = OsShim::new(Host::new(move || {
+) -> MachineRef<OsMock> {
+    let node = OsMock::new(move || {
         let nodes = bootstrap_nodes.clone();
         let num_inited = num_inited.clone();
         async move {
-            let ip: IpAddr = Sim::get_current_machine_ref::<OsShim>()
+            let ip: IpAddr = Sim::get_current_machine_ref::<OsMock>()
                 .get()
                 .borrow()
                 .public_ips()
@@ -237,7 +238,8 @@ fn create_sky_node(
             )
             .await
         }
-    }));
+    })
+    .into_ref();
     let addr = node.get().borrow().connect_to_net(net);
     node.get().borrow().set_public_ips(addr);
     node
