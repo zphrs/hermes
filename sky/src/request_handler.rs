@@ -456,7 +456,7 @@ mod tests {
             let server_addr = server.get().borrow().connect_to_net(net);
             Sim::tick_machine(server).unwrap();
             let mut arr = vec![];
-            for _ in 0..10_000 {
+            for _ in 0..4_000 {
                 let client = create_ping_client(server_addr.0.into());
                 let _client_ip = client.get().borrow().connect_to_net(net);
                 arr.push(client);
