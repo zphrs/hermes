@@ -1,9 +1,9 @@
 use std::{cell::RefCell, net::IpAddr, rc::Rc, time::Duration};
 
 use dens::{
-    Host, OsMock,
+    OsMock,
     net::ip,
-    sim::{IntoMachineRef, MachineRef, Sim, machine::HasMachineId},
+    sim::{MachineIntoRef, MachineRef, Sim, machine::HasMachineId},
 };
 
 use kademlia::HasId;
@@ -24,7 +24,7 @@ fn kad() {
     // as the default.
 
     sim.enter_runtime(|| {
-        let net = Sim::add_machine(ip::Network::new());
+        let net = Sim::add_machine(ip::Network::new_private_class_c());
 
         trace!("bootstrapped first node");
         let num_inited = Rc::new(RefCell::new(0));

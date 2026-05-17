@@ -129,8 +129,7 @@ where
     /// ```
     fn max_len() -> usize {
         tracing::warn!("using uncached version of max_len");
-        let out = Self::max_len_init();
-        out
+        Self::max_len_init()
     }
 }
 
@@ -176,9 +175,7 @@ where
 ///
 /// The unit type has a fixed size.
 impl MaxLen for () {
-    fn biggest_instantiation() -> Self {
-        ()
-    }
+    fn biggest_instantiation() -> Self {}
 }
 
 /// MaxLen implementation for SocketAddr.

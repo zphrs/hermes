@@ -479,7 +479,7 @@ impl rpc::Close for Client {
 #[cfg(test)]
 mod tests {
 
-    use dens::sim::IntoMachineRef;
+    use dens::sim::MachineIntoRef;
     use expect_test::expect;
     use rpc::{Call, Caller, Client, Close, Incoming, Transport as _};
     use std::convert::Infallible;
@@ -489,7 +489,7 @@ mod tests {
     use tracing::trace;
     use tracing::{Instrument, Level, span};
 
-    use dens::{Host, OsMock, net::ip, sim::Sim};
+    use dens::{OsMock, net::ip, sim::Sim};
     use shared_schema::ping;
 
     use crate::quinn_transport::Transport;
@@ -518,7 +518,7 @@ mod tests {
     pub fn basic_quinn() {
         let sim = Sim::new();
         sim.enter_runtime(|| {
-            let net = Sim::add_machine(ip::Network::new());
+            let net = Sim::add_machine(ip::Network::new_private_class_c());
             let server = OsMock::new(move || {
                 let span = span!(Level::TRACE, "server");
                 async {
@@ -570,9 +570,9 @@ mod tests {
     pub fn check_timeout_state() {
         let sim = Sim::new();
         sim.enter_runtime(|| {
-            let net = Sim::add_machine(ip::Network::new());
+            let net = Sim::add_machine(ip::Network::new_private_class_c());
             let server = OsMock::new(move || {
-                let span = span!(Level::TRACE, "server");
+                let span = span!(Level::INFO, "server");
                 async {
                     let tp = Transport::self_signed_server().await?;
                     let client = tp.accept().await?.accept().await?;
@@ -589,7 +589,7 @@ mod tests {
             Sim::tick_machine(server).unwrap();
 
             let client = OsMock::new(move || {
-                let span = span!(Level::TRACE, "client");
+                let span = span!(Level::INFO, "client");
                 async move {
                     let tp = Transport::client_with_keepalive(false).await?;
                     let conn = tp.connect(&IpAddr::from(server_addr.0).into()).await?;
@@ -628,7 +628,7 @@ mod tests {
     pub fn drop_server_conn() {
         let sim = Sim::new();
         sim.enter_runtime(|| {
-            let net = Sim::add_machine(ip::Network::new());
+            let net = Sim::add_machine(ip::Network::new_private_class_c());
             let server = OsMock::new(move || {
                 let span = span!(Level::TRACE, "server");
                 async {
