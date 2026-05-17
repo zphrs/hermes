@@ -563,8 +563,11 @@ impl UdpSocket {
     pub fn poll_send_ready(&self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // In our simulated socket the send channel is always immediately writable
         // unless the receiver has been dropped.
+
         if self.send.is_closed() {
             Poll::Ready(Err(io::Error::from(ErrorKind::BrokenPipe)))
+        } else if self.send.capacity() == 0 {
+            Poll::Pending
         } else {
             Poll::Ready(Ok(()))
         }

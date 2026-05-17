@@ -90,7 +90,7 @@ impl Network {
                 }
                 trace!("waiting to send for {:?}", jitter);
                 tokio::time::sleep(jitter).await;
-                let res = nic.try_post(posting).await;
+                let res = nic.try_post(posting);
                 if let Err(e) = res {
                     tracing::warn!("failed to deliver message to nic: {}", e);
                 }

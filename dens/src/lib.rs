@@ -247,7 +247,7 @@ mod tests {
 
                     println!("HOST AWAITING MSG");
 
-                    let res = host.borrow().inner().try_read().expect("valid res");
+                    let res = host.borrow().inner().read().await.expect("valid res");
                     println!("HOST GOT MSG");
 
                     let packet = udp::Packet::try_from_bytes(res).unwrap();

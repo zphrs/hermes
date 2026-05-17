@@ -40,8 +40,8 @@ impl MachineNic {
     /// Drops message on floor if recipient's buffer is full
     /// Logs error from [`Self::try_post`] as a warning
     #[instrument(skip(posting))]
-    pub async fn post(&self, posting: Bytes) {
-        if let Err(e) = self.try_post(posting).await {
+    pub fn post(&self, posting: Bytes) {
+        if let Err(e) = self.try_post(posting) {
             tracing::warn!("dropping posted packet because {}", e);
         }
     }
@@ -51,7 +51,7 @@ impl MachineNic {
     /// Returns [`std::io::ErrorKind::QuotaExceeded`] if the recipient's buffer is full,
     /// or [`std::io::ErrorKind::HostUnreachable`] if the recipient has been dropped.
     #[instrument(skip(posting))]
-    pub async fn try_post(&self, posting: Bytes) -> std::io::Result<()> {
+    pub fn try_post(&self, posting: Bytes) -> std::io::Result<()> {
         self.tx.try_send(posting).map_err(|e| match e {
             mpsc::error::TrySendError::Full(_) => {
                 std::io::Error::new(std::io::ErrorKind::QuotaExceeded, e)
@@ -147,9 +147,8 @@ impl BasicMachine {
         self.rx.borrow_mut().poll_recv(cx)
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
-    pub fn try_read(&self) -> Result<bytes::Bytes, tokio::sync::mpsc::error::TryRecvError> {
-        self.rx.borrow_mut().try_recv()
+    pub async fn read(&self) -> Option<bytes::Bytes> {
+        self.rx.borrow_mut().recv().await
     }
     /// Spawns the [`task`] on the machine. Key way to run software.
     pub fn spawn_local<Fut>(&self, task: Fut) -> AbortHandle

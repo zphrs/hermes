@@ -3,7 +3,6 @@ pub use map::GenericNat;
 
 pub use map::easy;
 pub use map::hard;
-use std::time::Duration;
 use std::{marker::PhantomData, net::IpAddr, rc::Rc};
 
 use tracing::info;
@@ -78,15 +77,8 @@ impl<Mapping: Map + 'static> Nat<Mapping> {
         out.inner_machine.spawn_local(async move {
             let mut mapping: Mapping = Default::default();
             loop {
-                let bytes = match inner_machine.try_read() {
-                    Ok(bytes) => bytes,
-                    Err(e) => match e {
-                        tokio::sync::mpsc::error::TryRecvError::Empty => {
-                            tokio::time::sleep(Duration::from_millis(1)).await;
-                            continue;
-                        }
-                        tokio::sync::mpsc::error::TryRecvError::Disconnected => break,
-                    },
+                let Some(bytes) = inner_machine.read().await else {
+                    break;
                 };
 
                 let Ok(mut packet) = udp::Packet::try_from_bytes(bytes) else {

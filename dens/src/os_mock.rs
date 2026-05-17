@@ -259,17 +259,8 @@ impl OsMock {
         let ah1 = self.host.inner().spawn_local(async move {
             let machine = Sim::get_current_machine::<OsMock>();
             loop {
-                let res = machine.borrow().host.inner().try_read();
-                let msg = match res {
-                    Ok(msg) => msg,
-                    Err(e) => match e {
-                        mpsc::error::TryRecvError::Empty => {
-                            tokio::time::sleep(Duration::from_millis(1)).await;
-                            continue;
-                        }
-                        mpsc::error::TryRecvError::Disconnected => break,
-                    },
-                };
+                let res = machine.borrow().host.inner().read().await;
+                let Some(msg) = res else { break };
                 machine.borrow().handle_incoming_ip_packet(msg);
             }
             Ok(())
