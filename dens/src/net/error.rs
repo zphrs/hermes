@@ -13,5 +13,5 @@ pub enum ParseError {
     #[error("not enough bytes for a header. Expected {expected} and found {had}")]
     NotEnoughForHeaders { expected: u16, had: usize },
     #[error("not enough bytes for body content. Expected {expected} and found {had}")]
-    NotEnoughForData { expected: u16, had: usize },
+    PaloadLengthMismatch { expected: u16, had: usize },
 }

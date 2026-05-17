@@ -32,21 +32,25 @@ impl Debug for MachineNic {
 }
 
 impl MachineNic {
+    #[must_use]
     pub fn new(tx: Sender<Bytes>, parent_id: MachineId) -> Self {
         Self { tx, parent_id }
     }
 
     /// Drops message on floor if recipient's buffer is full
-    /// Logs error as a warning
+    /// Logs error from [`Self::try_post`] as a warning
     #[instrument(skip(posting))]
     pub async fn post(&self, posting: Bytes) {
         if let Err(e) = self.try_post(posting).await {
-            tracing::warn!("dropping posted packet because {}", e)
+            tracing::warn!("dropping posted packet because {}", e);
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`std::io::ErrorKind::QuotaExceeded`] if the recipient's buffer is full,
+    /// or [`std::io::ErrorKind::HostUnreachable`] if the recipient has been dropped.
     #[instrument(skip(posting))]
-    // will drop message on floor if recipient's buffer is full
     pub async fn try_post(&self, posting: Bytes) -> std::io::Result<()> {
         self.tx.try_send(posting).map_err(|e| match e {
             mpsc::error::TrySendError::Full(_) => {
@@ -76,14 +80,14 @@ impl HasMachineId for MachineId {
 
 impl<M: Machine> HasMachineId for M {
     fn id(&self) -> MachineId {
-        self.basic_machine().id()
+        BasicMachine::id(&self.basic_machine())
     }
 }
 
 pub trait Machine: Any + HasMachineId {
-    /// Returns whether the machine has finished all its tasks or the error
-    /// that caused the failure.  Subsequent calls do not return the error as it
-    /// is expected to fail the simulation.
+    /// Returns whether the machine has finished all its tasks or the error that
+    /// caused the failure. Subsequent calls do not return the error as it is
+    /// expected to fail the simulation.
     fn basic_machine(&self) -> Rc<BasicMachine>;
 
     fn is_idle(&self) -> bool;
@@ -101,19 +105,21 @@ pub struct BasicMachine {
 }
 
 impl BasicMachine {
+    #[must_use]
     pub fn new(bufsize: usize) -> BasicMachine {
         let (tx, rx) = mpsc::channel::<Bytes>(bufsize);
         let id = MachineId::new();
-
+        #[expect(clippy::missing_panics_doc, reason = "infallible")]
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .start_paused(true)
             .build()
             .unwrap();
 
-        // enter runtime here to ensure that the start_time is the start_time of the machine
+        // enter runtime here to ensure that the start_time is the start_time of
+        // the machine
         let _guard = rt.enter();
-
+        #[allow(clippy::default_trait_access)]
         Self {
             nic: MachineNic::new(tx, id),
             id,
@@ -128,9 +134,13 @@ impl BasicMachine {
 
     pub fn sys_time(&self) -> std::time::SystemTime {
         use std::time::SystemTime;
+        #[expect(
+            clippy::missing_panics_doc,
+            reason = "infallible unless the system is up for 2^32 seconds"
+        )]
         SystemTime::UNIX_EPOCH
             .checked_add(self.start_time.elapsed())
-            .unwrap()
+            .expect("system shouldn't be alive for enough time (2^32 seconds) to cause an overflow")
     }
 
     pub fn poll_read_bytes(&self, cx: &mut Context<'_>) -> Poll<Option<bytes::Bytes>> {
@@ -138,10 +148,10 @@ impl BasicMachine {
     }
 
     #[allow(clippy::await_holding_refcell_ref)]
-    pub async fn read(&self) -> Option<Bytes> {
-        self.rx.borrow_mut().recv().await
+    pub fn try_read(&self) -> Result<bytes::Bytes, tokio::sync::mpsc::error::TryRecvError> {
+        self.rx.borrow_mut().try_recv()
     }
-
+    /// Spawns the [`task`] on the machine. Key way to run software.
     pub fn spawn_local<Fut>(&self, task: Fut) -> AbortHandle
     where
         Fut: Future<Output = Result> + 'static,
@@ -164,13 +174,17 @@ impl BasicMachine {
         self.js.borrow().len()
     }
 
+    /// # Errors
+    ///
+    /// Will propagate up any errors thrown during the execution of the
+    /// test.
     pub fn tick(&self, duration: Duration) -> Result<bool> {
         self.rt.block_on(async {
             self.local
                 .run_until(async {
                     tokio::time::sleep(duration).await;
                 })
-                .await
+                .await;
         });
         // throw any error up the chain
         while let Some(next) = self.js.borrow_mut().try_join_next() {
@@ -197,13 +211,23 @@ impl HasNic for BasicMachine {
     }
 }
 
+impl Machine for Rc<BasicMachine> {
+    fn basic_machine(&self) -> Rc<BasicMachine> {
+        self.clone()
+    }
+
+    fn is_idle(&self) -> bool {
+        BasicMachine::is_idle(self)
+    }
+}
+
 impl futures_io::AsyncRead for BasicMachine {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<std::io::Result<usize>> {
-        if self.curr_byte_buf.len() == 0 {
+        if self.curr_byte_buf.is_empty() {
             match self.poll_read_bytes(cx) {
                 Poll::Ready(Some(bytes)) => {
                     let out_len = std::cmp::min(bytes.len(), buf.len());
@@ -211,7 +235,7 @@ impl futures_io::AsyncRead for BasicMachine {
                     self.curr_byte_buf = bytes.slice(out_len..);
                     Poll::Ready(Ok(out_len))
                 }
-                Poll::Ready(None) => return Poll::Ready(Ok(0)),
+                Poll::Ready(None) => Poll::Ready(Ok(0)),
                 Poll::Pending => Poll::Pending,
             }
         } else {
@@ -223,7 +247,6 @@ impl futures_io::AsyncRead for BasicMachine {
 }
 
 /// Intentionally opaque type only for uniquely identifying hosts.
-/// There is never a reason to have a mutable pointer to a HostId.
 #[derive(Hash, PartialEq, Eq, Clone, Copy)]
 pub struct MachineId {
     pub(crate) id: u64,

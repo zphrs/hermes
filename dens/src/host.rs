@@ -52,7 +52,7 @@ impl Host {
     {
         let bufsize = CONFIG.with(|cfg| cfg.nic_capacity);
         let software: Software = Box::new(move || Box::pin(software()));
-        let out = Host {
+        let out = Self {
             entrypoint: software,
             handle: None.into(),
             inner_machine: BasicMachine::new(bufsize).into(),
@@ -73,7 +73,7 @@ impl Host {
         if self.handle.borrow().is_some() {
             warn!("tried to start an already running task");
             return;
-        };
+        }
         let handle = self.inner_machine.spawn_local((self.entrypoint)());
 
         *self.handle.borrow_mut() = Some(handle);
@@ -83,7 +83,7 @@ impl Host {
         if let Some(handle) = self.handle.take() {
             handle.abort();
         } else {
-            warn!("tried to stop a task that is already stopped")
+            warn!("tried to stop a task that is already stopped");
         }
     }
 }
@@ -95,11 +95,12 @@ impl Machine for Host {
 
     fn is_idle(&self) -> bool {
         let mut handle = self.handle.borrow_mut();
-        if let Some(task) = &*handle {
-            if task.is_finished() {
-                *handle = None;
-            }
-        };
+        if let Some(task) = &*handle
+            && task.is_finished()
+        {
+            *handle = None;
+        }
+
         handle.is_none()
     }
 }
@@ -125,6 +126,6 @@ mod tests {
             assert!(!h.is_idle());
             assert!(h.inner_machine.tick(Duration::new(1, 0)).unwrap());
             assert!(h.is_idle());
-        })
+        });
     }
 }

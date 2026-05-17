@@ -7,6 +7,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::Range,
     rc::Rc,
+    time::Duration,
 };
 
 use crate::{
@@ -16,7 +17,7 @@ use crate::{
         udp,
     },
     sim::{
-        IntoMachineRef, MachineRef, Sim,
+        MachineIntoRef, MachineRef, Sim,
         config::CONFIG,
         machine::{HasNic, Machine},
     },
@@ -54,8 +55,8 @@ impl InnerOsMock {
     pub fn new(nets: HashMap<IpAddr, MachineRef<ip::Network>>) -> Self {
         let (send_incoming, recv_incoming) = CONFIG.with(|cfg| mpsc::channel(cfg.nic_capacity()));
         Self {
-            wildcard_sockets: Default::default(),
-            sockets: Default::default(),
+            wildcard_sockets: Vec::default(),
+            sockets: HashMap::default(),
             nets,
             port_iter: Self::ephemeral_port_gen(),
             send_incoming,
@@ -74,14 +75,14 @@ impl InnerOsMock {
     }
 
     pub fn set_abort_handles(&mut self, abort_handles: (AbortHandle, AbortHandle)) {
-        self.ahs = Some(abort_handles.into());
+        self.ahs = Some(abort_handles);
     }
 
     pub fn is_aborted(&self) -> bool {
         self.ahs.is_none()
     }
 
-    async fn handle_incoming_ip_packet(&self, packet: Bytes) {
+    fn handle_incoming_ip_packet(&self, packet: Bytes) {
         let udp_packet = match crate::net::udp::Packet::try_from_bytes(packet) {
             Ok(p) => p,
             Err(e) => {
@@ -231,9 +232,9 @@ impl OsMock {
         Self::new_with_host(host)
     }
     pub fn new_with_host(host: Host) -> Self {
-        let mut ipv4_loopback = ip::Network::new();
+        let mut ipv4_loopback = ip::Network::new_private_class_c();
         ipv4_loopback.add_machine_with_range(&host, "127.0.0.0/8".parse().unwrap());
-        let mut ipv6_loopback = ip::Network::new();
+        let mut ipv6_loopback = ip::Network::new_private_class_c();
         ipv6_loopback.add_machine_with_range(&host, "::1/128".parse().unwrap());
         let mut nets = HashMap::new();
         nets.insert(Ipv4Addr::LOCALHOST.into(), ipv4_loopback.into_ref());
@@ -257,12 +258,19 @@ impl OsMock {
         // handle receiving a message from the network and forwarding it to the udp port
         let ah1 = self.host.inner().spawn_local(async move {
             let machine = Sim::get_current_machine::<OsMock>();
-            let borrowed = machine.borrow();
             loop {
-                let Some(msg) = borrowed.host.inner().read().await else {
-                    break;
+                let res = machine.borrow().host.inner().try_read();
+                let msg = match res {
+                    Ok(msg) => msg,
+                    Err(e) => match e {
+                        mpsc::error::TryRecvError::Empty => {
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                            continue;
+                        }
+                        mpsc::error::TryRecvError::Disconnected => break,
+                    },
                 };
-                borrowed.handle_incoming_ip_packet(msg).await;
+                machine.borrow().handle_incoming_ip_packet(msg);
             }
             Ok(())
         });
@@ -270,20 +278,28 @@ impl OsMock {
         // handle receiving a message from userspace and forwarding it to the network
         let ah2 = self.host.inner().spawn_local(async move {
             let machine = Sim::get_current_machine::<OsMock>();
-            let borrowed = machine.borrow();
             loop {
-                let Some(msg) = borrowed
+                let res = machine
+                    .borrow()
                     .inner
                     .borrow()
                     .recv_incoming
                     .borrow_mut()
-                    .recv()
-                    .await
-                else {
-                    break;
+                    .try_recv();
+                let msg = match res {
+                    Ok(msg) => msg,
+                    Err(e) => match e {
+                        mpsc::error::TryRecvError::Empty => {
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                            continue;
+                        }
+                        mpsc::error::TryRecvError::Disconnected => {
+                            break;
+                        }
+                    },
                 };
-                match borrowed.send_packet(msg) {
-                    Ok(_) => {}
+                match machine.borrow().send_packet(msg) {
+                    Ok(()) => {}
                     Err(e) => warn!("error when sending packet: {}", e),
                 }
             }
@@ -293,8 +309,9 @@ impl OsMock {
         self.inner.borrow_mut().set_abort_handles((ah1, ah2));
     }
 
-    async fn handle_incoming_ip_packet(&self, packet: Bytes) {
-        self.inner.borrow().handle_incoming_ip_packet(packet).await
+    #[allow(clippy::semicolon_if_nothing_returned)]
+    fn handle_incoming_ip_packet(&self, packet: Bytes) {
+        self.inner.borrow().handle_incoming_ip_packet(packet)
     }
 
     pub fn connect_to_net(&self, net: MachineRef<ip::Network>) -> (Ipv4Addr, Ipv6Addr) {

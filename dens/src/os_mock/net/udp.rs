@@ -1,3 +1,6 @@
+#![allow(clippy::await_holding_refcell_ref)]
+#![allow(clippy::unused_async, reason = "it's async in the cargo version")]
+
 use bytes::{BufMut, Bytes};
 use tokio::{
     io::{Interest, ReadBuf, Ready},
@@ -49,7 +52,7 @@ use crate::{OsMock, sim::Sim};
 ///
 /// Using `bind` we can create a simple echo server that sends and recv's with many different clients:
 /// ```no_run
-/// use dens::UdpSocket;
+/// use dens::os_mock::net::UdpSocket;
 /// use std::io;
 ///
 /// #[tokio::main]
@@ -70,7 +73,7 @@ use crate::{OsMock, sim::Sim};
 ///
 /// Or using `connect` we can echo with a single remote address using `send` and `recv`:
 /// ```no_run
-/// use dens::UdpSocket;
+/// use dens::os_mock::net::UdpSocket;
 /// use std::io;
 ///
 /// #[tokio::main]
@@ -123,8 +126,6 @@ use crate::{OsMock, sim::Sim};
 ///     }
 /// }
 /// ```
-///
-
 pub struct UdpSocket {
     send: mpsc::Sender<crate::net::udp::Packet>,
     recv: RefCell<mpsc::Receiver<crate::net::udp::Packet>>,
@@ -143,10 +144,7 @@ struct Peeked {
 impl From<crate::net::udp::Packet> for Peeked {
     fn from(packet: crate::net::udp::Packet) -> Self {
         let bytes = packet.body();
-        Self {
-            packet,
-            bytes: bytes.into(),
-        }
+        Self { packet, bytes }
     }
 }
 
@@ -161,7 +159,7 @@ impl UdpSocket {
     /// # Example
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -176,7 +174,6 @@ impl UdpSocket {
     pub async fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<UdpSocket> {
         let addrs = to_socket_addrs(addr)?;
         let mut last_err = None;
-
         for addr in addrs {
             match Self::bind_addr(addr) {
                 Ok(socket) => return Ok(socket),
@@ -184,7 +181,7 @@ impl UdpSocket {
             }
         }
 
-        Err(last_err.unwrap())
+        Err(last_err.ok_or(io::ErrorKind::InvalidInput)?)
     }
 
     fn bind_addr(addr: SocketAddr) -> io::Result<UdpSocket> {
@@ -195,7 +192,7 @@ impl UdpSocket {
             send,
             recv: recv.into(),
             local_addr: local_addr.into(),
-            peer_addr: Default::default(),
+            peer_addr: RefCell::default(),
             peeked: None.into(),
         })
     }
@@ -233,7 +230,7 @@ impl UdpSocket {
     /// # Example
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// # use std::{io, net::SocketAddr};
     ///
     /// # #[tokio::main]
@@ -282,7 +279,7 @@ impl UdpSocket {
     /// # Example
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// # use dens::os_mock::net::UdpSocket;
     /// # use std::{io, net::SocketAddr};
     ///
     /// # #[tokio::main]
@@ -303,23 +300,23 @@ impl UdpSocket {
     /// # Example
     ///
     /// ```
-    /// use dens::UdpSocket;
-    ///
+    /// use dens::os_mock::net::UdpSocket;
+    /// # use dens::MachineIntoRef as _;
     /// # use dens::sim::Sim;
-    /// # use dens::{Host, OsShim, Machine};
+    /// # use dens::{Host, OsMock, Machine};
     /// # use std::time::Duration;
     /// # use std::{io, net::SocketAddr};
     /// # fn main() -> io::Result<()> {
     /// # let sim = Sim::new();
     /// # sim.enter_runtime(|| {
-    /// # let shim = OsShim::new(Host::new(|| async {
+    /// # let shim = OsMock::new(|| async {
     /// let addr = "0.0.0.0:8080".parse::<SocketAddr>().unwrap();
     /// let peer = "127.0.0.1:11100".parse::<SocketAddr>().unwrap();
     /// let sock = UdpSocket::bind(addr).await?;
     /// sock.connect(peer).await?;
     /// assert_eq!(peer, sock.peer_addr()?);
     /// Ok(())
-    /// # }));
+    /// # }).into_ref();
     /// # let machines = [shim];
     /// # Sim::run_until_idle(|| machines.iter()).unwrap();
     /// #
@@ -338,7 +335,7 @@ impl UdpSocket {
     /// # Example
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// # use std::{io, net::SocketAddr};
     ///
     /// # #[tokio::main]
@@ -386,7 +383,7 @@ impl UdpSocket {
     ///
     /// ```no_run
     /// use tokio::io::{self, Interest};
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     ///
     /// #[tokio::main]
     /// async fn main() -> io::Result<()> {
@@ -498,7 +495,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -596,7 +593,7 @@ impl UdpSocket {
     ///
     /// ```no_run
     /// use tokio::io;
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     ///
     /// #[tokio::main]
     /// async fn main() -> io::Result<()> {
@@ -673,7 +670,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -745,7 +742,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -853,7 +850,7 @@ impl UdpSocket {
     /// [`connect`]: method@Self::connect
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -927,7 +924,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -986,7 +983,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -1044,7 +1041,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -1096,7 +1093,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -1160,7 +1157,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -1210,7 +1207,7 @@ impl UdpSocket {
     /// # Example
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -1223,6 +1220,7 @@ impl UdpSocket {
     ///     Ok(())
     /// }
     /// ```
+    #[allow(clippy::unused_async, reason = "it's async in the cargo version")]
     pub async fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
         let target = to_socket_addrs(addr)?
             .next()
@@ -1284,7 +1282,7 @@ impl UdpSocket {
     /// # Example
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::error::Error;
     /// use std::io;
     ///
@@ -1362,7 +1360,7 @@ impl UdpSocket {
     /// # Example
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -1539,7 +1537,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -1683,7 +1681,7 @@ impl UdpSocket {
         loop {
             self.ready(interest).await?;
             match f() {
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
         }
@@ -1714,7 +1712,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -1854,7 +1852,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -2213,7 +2211,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// # use std::io;
     ///
     /// # async fn dox() -> io::Result<()> {
@@ -2235,7 +2233,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// # use std::io;
     ///
     /// # async fn dox() -> io::Result<()> {
@@ -2434,7 +2432,7 @@ impl UdpSocket {
     ///
     /// # Examples
     /// ```no_run
-    /// use dens::UdpSocket;
+    /// use dens::os_mock::net::UdpSocket;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -2467,6 +2465,7 @@ impl TryFrom<std::net::UdpSocket> for UdpSocket {
     }
 }
 
+#[allow(clippy::missing_fields_in_debug)]
 impl fmt::Debug for UdpSocket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UdpSocket")

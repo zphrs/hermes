@@ -24,13 +24,13 @@ pub struct Network {
 }
 
 impl Network {
+    #[must_use]
     pub fn new() -> Self {
         let machine = CONFIG.with(|cfg| BasicMachine::new(cfg.ip_hop_capacity()));
-        let out = Self {
+        Self {
             inner_machine: machine.into(),
-            machines: Default::default(),
-        };
-        out
+            machines: HashMap::default(),
+        }
     }
 }
 
@@ -53,25 +53,32 @@ impl Network {
         self.machines.remove(&host.id());
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the machine corresponding to the specified
+    /// [`MachineId`] is not added to the network.
     pub fn try_send_to_host(&self, id: &MachineId, posting: Bytes) -> std::io::Result<()> {
-        let dropped = CONFIG.with(|cfg| {
-            let dropped =
-                RNG.with(|rng| rng.borrow_mut().random_bool(cfg.message_loss_fail_rate()));
-            dropped
-        });
+        let dropped = CONFIG
+            .with(|cfg| RNG.with(|rng| rng.borrow_mut().random_bool(cfg.message_loss_fail_rate())));
         let (nic, latency) = self
             .machines
             .get(id)
             .ok_or(ErrorKind::HostUnreachable)?
             .clone();
         let jitter = RNG.with(|rng| {
+            #[allow(clippy::cast_precision_loss)]
             let stdev = latency.as_millis() as f64 / 5.0;
+            #[expect(clippy::missing_panics_doc, reason = "infallible")]
             let dist = rand_distr::Normal::new(0.0, stdev).unwrap();
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "tokio's sleep precision is only guaranteed to the millisecond"
+            )]
             let jitter_ms = rng.borrow_mut().sample(dist) as i64;
             if jitter_ms < 0 {
-                latency.saturating_sub(Duration::from_millis((-jitter_ms) as u64))
+                latency.saturating_sub(Duration::from_millis(jitter_ms.cast_unsigned()))
             } else {
-                latency + Duration::from_millis(jitter_ms as u64)
+                latency + Duration::from_millis(jitter_ms.cast_unsigned())
             }
         });
         let span = tracing::debug_span!("send_to_host", to=?id);
@@ -126,7 +133,7 @@ mod tests {
             nat::{self},
         },
         os_mock::net::UdpSocket,
-        sim::{Config, IntoMachineRef as _},
+        sim::{Config, MachineIntoRef as _},
     };
 
     async fn holepunch(server_addr: Ipv4Addr) -> anyhow::Result<UdpSocket> {
@@ -161,16 +168,25 @@ mod tests {
             let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
             let mut c1_addr: Option<SocketAddr> = None;
             // every two clients will get paired up with one another
+            #[allow(
+                clippy::single_match_else,
+                reason = "loop over match makes it clearer that it's a state toggle"
+            )]
             loop {
                 match c1_addr {
-                    Some(c1_addr) => {
+                    Some(c1_addr_inner) => {
                         let mut buf = BytesMut::new();
                         let Ok((_, addr)) = socket.recv_buf_from(&mut buf).await else {
                             continue;
                         };
 
-                        socket.send_to(c1_addr.to_string().as_bytes(), addr).await?;
-                        socket.send_to(addr.to_string().as_bytes(), c1_addr).await?;
+                        socket
+                            .send_to(c1_addr_inner.to_string().as_bytes(), addr)
+                            .await?;
+                        socket
+                            .send_to(addr.to_string().as_bytes(), c1_addr_inner)
+                            .await?;
+                        c1_addr = None;
                     }
                     None => {
                         let mut buf = BytesMut::new();
@@ -179,7 +195,7 @@ mod tests {
                         };
                         c1_addr = Some(addr);
                     }
-                };
+                }
             }
         })
         .into_ref()
@@ -187,15 +203,10 @@ mod tests {
 
     #[test_log::test]
     fn nat_basic() {
-        let s = Sim::new_with_config(Config {
-            udp_capacity: 1,
-            ip_hop_capacity: 1,
-            nic_capacity: 1,
-            ..Config::synchronous_network()
-        });
+        let s = Sim::new_with_config(Config::synchronous_network());
         s.enter_runtime(|| {
             let net = Sim::add_machine(Network::new_with_ipv4_prefix(
-                Ipv4Prefix::new([192, 0, 2, 0].into(), 24).unwrap(),
+                Ipv4Prefix::new([10, 0, 0, 0].into(), 8).unwrap(),
             ));
             let server = OsMock::new(move || async move {
                 let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 3000)).await?;
@@ -209,31 +220,34 @@ mod tests {
                 }
             })
             .into_ref();
-            // need to assign public ip address manually to avoid colliding with the nat ip addresses
-            // in other words, we need an ip that is not an internal network ip address
+            // need to assign public ip address manually to avoid colliding with
+            // the nat ip addresses in other words, we need an ip that is not an
+            // internal network ip address
             let (server_addr, _) = server.get().borrow().connect_to_net(net);
             info!("server address: {server_addr}");
-            let nat = nat::HardNat::new(net).into_ref();
+            let nat = nat::HardNat::new(net);
             let client = OsMock::new(move || async move {
                 let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
-                tokio::time::sleep(Duration::from_millis(1)).await; // to make sure server gets inited
                 socket.connect((server_addr, 3000)).await?;
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                // to ensure server gets inited first so that our "ok" packet
+                // doesn't get dropped by the network.
                 socket.send(b"ok").await?;
                 let mut buf = BytesMut::new();
                 socket.recv_buf(&mut buf).await?;
                 assert_eq!(b"ok", &buf[..]);
                 Ok(())
-            })
-            .into_ref();
-            client
-                .get()
-                .borrow()
-                .connect_to_net(nat.get().borrow().lan());
+            });
+            // notably we add to the nat's lan, not to net
+            client.connect_to_net(nat.lan());
+
+            Sim::add_machine(nat);
+            let client = client.into_ref();
             for _ in 0..10 {
                 Sim::tick().unwrap();
             }
             assert!(client.get().borrow().is_idle());
-        })
+        });
     }
     #[test_log::test]
     fn nat_hole_punch() {
@@ -260,7 +274,7 @@ mod tests {
 
                 socket.send(b"hello client 2").await?;
                 // wait for send from c2
-                sleep(Duration::from_millis(50)).await;
+                sleep(Duration::from_millis(8)).await;
                 socket.try_recv_buf(&mut buf)?;
                 assert_eq!(b"hello client 1", &buf[..]);
                 Ok(())
@@ -278,7 +292,7 @@ mod tests {
 
                 let mut buf = BytesMut::new();
                 // wait for send from c1
-                sleep(Duration::from_millis(50)).await;
+                sleep(Duration::from_millis(4)).await;
                 socket.try_recv_buf(&mut buf)?;
                 assert_eq!(b"hello client 2", &buf[..]);
                 socket.send(b"hello client 1").await?;
@@ -287,13 +301,13 @@ mod tests {
             })
             .into_ref();
             c2.get().borrow().connect_to_net(nat2.get().borrow().lan());
-            for _ in 0..2000 {
+            for _ in 0..300 {
                 Sim::tick().unwrap();
             }
             // both clients should hang since both are behind a hard nat
             assert!(c1.get().borrow().is_idle());
             assert!(c2.get().borrow().is_idle());
-        })
+        });
     }
 
     #[test_log::test]
@@ -354,6 +368,6 @@ mod tests {
             // both clients should hang since both are behind a hard nat
             assert!(c1.get().borrow().is_idle());
             assert!(c2.get().borrow().is_idle());
-        })
+        });
     }
 }

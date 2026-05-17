@@ -14,7 +14,7 @@ pub struct Dns {
 impl Default for Dns {
     fn default() -> Self {
         let mut out = Self {
-            lookup: Default::default(),
+            lookup: HashMap::default(),
         };
 
         out.extend(
@@ -28,8 +28,9 @@ impl Default for Dns {
 }
 
 impl Dns {
+    #[must_use]
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
     pub fn lookup(&self, domain: &str) -> io::Result<Vec<IpAddr>> {
         trace!("looking up dns");

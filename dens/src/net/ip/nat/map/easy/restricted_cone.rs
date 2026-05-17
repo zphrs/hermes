@@ -26,7 +26,7 @@ mod tests {
     #[test]
     fn same_src_same_port() {
         Sim::new().enter_runtime(|| {
-            let mut full_cone: RestrictedCone = Default::default();
+            let mut full_cone = RestrictedCone::default();
             let port = full_cone.internal_addr_to_external_port(
                 SocketAddr::from(([192, 168, 0, 1], 3000)),
                 SocketAddr::from(([8, 8, 8, 8], 3000)),
@@ -36,13 +36,13 @@ mod tests {
                 SocketAddr::from(([6, 6, 6, 6], 3000)),
             );
             assert_eq!(port, port2);
-        })
+        });
     }
 
     #[test]
     fn different_src_different_port() {
         Sim::new().enter_runtime(|| {
-            let mut full_cone: RestrictedCone = Default::default();
+            let mut full_cone = RestrictedCone::default();
             let port = full_cone.internal_addr_to_external_port(
                 SocketAddr::from(([192, 168, 0, 1], 3000)),
                 SocketAddr::from(([8, 8, 8, 8], 3000)),
@@ -52,13 +52,13 @@ mod tests {
                 SocketAddr::from(([8, 8, 8, 8], 3000)),
             );
             assert_ne!(port, port2);
-        })
+        });
     }
 
     #[test]
     fn get_src_from_port() {
         Sim::new().enter_runtime(|| {
-            let mut full_cone: RestrictedCone = Default::default();
+            let mut full_cone = RestrictedCone::default();
             let port = full_cone.internal_addr_to_external_port(
                 SocketAddr::from(([192, 168, 0, 1], 3000)),
                 SocketAddr::from(([8, 8, 8, 8], 3000)),
@@ -67,13 +67,13 @@ mod tests {
                 .external_port_to_internal_addr(port, SocketAddr::from(([8, 8, 8, 8], 3000)))
                 .unwrap();
             assert_eq!(src, SocketAddr::from(([192, 168, 0, 1], 3000)));
-        })
+        });
     }
 
     #[test]
     fn different_from_ports() {
         Sim::new().enter_runtime(|| {
-            let mut full_cone: RestrictedCone = Default::default();
+            let mut full_cone = RestrictedCone::default();
             let port = full_cone.internal_addr_to_external_port(
                 SocketAddr::from(([192, 168, 0, 1], 3000)),
                 SocketAddr::from(([8, 8, 8, 8], 3000)),
@@ -82,13 +82,13 @@ mod tests {
                 .external_port_to_internal_addr(port, SocketAddr::from(([8, 8, 8, 8], 3001)))
                 .unwrap();
             assert_eq!(src, SocketAddr::from(([192, 168, 0, 1], 3000)));
-        })
+        });
     }
 
     #[test]
     fn different_from_ips() {
         Sim::new().enter_runtime(|| {
-            let mut full_cone: RestrictedCone = Default::default();
+            let mut full_cone = RestrictedCone::default();
             let port = full_cone.internal_addr_to_external_port(
                 SocketAddr::from(([192, 168, 0, 1], 3000)),
                 SocketAddr::from(([8, 8, 8, 8], 3000)),
@@ -98,6 +98,6 @@ mod tests {
                     .external_port_to_internal_addr(port, SocketAddr::from(([4, 4, 4, 4], 3000)))
                     .is_none()
             );
-        })
+        });
     }
 }

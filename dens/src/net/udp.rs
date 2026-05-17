@@ -46,14 +46,21 @@ impl From<Header> for RecvMeta {
 }
 
 impl Packet {
+    /// # Panics
+    ///
+    /// Panics if `data.len()` is too large to fit in an IP packet
     #[inline]
+    #[must_use]
     pub fn new(src: SocketAddr, dst: SocketAddr, data: &[u8], ecn: Option<EcnCodepoint>) -> Self {
+        const EXPECT_STR: &str = const {
+            assert!(u16::MAX as usize - Header::UDP_HEADER_LEN == 65_527);
+            "data should be less than 65,527 bytes"
+        };
         let ip_header = ip::Header::new(
             src.ip(),
             dst.ip(),
             ecn,
-            u16::try_from(data.len()).expect("data should be less than 65536 bytes")
-                + Header::UDP_HEADER_LEN as u16,
+            u16::try_from(data.len() + Header::UDP_HEADER_LEN).expect(EXPECT_STR),
             Header::PROTOCOL,
         );
         let mut header = Header {
@@ -69,8 +76,12 @@ impl Packet {
 
         Self { header, data }
     }
-    /// will only set checksums if ipv6 packets.
-    pub fn packets_from_transmit(transmit: Transmit<'_>, src_addr: SocketAddr) -> Vec<Self> {
+    /// # Panics
+    ///
+    /// Panics if the content length is greater than what can fit in a single udp
+    /// packet
+    #[must_use]
+    pub fn packets_from_transmit(transmit: &Transmit<'_>, src_addr: SocketAddr) -> Vec<Self> {
         let Transmit {
             destination,
             ecn,
@@ -78,8 +89,9 @@ impl Packet {
             segment_size,
             src_ip,
         } = transmit;
+        assert!(segment_size.is_none(), "does not support multiple segments");
 
-        let segment_size = segment_size.unwrap_or(contents.len());
+        let segment_size = contents.len();
         let segment_range = 0..(contents.len() / segment_size);
         assert!(segment_size < u16::MAX.into());
 
@@ -87,9 +99,9 @@ impl Packet {
             .map(|i| {
                 Packet::new(
                     SocketAddr::new(src_ip.unwrap_or(src_addr.ip()), src_addr.port()),
-                    destination,
+                    *destination,
                     &contents[(i * segment_size)..((i + 1) * segment_size)],
-                    ecn,
+                    *ecn,
                 )
             })
             .collect()
@@ -107,14 +119,19 @@ impl Packet {
         self.header.write_into_buf(into);
         into.put_slice(&self.data);
     }
+    /// # Errors
+    ///
+    /// Propagates up the errors from [`Header::try_from_bytes`] and will return
+    /// a [`ParseError::PayloadLengthMismatch`] error if the [`payload_length`] in the header
+    /// is not equal to the total length of the bytes value.
     pub fn try_from_bytes(mut bytes: Bytes) -> Result<Self, ParseError> {
         let header = Header::try_from_buf(&mut bytes)?;
-        if header.payload_length() as usize > bytes.len() {
-            Err(ParseError::NotEnoughForData {
+        let true = (header.payload_length() as usize) == bytes.len() else {
+            Err(ParseError::PaloadLengthMismatch {
                 expected: header.payload_length(),
                 had: bytes.len(),
             })?
-        }
+        };
         let data = bytes.slice(0usize..header.payload_length() as usize);
         Ok(Self { header, data })
     }
@@ -160,6 +177,7 @@ impl Packet {
 }
 #[derive(Clone)]
 pub struct Header {
+    #[allow(clippy::struct_field_names, reason = "referring to inner ip header")]
     ip_header: ip::Header,
     src_port: u16,
     dst_port: u16,
@@ -178,26 +196,36 @@ impl Debug for Header {
 impl Header {
     pub const PROTOCOL: u8 = 0x11;
     pub const UDP_HEADER_LEN: usize = 2 * 4;
-
+    pub const UDP_HEADER_LEN_U16: u16 = const {
+        assert!(Self::UDP_HEADER_LEN <= u16::MAX as usize);
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "we ensure it won't truncate with the above assertion"
+        )]
+        let casted = Self::UDP_HEADER_LEN as u16;
+        casted
+    };
     pub const MAX_HEADER_LEN: usize = ip::Header::IPV6_HEADER_LEN + Self::UDP_HEADER_LEN;
 
+    #[must_use]
     pub fn payload_length(&self) -> u16 {
-        self.ip_header.payload_length() - Self::UDP_HEADER_LEN as u16
+        self.ip_header.payload_length() - Self::UDP_HEADER_LEN_U16
     }
-
+    #[must_use]
     pub fn ip_header(&self) -> &ip::Header {
         &self.ip_header
     }
-
+    #[must_use]
     pub fn get_src_addr(&self) -> SocketAddr {
         self.get_socket_addrs().0
     }
-
+    #[must_use]
     pub fn get_dst_addr(&self) -> SocketAddr {
         self.get_socket_addrs().1
     }
 
     /// Returns (source, destination) socket addresses.
+    #[must_use]
     pub fn get_socket_addrs(&self) -> (SocketAddr, SocketAddr) {
         let (src, dst) = self.ip_header.get_ip_addrs();
         (
@@ -225,7 +253,7 @@ impl Header {
                 .iter()
                 .map(|bytes: &[u8; 2]| u16::from_be_bytes(*bytes)),
         )
-        .wrapping_add((*remainder.first().unwrap_or(&0) as u16) << 8);
+        .wrapping_add(u16::from(*remainder.first().unwrap_or(&0)) << 8);
         headers_checksum.wrapping_add(data_checksum)
     }
 
@@ -252,6 +280,13 @@ impl Header {
         into.put_slice(&udp_header);
     }
 
+    /// # Panics
+    ///
+    /// Panics if the `udp_length` in the buffer does not match the IP header's
+    /// payload length.
+    ///
+    /// # Errors
+    /// Propagates up the errors from [`ip::Header::try_from_buf`].
     pub fn try_from_buf(from: &mut impl Buf) -> Result<Self, ParseError> {
         let ip_header = ip::Header::try_from_buf(from)?;
         let src_port = from.get_u16();
@@ -267,6 +302,7 @@ impl Header {
             checksum,
         })
     }
+    #[must_use]
     pub fn check_checksum(&self, data: &[u8]) -> bool {
         let Some(checksum) = self.checksum else {
             return true; // we skip the check
@@ -306,11 +342,7 @@ impl UdpPseudoHeader {
                 udp_length: udp_header.udp_length(),
             }),
 
-            (IpAddr::V4(_), IpAddr::V6(_)) =>
-            // SAFETY: header is either a v4 header or a v6 header.
-            // A hybrid v4/v6 header does not exist
-            unsafe { unreachable_unchecked() },
-            (IpAddr::V6(_), IpAddr::V4(_)) =>
+            (IpAddr::V4(_), IpAddr::V6(_)) | (IpAddr::V6(_), IpAddr::V4(_)) =>
             // SAFETY: header is either a v4 header or a v6 header.
             // A hybrid v4/v6 header does not exist
             unsafe { unreachable_unchecked() },
@@ -327,6 +359,7 @@ impl UdpPseudoHeader {
 
 impl Udpv4PseudoHeader {
     #[inline]
+    #[must_use]
     pub fn to_bytes(&self) -> [u8; 12] {
         let mut arr = [0u8; 12];
         let mut buf: &mut [u8] = &mut arr;
@@ -341,6 +374,7 @@ impl Udpv4PseudoHeader {
 
 impl Udpv6PseudoHeader {
     #[inline]
+    #[must_use]
     pub fn to_bytes(&self) -> [u8; 36] {
         let mut arr = [0u8; 36];
         let mut buf: &mut [u8] = &mut arr;

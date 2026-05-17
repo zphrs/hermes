@@ -29,8 +29,8 @@ impl<
 {
     fn default() -> Self {
         Self {
-            router: Default::default(),
-            firewall: Default::default(),
+            router: Router::default(),
+            firewall: Firewall::default(),
         }
     }
 }
@@ -40,8 +40,9 @@ impl<
     FirewallDependence: Mappable + From<std::net::SocketAddr>,
 > GenericNat<RouterDependence, FirewallDependence>
 {
+    #[must_use]
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 }
 

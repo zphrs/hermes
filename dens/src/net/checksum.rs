@@ -1,3 +1,4 @@
+#[expect(clippy::inline_always)]
 #[inline(always)]
 pub fn wrapping_sum(nums: impl IntoIterator<Item = u16>) -> u16 {
     let mut out: u16 = 0;

@@ -9,7 +9,7 @@ pub struct Firewall<Dst: From<SocketAddr> + Mappable>(HashMap<(SocketAddr, Dst),
 
 impl<Dst: From<SocketAddr> + Mappable> Default for Firewall<Dst> {
     fn default() -> Self {
-        Self(Default::default())
+        Self(HashMap::default())
     }
 }
 
@@ -23,7 +23,7 @@ impl<Dst: From<SocketAddr> + Mappable> Firewall<Dst> {
         if since_last_used > Duration::from_secs(30) {
             self.0.remove(&(src, dst));
             return false;
-        };
+        }
         true
     }
 

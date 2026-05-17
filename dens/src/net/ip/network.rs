@@ -30,8 +30,8 @@ pub struct PartitionGuard {
 
 impl PartitionGuard {
     /// Creates a new partition guard
-    fn new(mref: MachineRef<Network>, from: IpAddr, to: IpAddr) -> Self {
-        PartitionGuard {
+    const fn new(mref: MachineRef<Network>, from: IpAddr, to: IpAddr) -> Self {
+        Self {
             mref: Some(mref),
             from,
             to,
@@ -51,7 +51,7 @@ impl Drop for PartitionGuard {
 }
 
 pub struct Network {
-    network: net::Network,
+    inner: net::Network,
     bound_ips: IpNetworkTable<MachineId>,
     machine_to_prefix: HashMap<MachineId, IpPrefix>,
     ipv4_generator: Ipv4NetworkIterator,
@@ -61,9 +61,11 @@ pub struct Network {
 }
 
 impl Default for Network {
+    /// Shorthand for [`Network::new_class_c_private_network()`].
     fn default() -> Self {
         let local_net_ip = Ipv4Addr::from_octets([192, 168, 0, 0]);
         let net = Ipv4Prefix::new(local_net_ip, 16).unwrap();
+        #[allow(clippy::default_trait_access)]
         Self {
             ipv4_generator: Ipv4NetworkIterator::new(net, 32),
             ipv6_generator: Ipv6NetworkIterator::new(
@@ -71,7 +73,7 @@ impl Default for Network {
                     .unwrap(),
                 128,
             ),
-            network: Default::default(),
+            inner: Default::default(),
             bound_ips: Default::default(),
             machine_to_prefix: Default::default(),
             partitions: Default::default(),
@@ -80,14 +82,36 @@ impl Default for Network {
 }
 
 impl Network {
-    pub fn new() -> Self {
-        Default::default()
+    /// Returns a network which uses the 172.16.0.0/12 block to allocate IP
+    /// addresses to machines added via [`Network::add_machine`].
+    #[must_use]
+    pub fn new_private_class_a() -> Self {
+        #[expect(clippy::missing_panics_doc, reason = "infallible")]
+        Self::new_with_ipv4_prefix(Ipv4Prefix::new([10, 0, 0, 0].into(), 8).unwrap())
     }
-
+    /// Returns a network which uses the 172.16.0.0/12 block to allocate IP
+    /// addresses to machines added via [`Network::add_machine`].
+    #[must_use]
+    pub fn new_private_class_b() -> Self {
+        #[expect(clippy::missing_panics_doc, reason = "infallible")]
+        Self::new_with_ipv4_prefix(Ipv4Prefix::new([172, 16, 0, 0].into(), 12).unwrap())
+    }
+    /// Returns a network which uses the 192.168.0.0/16 block to allocate IP
+    /// addresses to machines added via [`Network::add_machine`].
+    #[must_use]
+    pub fn new_private_class_c() -> Self {
+        #[expect(clippy::missing_panics_doc, reason = "infallible")]
+        Self::new_with_ipv4_prefix(Ipv4Prefix::new([192, 168, 0, 0].into(), 16).unwrap())
+    }
+    #[must_use]
     pub fn new_with_ipv4_prefix(net: Ipv4Prefix) -> Self {
         Self {
             ipv4_generator: Ipv4NetworkIterator::new(net, 32),
             ipv6_generator: Ipv6NetworkIterator::new(
+                // If the Ipv4Prefix was successfully constructed then a mapped
+                // ipv6 network can be made based on the Ipv4Prefix netmask
+                // and address.
+                #[expect(clippy::missing_panics_doc, reason = "infallible")]
                 Ipv6Network::new(
                     net.network_address().to_ipv6_mapped(),
                     128 - (32 - net.netmask()),
@@ -95,30 +119,33 @@ impl Network {
                 .unwrap(),
                 128,
             ),
-            network: Default::default(),
-            bound_ips: Default::default(),
-            machine_to_prefix: Default::default(),
-            partitions: Default::default(),
+            ..Default::default()
         }
     }
 
     pub fn set_host_ip_range(&mut self, host: &MachineId, new_range: IpPrefix) {
         if let Some(prefix) = self.machine_to_prefix.get(host) {
             self.bound_ips.remove(*prefix);
-        };
+        }
         self.machine_to_prefix.insert(*host, new_range);
         self.bound_ips.insert(new_range, *host);
     }
     /// sends all requests addressed towards the host through here
     pub fn add_machine_with_range(&mut self, host: &impl HasNic, addr: IpPrefix) {
-        self.network.add_machine(host);
+        self.inner.add_machine(host);
         // will simply assign a single address if unspecified
         self.bound_ips.insert(addr, host.id());
     }
 
     /// assigns a single address for the machine in the 192.168.0.0/16 range
+    ///
+    /// # Panics
+    /// Panics if either the ipv4 or the ipv6 address generator has run out of
+    /// addresses to assign to hosts. If this occurs, try using
+    /// [`Network::new_private_class_a`] to construct the network next time which
+    /// will give you
     pub fn add_machine(&mut self, host: &impl HasNic) -> (Ipv4Addr, Ipv6Addr) {
-        self.network.add_machine(host);
+        self.inner.add_machine(host);
         let generated_ipv4 = self
             .ipv4_generator
             .next()
@@ -141,7 +168,7 @@ impl Network {
     }
 
     pub fn remove_machine(&mut self, host: &impl HasNic, addr: IpPrefix) {
-        self.network.remove_machine(host);
+        self.inner.remove_machine(host);
         self.bound_ips.remove(addr);
     }
 
@@ -149,8 +176,8 @@ impl Network {
         self.machine_to_prefix.get(id)
     }
 
-    pub fn network_mut(&mut self) -> &mut net::Network {
-        &mut self.network
+    pub const fn network_mut(&mut self) -> &mut net::Network {
+        &mut self.inner
     }
 
     pub fn add_one_way_partition<
@@ -168,26 +195,32 @@ impl Network {
                 tos_iter.clone().map(move |to| {
                     let to = to.to_owned();
                     let from = from.to_owned();
-                    net.get()
-                        .borrow_mut()
-                        .partitions
-                        .insert((from.to_owned(), to));
+                    net.get().borrow_mut().partitions.insert((from, to));
                     PartitionGuard::new(net, from, to)
                 })
             })
             .collect()
     }
-
+    #[must_use]
     pub fn add_two_way_partition(
         net: MachineRef<Self>,
         from: IpAddr,
         to: IpAddr,
     ) -> (Vec<PartitionGuard>, Vec<PartitionGuard>) {
-        let guard1 = Self::add_one_way_partition(net.clone(), [from], [to]);
+        let guard1 = Self::add_one_way_partition(net, [from], [to]);
         let guard2 = Self::add_one_way_partition(net, [to], [from]);
         (guard1, guard2)
     }
 
+    /// sends a packet
+    ///
+    /// # Errors
+    ///
+    /// Will error if:
+    /// - The specified bytes do not begin with a valid ipv4 or ipv6 header
+    /// - The destination in the header is not reachable
+    /// - The corresponding machine id to the header is not in the inner
+    ///   network.
     pub fn try_send_packet(&self, bytes: Bytes) -> Result<(), Error> {
         let mut cloned_bytes = bytes.clone();
         let ip_header = net::ip::Header::try_from_buf(&mut cloned_bytes)?;
@@ -203,7 +236,7 @@ impl Network {
             .longest_match(dst_addr)
             .ok_or(std::io::Error::from(ErrorKind::HostUnreachable))?;
 
-        self.network.try_send_to_host(longest_match.1, bytes)?;
+        self.inner.try_send_to_host(longest_match.1, bytes)?;
 
         Ok(())
     }
@@ -211,11 +244,11 @@ impl Network {
 
 impl Machine for Network {
     fn basic_machine(&self) -> std::rc::Rc<crate::sim::machine::BasicMachine> {
-        self.network.basic_machine()
+        self.inner.basic_machine()
     }
 
     fn is_idle(&self) -> bool {
-        self.network.is_idle()
+        self.inner.is_idle()
     }
 }
 

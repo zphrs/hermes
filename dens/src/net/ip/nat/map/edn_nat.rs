@@ -6,9 +6,9 @@ use std::net::SocketAddr;
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct EdnNatMapping(SocketAddr, SocketAddr);
 
-impl Into<SocketAddr> for EdnNatMapping {
-    fn into(self) -> SocketAddr {
-        self.0
+impl From<EdnNatMapping> for SocketAddr {
+    fn from(value: EdnNatMapping) -> Self {
+        value.0
     }
 }
 

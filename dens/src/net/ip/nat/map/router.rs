@@ -1,6 +1,5 @@
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
-use rand::Rng as _;
 use tokio::time::Instant;
 
 use super::Map;
@@ -18,8 +17,8 @@ impl<RouterDependence: Mappable + Into<SocketAddr> + From<(SocketAddr, SocketAdd
 {
     fn default() -> Self {
         Self {
-            outgoing: Default::default(),
-            incoming: Default::default(),
+            outgoing: HashMap::default(),
+            incoming: HashMap::default(),
         }
     }
 }
@@ -40,18 +39,18 @@ impl<
             self.outgoing.remove(&res.0);
             self.incoming.remove(&port);
             return None;
-        };
+        }
 
         res.1 = now;
 
-        return Some(res.0.into());
+        Some(res.0.into())
     }
 
     fn internal_addr_to_external_port(&mut self, src: SocketAddr, dst: SocketAddr) -> u16 {
         let now = Instant::now();
         let addr: RouterDependence = (src, dst).into();
         let out = self.outgoing.entry(addr).or_insert_with(|| {
-            let mut port: u16 = Sim::with_rng(|rng| rng.random());
+            let mut port: u16 = Sim::with_rng(rand::Rng::random);
 
             let wrapped_around_addr = port - 1;
 
@@ -64,11 +63,9 @@ impl<
                     self.incoming.remove(&port);
                     return port;
                 }
-                // make sure we aren't stuck in an infinite
-                // loop in the case that all ports are taken
-                if port == wrapped_around_addr {
-                    panic!("all NAT addresses taken");
-                };
+                // make sure we aren't stuck in an infinite loop in the case
+                // that all ports are taken
+                assert!(port != wrapped_around_addr, "all NAT addresses taken");
                 port = port.wrapping_add(1);
             }
 
