@@ -81,7 +81,7 @@ impl SkyId {
         let id = self.0.to_hex_string();
         let left = &id[..id.len() / 2];
         let right = &id[id.len() / 2..];
-        format!("{left}.{right}.invalid")
+        format!("{left}.{right}.sky.hermes.invalid")
     }
     /// # SAFETY
     /// The caller must ensure that the kademlia Id was at one point a SkyId

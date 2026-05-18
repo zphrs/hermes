@@ -63,6 +63,13 @@ impl EarthId {
     pub fn from_array(arr: [u8; 32]) -> EarthId {
         Self(Id::from(arr))
     }
+
+    pub fn to_url(&self) -> String {
+        let id = self.0.to_hex_string();
+        let left = &id[..id.len() / 2];
+        let right = &id[id.len() / 2..];
+        format!("{left}.{right}.earth.hermes.invalid")
+    }
 }
 
 #[cfg(test)]
