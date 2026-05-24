@@ -303,11 +303,6 @@ impl rpc::Transport for Transport {
                     return Ok(conn.clone().into());
                 } else {
                     debug!("close reason: {}", conn.close_reason().unwrap());
-                    conn.close(
-                        VarInt::from_u32(500),
-                        format!("conn already close bc {}", conn.close_reason().unwrap())
-                            .as_bytes(),
-                    );
                     *conn_lock = None;
                 }
             }

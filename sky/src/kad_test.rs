@@ -145,7 +145,7 @@ fn create_client(
                     sky_client
                         .node_lookup(
                             tp,
-                            EarthNode::new(EarthId::from_array(rand::random())).into(),
+                            EarthNode::new(EarthId::from_array(rand::random())),
                             nearby.to_sky_id(since_epoch()),
                         )
                         .instrument(span),

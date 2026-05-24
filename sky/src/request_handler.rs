@@ -1,33 +1,25 @@
 mod find_nodes_method;
+mod root_request;
+
+pub use find_nodes_method::KadRpcManager;
 
 use std::{convert::Infallible, net::IpAddr, time::Duration};
 
 pub use find_nodes_method::{FindNodesMethod, FindNodesRequest, FindNodesResponse};
-use maxlen::MaxLen;
+pub use root_request::RootRequest;
 
 use rpc::Call;
 use shared_schema::{SkyNode, ping};
 
-use crate::quinn_transport;
+use crate::{client::SkyOrEarth, quinn_transport};
 
-impl<'a> From<FindNodesRequest<'a>> for RootRequest<'a> {
-    fn from(value: FindNodesRequest<'a>) -> Self {
+impl<'a> From<FindNodesRequest> for RootRequest {
+    fn from(value: FindNodesRequest) -> Self {
         Self::FindNodes(value)
     }
 }
 
-#[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
-#[cbor(flat)]
-pub enum RootRequest<'a> {
-    /// can be sent by anyone
-    #[n(0)]
-    Ping(#[n(0)] ping::Request),
-    /// get nearby known sky nodes based on address
-    #[n(1)]
-    FindNodes(#[n(0)] FindNodesRequest<'a>),
-}
-
-impl From<ping::Request> for RootRequest<'_> {
+impl From<ping::Request> for RootRequest {
     fn from(value: ping::Request) -> Self {
         Self::Ping(value)
     }
@@ -43,8 +35,9 @@ impl From<Infallible> for Error {
 }
 
 #[derive(Clone)]
-pub struct RootHandler<'a> {
-    find_nodes_handler: FindNodesMethod<'a>,
+pub struct RootHandler {
+    find_nodes_handler: FindNodesMethod,
+    from: SkyOrEarth,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -53,13 +46,14 @@ pub enum RootHandlerConfigError {
     NoPublicIp,
 }
 
-impl<'a> RootHandler<'a> {
-    pub async fn new(
-        tp: &quinn_transport::Transport,
-        public_ip: IpAddr,
-    ) -> Result<Self, RootHandlerConfigError> {
-        let find_nodes_handler = FindNodesMethod::new(&tp, public_ip.into());
-        Ok(Self { find_nodes_handler })
+impl RootHandler {
+    pub fn new(from: SkyOrEarth, kad_rpc_manager: &KadRpcManager) -> Self {
+        let find_nodes_handler =
+            FindNodesMethod::from_manager(&kad_rpc_manager, from.as_sky().cloned());
+        Self {
+            find_nodes_handler,
+            from,
+        }
     }
 
     pub fn local_node(&self) -> &SkyNode {
@@ -81,16 +75,20 @@ impl<'a> RootHandler<'a> {
     }
 }
 
-impl<'a> rpc::RootHandler<RootRequest<'a>> for RootHandler<'a> {
+impl rpc::RootHandler<RootRequest> for RootHandler {
     type Error = Error;
 
     async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError>(
         &mut self,
-        root: RootRequest<'a>,
+        root: RootRequest,
         replier: rpc::Replier<'_, T>,
     ) -> Result<rpc::ReplyReceipt, rpc::ClientError<TransportError, Self::Error>> {
         match root {
-            RootRequest::Ping(request) => ping::Method.reply(replier, request).await,
+            RootRequest::Ping(request) => {
+                self.find_nodes_handler.on_ping(self.from.clone()).await;
+
+                ping::Method.reply(replier, request).await
+            }
             RootRequest::FindNodes(request) => {
                 self.find_nodes_handler.reply(replier, request).await
             }
@@ -105,7 +103,7 @@ mod tests {
     use minicbor::CborLen as _;
     use rand::Rng;
     use shared_schema::{ping, sky_node::SkyId};
-    use std::{borrow::Cow, net::IpAddr, time::Duration};
+    use std::{net::IpAddr, time::Duration};
     use tracing_subscriber::fmt::time::tokio_uptime;
 
     use rpc::{Caller as _, Close, Transport as _};
@@ -129,7 +127,6 @@ mod tests {
         let ping_variant = RootRequest::Ping(ping::Request);
         let find_nodes_variant = RootRequest::FindNodes(FindNodesRequest {
             sky_id: SkyId::from(IpAddr::V4([169, 168, 0, 1].into())),
-            from: Some(Cow::Owned(IpAddr::V4([169, 168, 0, 1].into()).into())),
         });
 
         let biggest_inst = RootRequest::biggest_instantiation();

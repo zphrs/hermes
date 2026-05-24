@@ -4,7 +4,7 @@ use futures::{prelude::*, stream::FuturesUnordered};
 // sync is runtime agnostic;
 // see https://docs.rs/tokio/latest/tokio/sync/index.html#runtime-compatibility
 use tokio::sync::{RwLock, RwLockWriteGuard};
-use tracing::{Instrument, debug, instrument, trace, trace_span};
+use tracing::{Instrument, debug, instrument, trace, trace_span, warn};
 
 use crate::{Distance, DistancePair, HasId, Id, RequestHandler, RoutingTable};
 

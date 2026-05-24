@@ -70,6 +70,7 @@ impl KadHandler {
 
     async fn try_ping(
         &self,
+        _from: impl Into<shared_schema::Node>,
         node: &SkyNode,
     ) -> Result<(), ClientError<quinn_transport::Error, Infallible>> {
         if node.last_reached_at().elapsed() < Duration::from_secs(120) {
@@ -92,7 +93,7 @@ impl KadHandler {
     #[tracing::instrument(skip(self))]
     async fn try_find_node(
         &self,
-        from: &SkyNode,
+        _from: &SkyNode,
         to: &SkyNode,
         address: &kademlia::Id<32>,
     ) -> Result<Vec<SkyNode>, ClientError<quinn_transport::Error, Infallible>> {
@@ -110,7 +111,6 @@ impl KadHandler {
                 unsafe {
                     SkyId::from_kademlia_id_unchecked(address.clone())
                 },
-                from: Some(Cow::Borrowed(from)),
             })
             .await
             .map_err(ClientError::from_caller)?;
@@ -125,7 +125,7 @@ impl kademlia::RequestHandler<SkyNode, 32> for KadHandler {
         trace!("handling ping");
         self.retry_with_backoff(
             2,
-            || async { self.try_ping(node).await.map(|_| true) },
+            || async { self.try_ping(from.clone(), node).await.map(|_| true) },
             false,
         )
         .await

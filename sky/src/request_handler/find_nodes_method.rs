@@ -1,21 +1,21 @@
 mod kad_handler;
+mod kad_manager;
 use kad_handler::KadHandler;
-use std::{borrow::Cow, convert::Infallible, time::Duration};
+pub use kad_manager::KadRpcManager;
+
+use std::{convert::Infallible, time::Duration};
 
 use max_sized_vec::MaxSizedVec;
 use maxlen::MaxLen;
 use shared_schema::{SkyNode, sky_node::SkyId};
-use tracing::trace;
+use tracing::{trace, warn};
 
-use crate::quinn_transport;
+use crate::{client::SkyOrEarth, quinn_transport};
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
-pub struct FindNodesRequest<'a> {
+pub struct FindNodesRequest {
     #[n(0)]
     pub sky_id: SkyId,
-    // sky nodes should always specify the sender
-    #[n(1)]
-    pub from: Option<Cow<'a, SkyNode>>,
 }
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
@@ -49,18 +49,28 @@ impl From<FindNodesResponse> for Vec<SkyNode> {
 }
 
 #[derive(Clone)]
-pub struct FindNodesMethod<'a> {
+pub struct FindNodesMethod {
     rpc_manager: kademlia::RpcManager<SkyNode, KadHandler, 32, 20>,
-    _phantom: std::marker::PhantomData<&'a ()>,
+    remote: Option<SkyNode>,
 }
 
-impl<'a> FindNodesMethod<'a> {
-    pub fn new(transport: &quinn_transport::Transport, me: SkyNode) -> Self {
-        let rpc_manager = kademlia::RpcManager::new(KadHandler::new(transport.clone()), me.clone());
+impl<'a> FindNodesMethod {
+    pub fn from_manager(rpc_manager: &KadRpcManager, from: Option<SkyNode>) -> Self {
         Self {
-            rpc_manager,
-            _phantom: std::marker::PhantomData,
+            rpc_manager: rpc_manager.clone().into_inner(),
+            remote: from,
         }
+    }
+
+    pub async fn on_ping(&self, from: SkyOrEarth) {
+        let Some(sky_node) = from.as_sky() else {
+            return;
+        };
+        let sky_node_arr = [sky_node.clone()];
+        warn!("should make sure that pinged nodes have their last_reached timer reset");
+        self.rpc_manager
+            .add_nodes_without_removing(sky_node_arr.into_iter())
+            .await;
     }
 
     pub fn local_node(&self) -> &SkyNode {
@@ -80,20 +90,22 @@ impl<'a> FindNodesMethod<'a> {
     }
 }
 
-impl<'a> rpc::Method for FindNodesMethod<'a> {
-    type Req = FindNodesRequest<'a>;
+impl rpc::Method for FindNodesMethod {
+    type Req = FindNodesRequest;
 
     type Res = FindNodesResponse;
 
     type Error = Infallible;
 }
 
-impl<'a> rpc::Call for FindNodesMethod<'a> {
+impl rpc::Call for FindNodesMethod {
     #[tracing::instrument(skip(self))]
     async fn call(&mut self, value: Self::Req) -> Result<FindNodesResponse, Infallible> {
         let sky_id: kademlia::Id<32> = value.sky_id.into();
-        let owned = value.from.map(Cow::into_owned);
-        let out = self.rpc_manager.find_node(owned, &sky_id).await;
+        let out = self
+            .rpc_manager
+            .find_node(self.remote.clone(), &sky_id)
+            .await;
 
         trace!(?out);
         Ok(out.into())

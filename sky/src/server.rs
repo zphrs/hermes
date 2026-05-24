@@ -1,18 +1,20 @@
-use std::time::Duration;
+use std::{convert::Infallible, time::Duration};
 
+use futures_util::TryFutureExt;
 use rpc::{Client as _, ClientError, Transport as _};
 use shared_schema::SkyNode;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{Instrument as _, debug, info, info_span, instrument::WithSubscriber as _, trace};
 
 use crate::{
+    get_system_time::get_system_time,
     quinn_transport,
-    request_handler::{Error, RootHandler, RootRequest},
+    request_handler::{Error, FindNodesMethod, KadRpcManager, RootHandler, RootRequest},
 };
 
 #[derive(Clone)]
 pub struct SkyServer {
-    handler: RootHandler<'static>,
+    manager: KadRpcManager,
     transport: quinn_transport::Transport,
 }
 
@@ -22,27 +24,27 @@ impl SkyServer {
             .await
             .map_err(ClientError::Transport)?;
         let pub_addr = tp.inner().local_addr().unwrap();
-        let handler = RootHandler::new(&tp, pub_addr.ip()).await.unwrap();
+        let manager = KadRpcManager::new(tp.clone(), pub_addr.ip().into());
 
         Ok(Self {
-            handler,
+            manager,
             transport: tp,
         })
     }
 
-    pub fn into_parts(self) -> (RootHandler<'static>, quinn_transport::Transport) {
-        (self.handler, self.transport)
+    pub fn into_parts(self) -> (KadRpcManager, quinn_transport::Transport) {
+        (self.manager, self.transport)
     }
     pub async fn add_nodes(&self, nodes: Vec<SkyNode>) {
-        self.handler.add_nodes(nodes).await;
+        self.manager.inner().add_nodes(nodes).await;
     }
     pub async fn bootstrap(&self) {
-        self.handler.join_network().await;
+        self.manager.inner().join_network().await;
     }
 
     pub fn run_refresh_loop(&self) {
         let handler = self.clone().into_parts().0;
-        let local_node = handler.local_node();
+        let local_node = handler.inner().local_node();
         let span = info_span!("refresh_loop", me = ?local_node);
         tokio::task::spawn(
             async move {
@@ -52,7 +54,8 @@ impl SkyServer {
                 loop {
                     info!("refreshing buckets!");
                     handler
-                        .refresh_stale_buckets(Duration::from_secs(60 * 65))
+                        .inner()
+                        .refresh_stale_buckets(&Duration::from_secs(60 * 65))
                         .await;
                     info!("finished refreshing buckets");
                     tokio::time::sleep(Duration::from_secs(60 * 60)).await;
@@ -86,11 +89,22 @@ impl SkyServer {
                             Err(e).map_err(ClientError::Transport)?
                         }
                     };
+                    let mut auth_handler = shared_schema::authenticate::Method::new();
+                    let stream = conn.accept_stream().await.map_err(ClientError::Transport)?;
+                    if let Err(e) = conn.handle_one_request(stream, &mut auth_handler).await {
+
+                        match e {
+                            ClientError::Rpc(rpc_error) => Err(ClientError::Rpc(rpc_error))?,
+                            ClientError::Transport(tp) => Err(ClientError::Transport(tp))?,
+                            ClientError::App(e) => unreachable!("Supposed to be infallible: {}", e),
+                        }
+                    }
+                    let from = auth_handler.into_node().unwrap();
                     debug!("accepted client {}", conn.inner().remote_address());
                     let mut js: JoinSet<_> =
                         JoinSet::new();
                     while conn.inner().close_reason().is_none() {
-                        let mut cloned_handler = handler.clone();
+                        let cloned_handler = handler.clone();
                         let conn = conn.clone();
                         let stream = match conn.accept_stream().await {
                             Ok(stream) => stream,
@@ -99,25 +113,28 @@ impl SkyServer {
                                 continue;
                             }
                         };
+                        let from = from.clone();
                         js.spawn(async move {
-                        if let Err(e) = conn.handle_one_request::<RootRequest, _>(stream, &mut cloned_handler).await {
-                            match e {
-                                ClientError::Transport(crate::quinn_transport::Error::Connection(
-                                    quinn::ConnectionError::ApplicationClosed(close),
-                                )) if close.error_code == 0u32.into()
-                                    && close.reason.len() == 0 =>
-                                {
-                                    tracing::warn!("normal client closure")
-                                },
-                                ClientError::Transport(crate::quinn_transport::Error::Connection(quinn::ConnectionError::TimedOut)) => {
-                                    tracing::debug!("connection to server timed out. Okay if the client still got all their responses")
+
+                            let mut root_handler = RootHandler::new((from, get_system_time()).into(), &cloned_handler);
+                            if let Err(e) = conn.handle_one_request::<RootRequest, _>(stream, &mut root_handler).await {
+                                match e {
+                                    ClientError::Transport(crate::quinn_transport::Error::Connection(
+                                        quinn::ConnectionError::ApplicationClosed(close),
+                                    )) if close.error_code == 0u32.into()
+                                        && close.reason.len() == 0 =>
+                                    {
+                                        tracing::warn!("normal client closure")
+                                    },
+                                    ClientError::Transport(crate::quinn_transport::Error::Connection(quinn::ConnectionError::TimedOut)) => {
+                                        tracing::debug!("connection to server timed out. Okay if the client still got all their responses")
+                                    }
+                                    ClientError::Rpc(rpc::RpcError::MinicborIo(minicbor_io::Error::Io(e))) => {
+                                        tracing::debug!("probably normal client closure {}", e);
+                                    }
+                                    e => tracing::warn!("Error: {e}"),
                                 }
-                                ClientError::Rpc(rpc::RpcError::MinicborIo(minicbor_io::Error::Io(e))) => {
-                                    tracing::debug!("probably normal client closure {}", e);
-                                }
-                                e => tracing::warn!("Error: {e}"),
                             }
-                        }
                         });
                     }
                     js.join_all().await;
