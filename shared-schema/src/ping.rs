@@ -18,8 +18,6 @@ impl rpc::Method for Method {
     type Error = Infallible;
 }
 
-pub struct Handler {}
-
 impl rpc::Call for Method {
     async fn call(&mut self, _value: Self::Req) -> Result<Self::Res, Self::Error> {
         Ok(Response)

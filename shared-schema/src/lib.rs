@@ -1,18 +1,13 @@
+mod node;
+pub use node::Node;
 pub mod earth_node;
 pub mod ping;
 pub mod sky_node;
 
+pub use node::authenticate;
+
 pub use earth_node::EarthNode;
 pub use sky_node::SkyNode;
-
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
-#[cbor(flat)]
-pub enum Node {
-    #[n(0)]
-    Sky(#[n(0)] SkyNode),
-    #[n(1)]
-    Earth(#[n(0)] EarthNode),
-}
 
 #[cfg(test)]
 mod tests {

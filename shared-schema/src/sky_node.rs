@@ -1,6 +1,7 @@
 pub mod rpc;
 
 use std::{
+    borrow::Borrow,
     fmt::Debug,
     hash::Hash,
     net::{IpAddr, SocketAddr},
@@ -70,6 +71,12 @@ impl Debug for SkyNode {
 #[cbor(transparent)]
 pub struct SkyId(#[n(0)] pub(crate) Id<32>);
 
+impl HasId<32> for SkyId {
+    fn id(&self) -> &Id<32> {
+        &self.0
+    }
+}
+
 impl std::fmt::Display for SkyId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Sky{}", self.0)
@@ -88,6 +95,12 @@ impl SkyId {
     /// and was not initially an [`EarthId`](crate::earth_node::EarthId)
     pub unsafe fn from_kademlia_id_unchecked(id: kademlia::Id<32>) -> Self {
         Self(id)
+    }
+}
+
+impl Borrow<kademlia::Id<32>> for SkyId {
+    fn borrow(&self) -> &kademlia::Id<32> {
+        &self.0
     }
 }
 

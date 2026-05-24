@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 arrayvec = "0.7.6"
 crypto-bigint = "0.6.1"
+futures-io = "0.3.32"
 kademlia = { version = "0.1.0", path = "../kademlia", features = ["minicbor", "maxlen"] }
 max-sized-vec = { version = "0.1.0", path = "../max-sized-vec" }
 maxlen = { version = "0.1.0", path = "../maxlen" }
