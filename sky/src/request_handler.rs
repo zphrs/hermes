@@ -2,15 +2,20 @@ mod find_nodes_method;
 
 use std::{borrow::Cow, convert::Infallible, net::IpAddr, time::Duration};
 
-pub use find_nodes_method::FindNodesMethod;
+pub use find_nodes_method::{FindNodesMethod, FindNodesRequest, FindNodesResponse};
 use maxlen::MaxLen;
 
-use max_sized_vec::MaxSizedVec;
 use rpc::{Call, Caller, ClientError, Transport};
 use shared_schema::{SkyNode, ping, sky_node::SkyId};
 use tracing::{debug, trace, warn};
 
 use crate::quinn_transport::{self};
+
+impl<'a> From<FindNodesRequest<'a>> for RootRequest<'a> {
+    fn from(value: FindNodesRequest<'a>) -> Self {
+        Self::FindNodes(value)
+    }
+}
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
 #[cbor(flat)]
@@ -21,51 +26,6 @@ pub enum RootRequest<'a> {
     /// get nearby known sky nodes based on address
     #[n(1)]
     FindNodes(#[n(0)] FindNodesRequest<'a>),
-}
-
-impl<'a> From<FindNodesRequest<'a>> for RootRequest<'a> {
-    fn from(value: FindNodesRequest<'a>) -> Self {
-        Self::FindNodes(value)
-    }
-}
-
-#[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
-pub struct FindNodesRequest<'a> {
-    #[n(0)]
-    pub sky_id: SkyId,
-    // sky nodes should always specify the sender
-    #[n(1)]
-    pub from: Option<Cow<'a, SkyNode>>,
-}
-
-#[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
-pub struct FindNodesResponse {
-    #[n(0)]
-    pub sky_nodes: MaxSizedVec<SkyNode, 20>,
-}
-
-impl FindNodesResponse {
-    pub fn inner(&self) -> &arrayvec::ArrayVec<SkyNode, 20> {
-        self.sky_nodes.inner()
-    }
-
-    pub fn into_inner(self) -> arrayvec::ArrayVec<SkyNode, 20> {
-        self.sky_nodes.into_inner()
-    }
-}
-
-impl From<Vec<SkyNode>> for FindNodesResponse {
-    fn from(sky_nodes: Vec<SkyNode>) -> Self {
-        Self {
-            sky_nodes: sky_nodes.into_iter().collect(),
-        }
-    }
-}
-
-impl From<FindNodesResponse> for Vec<SkyNode> {
-    fn from(res: FindNodesResponse) -> Self {
-        res.sky_nodes.into_inner().into_iter().collect()
-    }
 }
 
 #[derive(Clone)]

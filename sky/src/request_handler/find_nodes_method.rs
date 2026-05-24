@@ -1,12 +1,50 @@
 use std::{borrow::Cow, convert::Infallible, time::Duration};
 
-use shared_schema::SkyNode;
+use max_sized_vec::MaxSizedVec;
+use maxlen::MaxLen;
+use shared_schema::{SkyNode, sky_node::SkyId};
 use tracing::trace;
 
-use crate::{
-    quinn_transport,
-    request_handler::{FindNodesRequest, FindNodesResponse},
-};
+use crate::quinn_transport;
+
+#[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
+pub struct FindNodesRequest<'a> {
+    #[n(0)]
+    pub sky_id: SkyId,
+    // sky nodes should always specify the sender
+    #[n(1)]
+    pub from: Option<Cow<'a, SkyNode>>,
+}
+
+#[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
+pub struct FindNodesResponse {
+    #[n(0)]
+    pub sky_nodes: MaxSizedVec<SkyNode, 20>,
+}
+
+impl FindNodesResponse {
+    pub fn inner(&self) -> &arrayvec::ArrayVec<SkyNode, 20> {
+        self.sky_nodes.inner()
+    }
+
+    pub fn into_inner(self) -> arrayvec::ArrayVec<SkyNode, 20> {
+        self.sky_nodes.into_inner()
+    }
+}
+
+impl From<Vec<SkyNode>> for FindNodesResponse {
+    fn from(sky_nodes: Vec<SkyNode>) -> Self {
+        Self {
+            sky_nodes: sky_nodes.into_iter().collect(),
+        }
+    }
+}
+
+impl From<FindNodesResponse> for Vec<SkyNode> {
+    fn from(res: FindNodesResponse) -> Self {
+        res.sky_nodes.into_inner().into_iter().collect()
+    }
+}
 
 use super::KadHandler;
 
