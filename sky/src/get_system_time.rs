@@ -16,7 +16,7 @@ pub fn get_system_time() -> SystemTime {
             debug!(?systime);
             systime
         } else {
-            panic!()
+            panic!("cannot get system time outside of an OsMock when testing")
         }
     };
     #[cfg(not(test))]
