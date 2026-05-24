@@ -1,3 +1,5 @@
+mod kad_handler;
+use kad_handler::KadHandler;
 use std::{borrow::Cow, convert::Infallible, time::Duration};
 
 use max_sized_vec::MaxSizedVec;
@@ -46,8 +48,6 @@ impl From<FindNodesResponse> for Vec<SkyNode> {
     }
 }
 
-use super::KadHandler;
-
 #[derive(Clone)]
 pub struct FindNodesMethod<'a> {
     rpc_manager: kademlia::RpcManager<SkyNode, KadHandler, 32, 20>,
@@ -56,12 +56,7 @@ pub struct FindNodesMethod<'a> {
 
 impl<'a> FindNodesMethod<'a> {
     pub fn new(transport: &quinn_transport::Transport, me: SkyNode) -> Self {
-        let rpc_manager = kademlia::RpcManager::new(
-            KadHandler {
-                transport: transport.clone(),
-            },
-            me.clone(),
-        );
+        let rpc_manager = kademlia::RpcManager::new(KadHandler::new(transport.clone()), me.clone());
         Self {
             rpc_manager,
             _phantom: std::marker::PhantomData,

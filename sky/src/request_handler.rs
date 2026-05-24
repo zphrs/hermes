@@ -1,15 +1,14 @@
 mod find_nodes_method;
 
-use std::{borrow::Cow, convert::Infallible, net::IpAddr, time::Duration};
+use std::{convert::Infallible, net::IpAddr, time::Duration};
 
 pub use find_nodes_method::{FindNodesMethod, FindNodesRequest, FindNodesResponse};
 use maxlen::MaxLen;
 
-use rpc::{Call, Caller, ClientError, Transport};
-use shared_schema::{SkyNode, ping, sky_node::SkyId};
-use tracing::{debug, trace, warn};
+use rpc::Call;
+use shared_schema::{SkyNode, ping};
 
-use crate::quinn_transport::{self};
+use crate::quinn_transport;
 
 impl<'a> From<FindNodesRequest<'a>> for RootRequest<'a> {
     fn from(value: FindNodesRequest<'a>) -> Self {
@@ -26,142 +25,6 @@ pub enum RootRequest<'a> {
     /// get nearby known sky nodes based on address
     #[n(1)]
     FindNodes(#[n(0)] FindNodesRequest<'a>),
-}
-
-#[derive(Clone)]
-pub struct KadHandler {
-    transport: quinn_transport::Transport,
-}
-
-impl From<quinn_transport::Transport> for KadHandler {
-    fn from(transport: quinn_transport::Transport) -> Self {
-        Self { transport }
-    }
-}
-
-impl KadHandler {
-    pub fn new(transport: quinn_transport::Transport) -> Self {
-        Self { transport }
-    }
-
-    async fn try_ping(
-        &self,
-        node: &SkyNode,
-    ) -> Result<(), ClientError<quinn_transport::Error, Infallible>> {
-        if node.last_reached_at().elapsed() < Duration::from_secs(120) {
-            trace!("returning early because we've heard from them recently");
-            return Ok(());
-        }
-
-        let conn = self
-            .transport
-            .connect(node)
-            .await
-            .map_err(ClientError::Transport)?;
-
-        conn.query::<shared_schema::ping::Method, RootRequest>(shared_schema::ping::Request)
-            .await
-            .map_err(ClientError::from_caller)?;
-        Ok(())
-    }
-    #[tracing::instrument(skip(self))]
-    async fn try_find_node(
-        &self,
-        from: &SkyNode,
-        to: &SkyNode,
-        address: &kademlia::Id<32>,
-    ) -> Result<Vec<SkyNode>, ClientError<quinn_transport::Error, Infallible>> {
-        let conn = self
-            .transport
-            .connect(to)
-            .await
-            .map_err(ClientError::Transport)?;
-
-        let nodes = conn
-            .query::<FindNodesMethod, RootRequest>(FindNodesRequest {
-                sky_id:
-                // SAFETY: this kademlia handler is only used on SkyNodes, so the lookup operations are
-                // operating in SkyId space.
-                unsafe {
-                    SkyId::from_kademlia_id_unchecked(address.clone())
-                },
-                from: Some(Cow::Borrowed(from)),
-            })
-            .await
-            .map_err(ClientError::from_caller)?;
-
-        Ok(nodes.into())
-    }
-}
-
-impl kademlia::RequestHandler<SkyNode, 32> for KadHandler {
-    #[tracing::instrument(skip(self))]
-    async fn ping(&self, from: &SkyNode, node: &SkyNode) -> bool {
-        trace!("handling ping");
-
-        const MAX_ATTEMPTS: usize = 2;
-        for attempt in 0..MAX_ATTEMPTS {
-            // Sleep before retries (but not before the first attempt)
-            if attempt > 0 {
-                let min_delay = 4 * 2u64.pow((attempt - 1) as u32);
-                let max_delay = min_delay * 2;
-                let delay_secs = rand::random_range(min_delay..max_delay);
-                tokio::time::sleep(Duration::from_secs(delay_secs)).await;
-            }
-
-            match self.try_ping(node).await {
-                Ok(_) => {
-                    debug!("found nodes");
-                    return true;
-                }
-                Err(e) if attempt < MAX_ATTEMPTS - 1 => {
-                    debug!("{e} error, trying again");
-                }
-                Err(e) => {
-                    warn!("{e} error ({e:?}), returning empty");
-                    break;
-                }
-            }
-        }
-
-        false
-    }
-    #[tracing::instrument(skip(self))]
-    async fn find_node(
-        &self,
-        from: &SkyNode,
-        to: &SkyNode,
-        address: &kademlia::Id<32>,
-    ) -> Vec<SkyNode> {
-        trace!("finding node");
-
-        const MAX_ATTEMPTS: usize = 3;
-        for attempt in 0..MAX_ATTEMPTS {
-            // Sleep before retries (but not before the first attempt)
-            if attempt > 0 {
-                let min_delay = 4 * 2u64.pow((attempt - 1) as u32);
-                let max_delay = min_delay * 2;
-                let delay_secs = rand::random_range(min_delay..max_delay);
-                tokio::time::sleep(Duration::from_secs(delay_secs)).await;
-            }
-
-            match self.try_find_node(from, to, address).await {
-                Ok(nodes) => {
-                    debug!("found nodes");
-                    return nodes;
-                }
-                Err(e) if attempt < MAX_ATTEMPTS - 1 => {
-                    debug!("{e} error, trying again ({e:?})");
-                }
-                Err(e) => {
-                    warn!("{e} error ({e:?}), returning empty");
-                    break;
-                }
-            }
-        }
-
-        vec![]
-    }
 }
 
 impl From<ping::Request> for RootRequest<'_> {
