@@ -130,6 +130,19 @@ impl<Bs: BiStream> InitializedMessageStream<Bs> {
     }
 }
 
+pub trait IntoRoot<M: Method, Root> {
+    fn into_root(&self, req: M::Req) -> Root;
+}
+
+impl<M: Method, Root, T: ?Sized> IntoRoot<M, Root> for T
+where
+    Root: From<M::Req>,
+{
+    fn into_root(&self, req: M::Req) -> Root {
+        req.into()
+    }
+}
+
 pub trait Caller: Send + Sync + BiStream + Sized {
     type Error;
     fn open_stream(
@@ -139,13 +152,16 @@ pub trait Caller: Send + Sync + BiStream + Sized {
     fn query<M: Method, Root: RpcMessage + From<M::Req> + Send + Debug>(
         &self,
         req: M::Req,
-    ) -> impl Future<Output = Result<M::Res, CallerError<Self::Error>>> + Send {
+    ) -> impl Future<Output = Result<M::Res, CallerError<Self::Error>>> + Send
+    where
+        Self: IntoRoot<M, Root>,
+    {
         async {
             let (write, read) = self.open_stream().await.map_err(CallerError::Transport)?;
             debug!("sending query");
 
             {
-                let root = Root::from(req);
+                let root = self.into_root(req);
                 let mut sender = minicbor_io::AsyncWriter::new(write);
                 sender.write(root).await.map_err(RpcError::from)?;
                 // drops write here to indicate no more writes will occur
