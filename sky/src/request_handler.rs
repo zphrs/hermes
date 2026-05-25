@@ -77,6 +77,7 @@ impl RootHandler {
 
 impl rpc::RootHandler<RootRequest> for RootHandler {
     type Error = Error;
+    type Response = ();
 
     async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError>(
         &mut self,

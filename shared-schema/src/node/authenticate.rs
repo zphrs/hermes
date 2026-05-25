@@ -2,6 +2,7 @@ use std::convert::Infallible;
 
 use crate::Node;
 use maxlen::MaxLen;
+use rpc::ReplyReceipt;
 
 #[derive(Default)]
 pub struct Method {
@@ -52,12 +53,16 @@ impl rpc::Call for Method {
 
 impl rpc::RootHandler<Request> for Method {
     type Error = Infallible;
+    type Response = ();
 
     async fn handle<'a, T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError: Send>(
         &mut self,
         root: Request,
         replier: rpc::Replier<'a, T>,
     ) -> Result<rpc::ReplyReceipt, rpc::ClientError<TransportError, Self::Error>> {
-        replier.reply_with(self, root).await
+        replier
+            .reply_with(self, root)
+            .await
+            .map(ReplyReceipt::clear)
     }
 }

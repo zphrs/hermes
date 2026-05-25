@@ -1,6 +1,9 @@
 use std::fmt::Debug;
 
 pub mod in_memory_transport;
+mod state_machine_transitions;
+
+pub use state_machine_transitions::MethodWrapper;
 
 use futures_io::{AsyncRead, AsyncWrite};
 
@@ -34,17 +37,21 @@ pub trait Call: Method {
         &mut self,
         replier: crate::Replier<'_, T>,
         request: Self::Req,
-    ) -> impl Future<Output = Result<ReplyReceipt, crate::ClientError<TransportError, Error>>> + Send
+    ) -> impl Future<Output = Result<ReplyReceipt<()>, crate::ClientError<TransportError, Error>>> + Send
     where
         Self: Send,
         Error: From<Self::Error>,
+        Self::Res: Sync,
     {
         async {
             let res = self
                 .call(request)
                 .await
                 .map_err(|e| crate::ClientError::App(Error::from(e)))?;
-            replier.reply::<_, _, Self>(res).await
+            replier
+                .reply::<_, _, Self>(res)
+                .await
+                .map(ReplyReceipt::clear)
         }
     }
 }
@@ -262,7 +269,7 @@ pub trait Client: Send + Sync + BiStream {
         &'a self,
         stream: (Self::SendStream, Self::RecvStream),
         handler: &mut Rh,
-    ) -> impl Future<Output = Result<(), ClientError<Self::Error, Rh::Error>>> + Send
+    ) -> impl Future<Output = Result<Rh::Response, ClientError<Self::Error, Rh::Error>>> + Send
     where
         Rh::Error: Send,
         <Self as BiStream>::SendStream: Sync,
@@ -279,24 +286,24 @@ pub trait Client: Send + Sync + BiStream {
                 .await
                 .map_err(|e| ClientError::Rpc(RpcError::from(e)))?
             else {
-                return Ok(());
+                return Err(ClientError::Rpc(RpcError::Closed));
             };
             let mut sender = minicbor_io::AsyncWriter::new(write);
-            match handler
+            let out = match handler
                 .handle::<_, Self::Error>(root, Replier::new(&mut sender))
                 .await
             {
-                Ok(_) => {}
+                Ok(v) => v,
                 Err(e) => return Err(e),
-            }
-            Ok(())
+            };
+            Ok(out.into_inner())
         }
     }
 
     fn reply<T: AsyncWrite + Unpin + Send, TransportError>(
         sender: &mut AsyncWriter<T>,
         res: impl Encode<()>,
-    ) -> impl Future<Output = Result<ReplyReceipt, crate::ClientError<TransportError, Self::Error>>>
+    ) -> impl Future<Output = Result<ReplyReceipt<()>, crate::ClientError<TransportError, Self::Error>>>
     {
         async move {
             sender
@@ -314,7 +321,30 @@ pub trait Client: Send + Sync + BiStream {
 /// Used to enforce calling [`reply`](Call::reply) at some point within the
 /// [`handle`](RootHandler::handle) function as all possible request types
 /// should be replied to.
-pub struct ReplyReceipt(());
+pub struct ReplyReceipt<T = ()>(T);
+
+impl<T> ReplyReceipt<T> {
+    #[must_use]
+    pub fn take(self) -> (T, ReplyReceipt<()>) {
+        (self.0, ReplyReceipt(()))
+    }
+    #[must_use]
+    pub(crate) fn into_inner(self) -> T {
+        self.0
+    }
+    #[must_use]
+    pub fn map<N>(self, f: impl FnOnce(T) -> N) -> ReplyReceipt<N> {
+        ReplyReceipt(f(self.0))
+    }
+    #[must_use]
+    pub fn replace<N>(self, new_inner: N) -> (T, ReplyReceipt<N>) {
+        (self.0, ReplyReceipt(new_inner))
+    }
+    #[must_use]
+    pub fn clear(self) -> ReplyReceipt {
+        ReplyReceipt(())
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RpcError {
@@ -337,12 +367,17 @@ impl<'a, T: AsyncWrite + Unpin + Send + Sync> Replier<'a, T> {
     pub fn reply<TransportError, Error, M: Method + ?Sized>(
         self,
         res: M::Res,
-    ) -> impl Future<Output = Result<ReplyReceipt, crate::ClientError<TransportError, Error>>> + Send
+    ) -> impl Future<
+        Output = Result<ReplyReceipt<M::Res>, crate::ClientError<TransportError, Error>>,
+    > + Send
+    where
+        M::Res: Sync,
     {
         async {
             assert!(res.cbor_len(&mut ()) <= M::Res::max_len());
-            let res = self.client.write(res).await;
-            res.map(|_| ReplyReceipt(()))
+            let written = self.client.write(&res).await;
+            written
+                .map(move |_| ReplyReceipt(res))
                 .map_err(|e| ClientError::Rpc(RpcError::from(e)))
         }
     }
@@ -351,9 +386,9 @@ impl<'a, T: AsyncWrite + Unpin + Send + Sync> Replier<'a, T> {
         self,
         handler: &mut M,
         req: M::Req,
-    ) -> impl Future<Output = Result<ReplyReceipt, crate::ClientError<TransportError, Error>>>
+    ) -> impl Future<Output = Result<ReplyReceipt<M::Res>, crate::ClientError<TransportError, Error>>>
     where
-        <M as Method>::Res: Send,
+        <M as Method>::Res: Send + Sync,
         Error: From<M::Error>,
     {
         async {
@@ -369,6 +404,7 @@ impl<'a, T: AsyncWrite + Unpin + Send + Sync> Replier<'a, T> {
 }
 
 pub trait RootHandler<Root: RpcMessage>: Sized + Send {
+    type Response;
     type Error: Send;
 
     fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError: Send>(
@@ -376,7 +412,7 @@ pub trait RootHandler<Root: RpcMessage>: Sized + Send {
         root: Root,
         replier: Replier<T>,
     ) -> impl std::future::Future<
-        Output = Result<ReplyReceipt, ClientError<TransportError, Self::Error>>,
+        Output = Result<ReplyReceipt<Self::Response>, ClientError<TransportError, Self::Error>>,
     > + Send;
 }
 
@@ -506,23 +542,23 @@ mod tests {
 
     impl crate::RootHandler<Root> for RootHandler {
         type Error = std::convert::Infallible;
+        type Response = ();
 
         async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError>(
             &mut self,
             root: Root,
             replier: crate::Replier<'_, T>,
-        ) -> Result<ReplyReceipt, crate::ClientError<TransportError, Self::Error>> {
+        ) -> Result<ReplyReceipt<Self::Response>, crate::ClientError<TransportError, Self::Error>>
+        {
             match root {
-                Root::Ping(request) => {
-                    replier
-                        .reply::<_, _, ping::Method>(ping::Method.call(request).await?)
-                        .await
-                }
-                Root::Other(_request) => {
-                    replier
-                        .reply::<_, _, other_ping::Method>(other_ping::Response)
-                        .await
-                }
+                Root::Ping(request) => replier
+                    .reply::<_, _, ping::Method>(ping::Method.call(request).await?)
+                    .await
+                    .map(ReplyReceipt::clear),
+                Root::Other(_request) => replier
+                    .reply::<_, _, other_ping::Method>(other_ping::Response)
+                    .await
+                    .map(ReplyReceipt::clear),
             }
         }
     }
@@ -538,7 +574,7 @@ mod tests {
         js.spawn(async move {
             let incoming = tp.accept().await.unwrap();
             let conn = incoming.accept().await.unwrap();
-            let stream = conn.accept_stream().await.unwrap();
+            let mut stream = conn.accept_stream().await.unwrap();
             let _ = conn.handle_one_request(stream, &mut RootHandler).await;
         });
         // client

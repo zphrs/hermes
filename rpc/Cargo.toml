@@ -7,10 +7,11 @@ bytes = "1.11.1"
 futures = { version = "0.3.32", features = ["alloc", "std"] }
 futures-io = "0.3.32"
 maxlen = { version = "0.1.0", path = "../maxlen" }
-minicbor = "2.2.1"
+minicbor = { version = "2.2.1", features = ["std", "derive"] }
 minicbor-io = { version = "0.23.0", features = ["async-io"] }
 quic-rpc = "0.20.0"
 quinn = { version = "0.11.9", default-features = false, optional = true, features = ["futures-io"] }
+test-log = { version = "0.2.20", default-features = false, features = ["color", "trace"] }
 thiserror = "2.0.18"
 tokio = { version = "1.50.0", default-features = false }
 tracing = "0.1.44"

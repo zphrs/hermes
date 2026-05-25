@@ -493,6 +493,7 @@ mod tests {
 
     impl rpc::RootHandler<shared_schema::ping::Request> for PingHandler {
         type Error = Infallible;
+        type Response = ();
 
         async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError: Send>(
             &mut self,
@@ -505,7 +506,7 @@ mod tests {
                 .reply::<_, _, shared_schema::ping::Method>(res)
                 .await?;
             trace!("finished handling client");
-            Ok(out)
+            Ok(out.clear())
         }
     }
 
