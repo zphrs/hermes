@@ -149,8 +149,8 @@ async fn test() {
     js.spawn(async move {
         let incoming = tp.accept().await.unwrap();
         let conn = incoming.accept().await.unwrap();
-        let stream = conn.accept_stream().await.unwrap();
-        let _ = conn.handle_one_request(stream, &mut RootHandler).await;
+        let mut stream = conn.accept_stream().await.unwrap();
+        let _ = conn.handle_one_request(&mut stream, &mut RootHandler).await;
     });
     // client
     js.spawn(async move {

@@ -7,15 +7,14 @@ mod tests;
 mod transport;
 
 pub use in_memory_transport::MemoryTransport;
-pub use state_machine_transitions::MethodWrapper;
+pub use state_machine_transitions::RootHandlerWrapper;
 
 use futures_io::{AsyncRead, AsyncWrite};
 
-use minicbor::{Decode, Encode};
-
-use crate::transport::{BiStream, ClientError, Replier, ReplyReceipt};
+use crate::transport::{ClientError, Replier, ReplyReceipt};
 
 pub use crate::transport::Transport;
+use minicbor::{Decode, Encode};
 
 pub trait RpcMessage: Debug + for<'a> Decode<'a, ()> + Encode<()> + maxlen::MaxLen {}
 

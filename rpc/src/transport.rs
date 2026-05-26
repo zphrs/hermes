@@ -139,7 +139,7 @@ pub trait Client: Send + Sync + BiStream {
 
     fn handle_one_request<'a, Root: RpcMessage, Rh: RootHandler<Root> + 'a>(
         &'a self,
-        stream: (Self::SendStream, Self::RecvStream),
+        stream: &mut (Self::SendStream, Self::RecvStream),
         handler: &mut Rh,
     ) -> impl Future<Output = Result<Rh::Response, ClientError<Self::Error, Rh::Error>>> + Send
     where

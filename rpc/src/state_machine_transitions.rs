@@ -1,23 +1,34 @@
+#[cfg(test)]
+mod tests;
+
 use std::marker::PhantomData;
 
+use futures::FutureExt as _;
+use futures::StreamExt as _;
+use futures::select;
+use futures::stream::FuturesUnordered;
 use maxlen::MaxLen;
+use tracing::trace;
 
 use crate::transport::Caller;
+use crate::transport::Client;
+use crate::transport::ClientError;
+use crate::transport::Replier;
 
-pub struct MethodWrapper<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>>(
+pub struct RootHandlerWrapper<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>>(
     PhantomData<(Root, Handler)>,
 );
 
 impl<'b, C, Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> minicbor::Decode<'b, C>
-    for MethodWrapper<Root, Handler>
+    for RootHandlerWrapper<Root, Handler>
 {
     fn decode(d: &mut minicbor::Decoder<'b>, ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
-        PhantomData::decode(d, ctx).map(|pd| MethodWrapper(pd))
+        PhantomData::decode(d, ctx).map(|pd| RootHandlerWrapper(pd))
     }
 }
 
 impl<C, Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> minicbor::Encode<C>
-    for MethodWrapper<Root, Handler>
+    for RootHandlerWrapper<Root, Handler>
 {
     fn encode<W: minicbor::encode::Write>(
         &self,
@@ -29,7 +40,7 @@ impl<C, Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> minicbor::En
 }
 
 impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> Default
-    for MethodWrapper<Root, Handler>
+    for RootHandlerWrapper<Root, Handler>
 {
     fn default() -> Self {
         Self(Default::default())
@@ -37,7 +48,7 @@ impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> Default
 }
 
 impl<C, Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> minicbor::CborLen<C>
-    for MethodWrapper<Root, Handler>
+    for RootHandlerWrapper<Root, Handler>
 {
     fn cbor_len(&self, ctx: &mut C) -> usize {
         PhantomData::cbor_len(&self.0, ctx)
@@ -45,28 +56,27 @@ impl<C, Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> minicbor::Cb
 }
 
 impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> MaxLen
-    for MethodWrapper<Root, Handler>
+    for RootHandlerWrapper<Root, Handler>
 {
     fn biggest_instantiation() -> Self {
         Self::default()
     }
 }
 
-impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> MethodWrapper<Root, Handler> {
-    pub fn handle_one_request<'a, C: crate::transport::Client>(
+impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> RootHandlerWrapper<Root, Handler> {
+    pub async fn handle_state_transition_request<'a, C: crate::transport::Client>(
         self,
         client: &'a C,
-        stream: (C::SendStream, C::RecvStream),
+        mut stream: (C::SendStream, C::RecvStream),
         handler: &'a mut Handler,
-    ) -> impl std::future::Future<
-        Output = Result<Handler::Response, crate::ClientError<C::Error, Handler::Error>>,
-    > + Send
-    + 'a
+    ) -> Result<Handler::Response, crate::ClientError<C::Error, Handler::Error>>
     where
         Handler: 'a,
         Root: 'a,
     {
-        client.handle_one_request::<Root, Handler>(stream, handler)
+        client
+            .handle_one_request::<Root, Handler>(&mut stream, handler)
+            .await
     }
     pub async fn query<M: crate::Method, C: Caller>(
         self,
@@ -78,309 +88,200 @@ impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> MethodWrapper<R
     {
         caller.query::<M, Root>(req).await
     }
+
+    pub async fn handle_concurrent_requests<
+        'a,
+        C: crate::transport::Client,
+        ParallelRoot,
+        ParallelHandler,
+    >(
+        self,
+        client: &'a C,
+        parallel_handler: ParallelHandler,
+        handler: &'a mut Handler,
+    ) -> Result<
+        <Handler as crate::RootHandler<Root>>::Response,
+        ClientError<<C as Client>::Error, <Handler as crate::RootHandler<Root>>::Error>,
+    >
+    where
+        Root: crate::RpcMessage
+            + Send
+            + std::marker::Sync
+            + From<<ParallelRoot as TryFrom<Root>>::Error>,
+        Handler: crate::RootHandler<Root>,
+        ParallelHandler: crate::RootHandler<ParallelRoot> + std::marker::Send + Clone,
+        ParallelRoot: TryFrom<Root> + crate::RpcMessage + std::marker::Send,
+        <ParallelHandler as crate::RootHandler<ParallelRoot>>::Error: std::marker::Send,
+        <ParallelHandler as crate::RootHandler<ParallelRoot>>::Response: Sync,
+    {
+        let mut js = FuturesUnordered::new();
+
+        let concurrent_handler =
+            ConcurrentRequestHandler::<Root, Handler, ParallelRoot, ParallelHandler>::new(
+                parallel_handler,
+            );
+        loop {
+            select! {
+                maybe_stream = client.accept_stream().fuse() => {
+                    let mut stream = match maybe_stream {
+                        Ok(stream) => stream,
+                        Err(e) => return Err(ClientError::Transport(e)),
+
+                    };
+                    let mut handler = concurrent_handler.clone();
+                    js.push(async move { (client.handle_one_request(&mut stream, &mut handler).await, stream) });
+                }
+                next_result = js.select_next_some() => {
+                    match next_result {
+                        (Ok(Ok(_response)), _) => {
+                            trace!("successfully replied")
+                        },
+                        (Ok(Err(root)), stream) => {
+                            let mut writer = minicbor_io::AsyncWriter::new(stream.0);
+                            // got to non-concurrent value
+                            return handler.handle(root, Replier::new(&mut writer)).await.map(crate::ReplyReceipt::into_inner)
+                        }
+                        (Err(e), _) => {
+                            return Err(match e {
+                                ClientError::Rpc(rpc_error) => ClientError::Rpc(rpc_error),
+                                ClientError::Transport(tp) => ClientError::Transport(tp),
+                                ClientError::App(e) => ClientError::App(e.into()),
+                            });
+                        },
+                    }
+                }
+            };
+        }
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::panic;
+pub struct ConcurrentRequestHandler<
+    Root: crate::RpcMessage,
+    Handler: crate::RootHandler<Root>,
+    ParallelRoot: crate::RpcMessage,
+    ParallelHandler: crate::RootHandler<ParallelRoot>,
+> {
+    handler: ParallelHandler,
+    _marker: PhantomData<(Handler, ParallelRoot, Root)>,
+}
 
-    use tokio::task::JoinSet;
-    use tracing::debug;
-
-    use crate::{
-        Transport,
-        in_memory_transport::{self, MemoryTransport},
-        state_machine_transitions::{
-            MethodWrapper,
-            tests::{
-                actions::{LogoutRequest, PingRequest},
-                authenticate::{LoginMethod, Responses},
-            },
-        },
-        transport::{Client, Incoming},
-    };
-
-    mod authenticate {
-        use maxlen::MaxLen;
-        use std::convert::Infallible;
-
-        use super::actions;
-        use crate::{RootHandler, state_machine_transitions::MethodWrapper};
-
-        #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-        pub struct LoginRequest {
-            #[n(0)]
-            try_again: bool,
-        }
-
-        impl LoginRequest {
-            pub fn new(try_again: bool) -> Self {
-                Self { try_again }
-            }
-        }
-
-        #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-        pub enum Responses {
-            #[n(0)]
-            Ok(#[cbor(skip)] MethodWrapper<actions::RootRequest, actions::RootHandler>),
-            #[n(1)]
-            TryAgain(#[cbor(skip)] MethodWrapper<LoginRequest, LoginMethod>),
-        }
-
-        impl std::fmt::Debug for Responses {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                match self {
-                    Self::Ok(_arg0) => f.debug_tuple("Ok").field(&()).finish(),
-                    Self::TryAgain(_arg0) => f.debug_tuple("TryAgain").field(&()).finish(),
-                }
-            }
-        }
-
-        pub struct LoginMethod;
-
-        impl RootHandler<LoginRequest> for LoginMethod {
-            type Error = Infallible;
-            type Response = Responses;
-
-            async fn handle<
-                T: futures_io::AsyncWrite + Unpin + Sync + Send,
-                TransportError: Send,
-            >(
-                &mut self,
-                root: LoginRequest,
-                replier: crate::Replier<'_, T>,
-            ) -> Result<
-                crate::ReplyReceipt<Self::Response>,
-                crate::ClientError<TransportError, Self::Error>,
-            > {
-                replier.reply_with::<_, _, LoginMethod>(self, root).await
-            }
-        }
-
-        impl crate::Method for LoginMethod {
-            type Req = LoginRequest;
-
-            type Res = Responses;
-
-            type Error = Infallible;
-        }
-
-        impl crate::Call for LoginMethod {
-            async fn call(&mut self, value: Self::Req) -> Result<Self::Res, Self::Error> {
-                if value.try_again {
-                    Ok(Responses::TryAgain(Default::default()))
-                } else {
-                    Ok(Responses::Ok(Default::default()))
-                }
-            }
+impl<
+    Root: crate::RpcMessage,
+    Handler: crate::RootHandler<Root>,
+    ParallelRoot: crate::RpcMessage,
+    ParallelHandler: crate::RootHandler<ParallelRoot> + Clone,
+> Clone for ConcurrentRequestHandler<Root, Handler, ParallelRoot, ParallelHandler>
+{
+    fn clone(&self) -> Self {
+        Self {
+            handler: self.handler.clone(),
+            _marker: self._marker.clone(),
         }
     }
+}
 
-    mod actions {
-        use std::convert::Infallible;
+impl<
+    Root: crate::RpcMessage,
+    Handler: crate::RootHandler<Root>,
+    ParallelRoot: crate::RpcMessage,
+    ParallelHandler: crate::RootHandler<ParallelRoot>,
+> std::fmt::Debug for ConcurrentRequestHandler<Root, Handler, ParallelRoot, ParallelHandler>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConcurrentRequestHandler").finish()
+    }
+}
 
-        use maxlen::MaxLen;
-
-        use crate::{Call, state_machine_transitions::MethodWrapper};
-
-        #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-        #[cbor(flat)]
-        pub enum RootRequest {
-            #[n(0)]
-            Ping(),
-            #[n(1)]
-            Logout(),
-        }
-
-        pub struct RootHandler;
-
-        impl crate::RootHandler<RootRequest> for RootHandler {
-            type Error = Infallible;
-            type Response = NextHandler;
-
-            async fn handle<
-                T: futures_io::AsyncWrite + Unpin + Sync + Send,
-                TransportError: Send,
-            >(
-                &mut self,
-                root: RootRequest,
-                replier: crate::Replier<'_, T>,
-            ) -> Result<
-                crate::ReplyReceipt<Self::Response>,
-                crate::ClientError<TransportError, Self::Error>,
-            > {
-                Ok(match root {
-                    RootRequest::Ping() => replier
-                        .reply_with(&mut PingMethod, PingRequest())
-                        .await?
-                        .map(|r| NextHandler::Actions(r.0)),
-                    RootRequest::Logout() => replier
-                        .reply::<_, _, LogoutMethod>(LogoutResponse::default())
-                        .await?
-                        .map(|r| NextHandler::Authenticate(r.0)),
-                })
-            }
-        }
-
-        pub struct PingRequest();
-
-        impl From<PingRequest> for RootRequest {
-            fn from(_value: PingRequest) -> Self {
-                Self::Ping()
-            }
-        }
-
-        pub struct LogoutRequest();
-
-        impl From<LogoutRequest> for RootRequest {
-            fn from(_value: LogoutRequest) -> Self {
-                Self::Logout()
-            }
-        }
-
-        #[derive(Debug)]
-        pub struct LogoutMethod;
-
-        impl crate::Method for LogoutMethod {
-            type Req = LogoutRequest;
-
-            type Res = LogoutResponse;
-
-            type Error = Infallible;
-        }
-
-        #[derive(Debug)]
-        pub struct PingMethod;
-
-        impl crate::Method for PingMethod {
-            type Req = PingRequest;
-
-            type Res = PingResponse;
-
-            type Error = Infallible;
-        }
-
-        impl Call for PingMethod {
-            async fn call(&mut self, _value: Self::Req) -> Result<Self::Res, Self::Error> {
-                Ok(PingResponse::default())
-            }
-        }
-
-        #[derive(Default, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-        pub struct PingResponse(#[cbor(skip)] pub MethodWrapper<RootRequest, RootHandler>);
-
-        impl std::fmt::Debug for PingResponse {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.debug_tuple("PingResponse").field(&()).finish()
-            }
-        }
-
-        #[derive(Default, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-        pub struct LogoutResponse(
-            #[cbor(skip)]
-            pub  MethodWrapper<super::authenticate::LoginRequest, super::authenticate::LoginMethod>,
-        );
-
-        pub enum NextHandler {
-            Actions(MethodWrapper<RootRequest, RootHandler>),
-            Authenticate(
-                MethodWrapper<super::authenticate::LoginRequest, super::authenticate::LoginMethod>,
-            ),
-        }
-
-        impl std::fmt::Debug for LogoutResponse {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.debug_tuple("LogoutResponse").field(&()).finish()
-            }
+impl<
+    Root: crate::RpcMessage,
+    Handler: crate::RootHandler<Root>,
+    ParallelRoot: crate::RpcMessage,
+    ParallelHandler: crate::RootHandler<ParallelRoot>,
+> ConcurrentRequestHandler<Root, Handler, ParallelRoot, ParallelHandler>
+{
+    pub fn new(handler: ParallelHandler) -> Self {
+        Self {
+            handler,
+            _marker: PhantomData,
         }
     }
+}
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn login_flow() {
-        let net = in_memory_transport::Network::new();
+// impl<Handler, Root, ParallelRoot, ParallelHandler> crate::Method
+//     for ConcurrentRequestHandler<Root, Handler, ParallelRoot, ParallelHandler>
+// where
+//     Root: crate::RpcMessage + Send,
+//     Handler: crate::RootHandler<Root>,
+//     ParallelHandler: crate::Method,
+// {
+//     type Req = Root;
 
-        let net1 = net.clone();
-        let tp = MemoryTransport::new(net1);
-        let server_addr = tp.address();
+//     type Res = Result<ParallelHandler::Res, Root>;
 
-        let mut js = JoinSet::new();
-        // server
-        js.spawn(async move {
-            let mut login_wrapper: MethodWrapper<authenticate::LoginRequest, LoginMethod> =
-                MethodWrapper::default();
-            let incoming = tp.accept().await.unwrap();
-            let conn = incoming.accept().await.unwrap();
-            'outer: loop {
-                let mut actions = loop {
-                    let Ok(stream) = conn.accept_stream().await else {
-                        debug!("breaking out of server loop due to accept_stream error");
-                        break 'outer;
-                    };
-                    match login_wrapper
-                        .handle_one_request(&conn, stream, &mut LoginMethod)
-                        .await
-                        .unwrap()
-                    {
-                        authenticate::Responses::Ok(method_wrapper) => break method_wrapper,
-                        authenticate::Responses::TryAgain(new_login_wrapper) => {
-                            login_wrapper = new_login_wrapper
-                        }
-                    }
-                };
+//     type Error = ParallelHandler::Error;
+// }
 
-                login_wrapper = loop {
-                    let stream = conn.accept_stream().await.unwrap();
-                    match actions
-                        .handle_one_request(&conn, stream, &mut actions::RootHandler)
-                        .await
-                        .unwrap()
-                    {
-                        actions::NextHandler::Actions(method_wrapper) => actions = method_wrapper,
-                        actions::NextHandler::Authenticate(method_wrapper) => break method_wrapper,
-                    }
-                }
+// impl<Handler, Root, ParallelHandler> crate::Call
+//     for ConcurrentRequestHandler<Root, Handler, ParallelHandler>
+// where
+//     Root: crate::RpcMessage
+//         + Send
+//         + From<<<ParallelHandler as crate::Method>::Req as TryFrom<Root>>::Error>,
+//     Handler: crate::RootHandler<Root>,
+//     ParallelHandler: crate::Call + std::marker::Send,
+//     ParallelHandler::Req: TryFrom<Root>,
+// {
+//     async fn call(&mut self, value: Self::Req) -> Result<Self::Res, Self::Error> {
+//         let parallel_req = match ParallelHandler::Req::try_from(value) {
+//             Ok(v) => v,
+//             Err(root) => return Ok(Err(root.into())),
+//         };
+
+//         Ok(Ok(self.handler.call(parallel_req).await?))
+//     }
+// }
+//
+//
+impl<
+    Root: crate::RpcMessage,
+    Handler: crate::RootHandler<Root>,
+    ParallelRoot: crate::RpcMessage,
+    ParallelHandler: crate::RootHandler<ParallelRoot>,
+> crate::RootHandler<Root>
+    for ConcurrentRequestHandler<Root, Handler, ParallelRoot, ParallelHandler>
+where
+    Root:
+        crate::RpcMessage + Send + std::marker::Sync + From<<ParallelRoot as TryFrom<Root>>::Error>,
+    Handler: crate::RootHandler<Root>,
+    ParallelHandler: crate::RootHandler<ParallelRoot> + std::marker::Send,
+    ParallelRoot: TryFrom<Root> + crate::RpcMessage + std::marker::Send,
+    <ParallelHandler as crate::RootHandler<ParallelRoot>>::Error: std::marker::Send,
+    <ParallelHandler as crate::RootHandler<ParallelRoot>>::Response: Sync,
+{
+    type Response = ParallelHandler::Response;
+
+    type Error = ConcurrentRequestHandlerError<
+        ClientError<ParallelHandler::Error, ParallelHandler::Error>,
+        Root,
+    >;
+
+    async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError: Send>(
+        &mut self,
+        root: Root,
+        replier: crate::Replier<'_, T>,
+    ) -> Result<crate::ReplyReceipt<Self::Response>, ClientError<TransportError, Self::Error>> {
+        let parallel_req = match ParallelRoot::try_from(root) {
+            Ok(v) => v,
+            Err(root) => {
+                return Err(ClientError::App(ConcurrentRequestHandlerError::Root(
+                    root.into(),
+                )));
             }
-        });
-        // client
-        let _client_handle = js.spawn(async move {
-            let tp = MemoryTransport::new(net);
-            let conn = tp.connect(&server_addr).await.unwrap();
-
-            let login_wrapper: MethodWrapper<
-                authenticate::LoginRequest,
-                authenticate::LoginMethod,
-            > = Default::default();
-
-            let res = login_wrapper
-                .query::<LoginMethod, _>(authenticate::LoginRequest::new(true), &conn)
-                .await
-                .unwrap();
-
-            let Responses::TryAgain(login_wrapper) = res else {
-                panic!()
-            };
-
-            let Responses::Ok(actions_wrapper) = login_wrapper
-                .query::<LoginMethod, _>(authenticate::LoginRequest::new(false), &conn)
-                .await
-                .unwrap()
-            else {
-                panic!()
-            };
-
-            let actions_wrapper = actions_wrapper
-                .query::<actions::PingMethod, _>(PingRequest(), &conn)
-                .await
-                .unwrap()
-                .0;
-
-            let _login_wrapper = actions_wrapper
-                .query::<actions::LogoutMethod, _>(LogoutRequest(), &conn)
-                .await
-                .unwrap()
-                .0;
-        });
-        js.join_all().await;
+        };
+        self.handler.handle(parallel_req, replier).await
     }
+}
+enum ConcurrentRequestHandlerError<ParallelError, Root> {
+    ParallelHandler(ParallelError),
+    Root(Root),
 }

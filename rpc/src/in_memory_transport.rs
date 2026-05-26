@@ -114,7 +114,7 @@ impl Client {
     }
 }
 
-impl crate::BiStream for Client {
+impl crate::transport::BiStream for Client {
     type RecvStream = RecvStream;
     type SendStream = SendStream;
 }
@@ -150,7 +150,7 @@ impl Caller {
     }
 }
 
-impl crate::BiStream for Caller {
+impl crate::transport::BiStream for Caller {
     type RecvStream = RecvStream;
     type SendStream = SendStream;
 }

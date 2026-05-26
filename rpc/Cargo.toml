@@ -27,3 +27,4 @@ derive_more = { version = "2.1.1", features = ["from", "try_into"] }
 minicbor-derive = "0.19.3"
 quic-rpc = "0.20.0"
 serde = "1.0.228"
+tokio = { version = "1.50.0", features = ["test-util", "time"] }
