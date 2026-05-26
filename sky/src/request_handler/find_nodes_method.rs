@@ -10,7 +10,7 @@ use maxlen::MaxLen;
 use shared_schema::{SkyNode, sky_node::SkyId};
 use tracing::{trace, warn};
 
-use crate::{client::SkyOrEarth, quinn_transport};
+use crate::client::SkyOrEarth;
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
 pub struct FindNodesRequest {

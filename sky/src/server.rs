@@ -1,6 +1,5 @@
-use std::{convert::Infallible, time::Duration};
+use std::time::Duration;
 
-use futures_util::TryFutureExt;
 use rpc::{Client as _, ClientError, Transport as _};
 use shared_schema::SkyNode;
 use tokio::task::{JoinHandle, JoinSet};
@@ -9,7 +8,7 @@ use tracing::{Instrument as _, debug, info, info_span, instrument::WithSubscribe
 use crate::{
     get_system_time::get_system_time,
     quinn_transport,
-    request_handler::{Error, FindNodesMethod, KadRpcManager, RootHandler, RootRequest},
+    request_handler::{Error, KadRpcManager, RootHandler, RootRequest},
 };
 
 #[derive(Clone)]

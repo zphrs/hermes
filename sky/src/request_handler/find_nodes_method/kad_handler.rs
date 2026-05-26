@@ -1,4 +1,4 @@
-use std::{borrow::Cow, convert::Infallible, time::Duration};
+use std::{convert::Infallible, time::Duration};
 
 use super::{FindNodesMethod, FindNodesRequest};
 use crate::request_handler::RootRequest;

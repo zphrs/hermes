@@ -3,7 +3,7 @@ mod root_request;
 
 pub use find_nodes_method::KadRpcManager;
 
-use std::{convert::Infallible, net::IpAddr, time::Duration};
+use std::{convert::Infallible, time::Duration};
 
 pub use find_nodes_method::{FindNodesMethod, FindNodesRequest, FindNodesResponse};
 pub use root_request::RootRequest;
@@ -11,7 +11,7 @@ pub use root_request::RootRequest;
 use rpc::Call;
 use shared_schema::{SkyNode, ping};
 
-use crate::{client::SkyOrEarth, quinn_transport};
+use crate::client::SkyOrEarth;
 
 impl<'a> From<FindNodesRequest> for RootRequest {
     fn from(value: FindNodesRequest) -> Self {

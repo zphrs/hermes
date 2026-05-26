@@ -82,7 +82,7 @@ impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> MethodWrapper<R
 
 #[cfg(test)]
 mod tests {
-    use std::{default, panic};
+    use std::panic;
 
     use tokio::task::JoinSet;
     use tracing::debug;

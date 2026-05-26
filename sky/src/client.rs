@@ -1,7 +1,7 @@
 mod sky_or_earth;
 
 pub use sky_or_earth::SkyOrEarth;
-use std::{borrow::Cow, time::Duration};
+use std::time::Duration;
 
 use rpc::{Caller, Transport};
 use shared_schema::{EarthNode, SkyNode, sky_node::SkyId};
