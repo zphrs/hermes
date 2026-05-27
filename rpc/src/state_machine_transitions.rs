@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use maxlen::MaxLen;
 
-use crate::Caller;
+use crate::transport::Caller;
 
 pub struct MethodWrapper<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>>(
     PhantomData<(Root, Handler)>,
@@ -53,7 +53,7 @@ impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> MaxLen
 }
 
 impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> MethodWrapper<Root, Handler> {
-    pub fn handle_one_request<'a, C: crate::Client>(
+    pub fn handle_one_request<'a, C: crate::transport::Client>(
         self,
         client: &'a C,
         stream: (C::SendStream, C::RecvStream),
@@ -72,7 +72,7 @@ impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> MethodWrapper<R
         self,
         req: M::Req,
         caller: &C,
-    ) -> Result<M::Res, crate::CallerError<C::Error>>
+    ) -> Result<M::Res, crate::transport::CallerError<C::Error>>
     where
         Root: crate::RpcMessage + From<M::Req> + Send,
     {
@@ -88,7 +88,7 @@ mod tests {
     use tracing::debug;
 
     use crate::{
-        Client, Incoming, Transport,
+        Transport,
         in_memory_transport::{self, MemoryTransport},
         state_machine_transitions::{
             MethodWrapper,
@@ -97,6 +97,7 @@ mod tests {
                 authenticate::{LoginMethod, Responses},
             },
         },
+        transport::{Client, Incoming},
     };
 
     mod authenticate {
@@ -342,7 +343,7 @@ mod tests {
             }
         });
         // client
-        let client_handle = js.spawn(async move {
+        let _client_handle = js.spawn(async move {
             let tp = MemoryTransport::new(net);
             let conn = tp.connect(&server_addr).await.unwrap();
 

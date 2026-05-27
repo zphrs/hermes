@@ -1,4 +1,3 @@
-use crate::Transport;
 use std::{
     collections::HashMap,
     convert::Infallible,
@@ -65,7 +64,7 @@ impl MemoryTransport {
     }
 }
 
-impl Transport for MemoryTransport {
+impl crate::transport::Transport for MemoryTransport {
     type Address = [u8; 32];
     type Error = Infallible;
     type Caller = Caller;
@@ -120,7 +119,7 @@ impl crate::BiStream for Client {
     type SendStream = SendStream;
 }
 
-impl crate::Client for Client {
+impl crate::transport::Client for Client {
     type Error = std::io::Error;
 
     async fn accept_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
@@ -156,7 +155,7 @@ impl crate::BiStream for Caller {
     type SendStream = SendStream;
 }
 
-impl crate::Caller for Caller {
+impl crate::transport::Caller for Caller {
     type Error = Infallible;
 
     async fn open_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
@@ -253,7 +252,7 @@ pub struct Incoming {
     local_addr: [u8; 32],
 }
 
-impl crate::Incoming for Incoming {
+impl crate::transport::Incoming for Incoming {
     type Client = Client;
     type Error = std::io::Error;
 
