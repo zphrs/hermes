@@ -4,7 +4,7 @@ use maxlen::MaxLen;
 use tokio::task::JoinSet;
 
 use crate::{
-    Call as _, RpcError, Transport,
+    RpcError, Transport,
     in_memory_transport::{self, MemoryTransport},
     transport::Caller,
     transport::{Client, Incoming},

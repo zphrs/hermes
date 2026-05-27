@@ -6,14 +6,14 @@ mod state_machine_transitions;
 mod tests;
 pub mod transport;
 
+pub use state_machine_transitions::{ConcurrentRequestHandler, MethodWrapper};
+
 pub use in_memory_transport::MemoryTransport;
 // pub use state_machine_transitions::RootHandlerWrapper;
 
 use futures_io::{AsyncRead, AsyncWrite};
 
-use crate::transport::{ClientError, Replier, ReplyReceipt};
-
-pub use crate::transport::Transport;
+pub use crate::transport::{Caller, CallerError, ClientError, Replier, ReplyReceipt, Transport};
 use minicbor::{Decode, Encode};
 
 pub trait RpcMessage: Debug + for<'a> Decode<'a, ()> + Encode<()> + maxlen::MaxLen {}

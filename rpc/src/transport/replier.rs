@@ -4,8 +4,6 @@ use futures::AsyncWrite;
 use maxlen::MaxLen;
 use minicbor::CborLen as _;
 
-use crate::Method;
-
 /// Returned when you call [`reply`](Call::reply) on a [Method] that implements
 /// [Call].
 ///

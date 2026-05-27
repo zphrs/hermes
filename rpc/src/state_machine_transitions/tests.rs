@@ -1,22 +1,13 @@
 use std::{panic, time::Duration};
 
-use futures::{StreamExt, TryStreamExt, stream::FuturesUnordered};
+use futures::{TryStreamExt, stream::FuturesUnordered};
 use tokio::{task::JoinSet, time::Instant};
 use tracing::{debug, warn};
 
 use crate::{
     Transport,
     in_memory_transport::{self, MemoryTransport},
-    state_machine_transitions::{
-        MethodWrapper,
-        tests::{
-            actions::{
-                LogoutMethod, LogoutRequest, LongPingMethod, LongPingRequest, LoopbackHandler,
-                PingMethod, PingRequest,
-            },
-            authenticate::{LoginMethod, Responses},
-        },
-    },
+    state_machine_transitions::MethodWrapper,
     transport::{Client, Incoming},
 };
 
@@ -372,7 +363,8 @@ mod actions {
 #[tokio::test]
 #[test_log::test]
 async fn login_flow() {
-    use authenticate::LoginMethod;
+    use actions::{LogoutMethod, LogoutRequest, PingMethod, PingRequest};
+    use authenticate::{LoginMethod, Responses};
     let net = in_memory_transport::Network::new();
 
     let net1 = net.clone();
@@ -467,6 +459,11 @@ async fn login_flow() {
 #[tokio::test]
 #[test_log::test]
 async fn concurrent_after_login() {
+    use actions::{
+        LogoutMethod, LogoutRequest, LongPingMethod, LongPingRequest, LoopbackHandler, PingMethod,
+        PingRequest,
+    };
+    use authenticate::{LoginMethod, Responses};
     let net = in_memory_transport::Network::new();
 
     let net1 = net.clone();

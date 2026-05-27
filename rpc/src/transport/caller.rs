@@ -17,10 +17,7 @@ pub trait Caller: Send + Sync + BiStream + Sized {
     fn query<M: Method, Root: RpcMessage + From<M::Req> + Send + Debug>(
         &self,
         req: M::Req,
-    ) -> impl Future<Output = Result<M::Res, CallerError<Self::Error>>> + Send
-    where
-        Root: From<M::Req>,
-    {
+    ) -> impl Future<Output = Result<M::Res, CallerError<Self::Error>>> + Send {
         async {
             let (write, read) = self.open_stream().await.map_err(CallerError::Transport)?;
             debug!("sending query");

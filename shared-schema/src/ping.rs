@@ -19,7 +19,11 @@ impl rpc::Method for Method {
 }
 
 impl rpc::Call for Method {
-    async fn call(&mut self, _value: Self::Req) -> Result<Self::Res, Self::Error> {
-        Ok(Response)
+    async fn call<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+        &mut self,
+        replier: rpc::Replier<'_, T, Self>,
+        _value: Self::Req,
+    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>> {
+        replier.reply(Response).await
     }
 }
