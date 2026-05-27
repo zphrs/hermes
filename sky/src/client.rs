@@ -1,9 +1,8 @@
 mod sky_or_earth;
-
 pub use sky_or_earth::SkyOrEarth;
 use std::time::Duration;
 
-use rpc::{Caller, Transport};
+use rpc::{Transport, transport::Caller};
 use shared_schema::{EarthNode, SkyNode, sky_node::SkyId};
 use tracing::{debug, instrument, warn};
 

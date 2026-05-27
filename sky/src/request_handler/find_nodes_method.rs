@@ -99,8 +99,12 @@ impl rpc::Method for FindNodesMethod {
 }
 
 impl rpc::Call for FindNodesMethod {
-    #[tracing::instrument(skip(self))]
-    async fn call(&mut self, value: Self::Req) -> Result<FindNodesResponse, Infallible> {
+    #[tracing::instrument(skip(self, replier))]
+    async fn call<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+        &mut self,
+        replier: rpc::Replier<'_, T, Self>,
+        value: Self::Req,
+    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>> {
         let sky_id: kademlia::Id<32> = value.sky_id.into();
         let out = self
             .rpc_manager
@@ -108,6 +112,6 @@ impl rpc::Call for FindNodesMethod {
             .await;
 
         trace!(?out);
-        Ok(out.into())
+        replier.reply(out.into()).await
     }
 }

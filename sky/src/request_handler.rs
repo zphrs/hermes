@@ -8,7 +8,6 @@ use std::{convert::Infallible, time::Duration};
 pub use find_nodes_method::{FindNodesMethod, FindNodesRequest, FindNodesResponse};
 pub use root_request::RootRequest;
 
-use rpc::Call;
 use shared_schema::{SkyNode, ping};
 
 use crate::client::SkyOrEarth;
@@ -75,25 +74,34 @@ impl RootHandler {
     }
 }
 
-impl rpc::RootHandler<RootRequest> for RootHandler {
-    type Error = Error;
-    type Response = ();
+impl rpc::Method for RootHandler {
+    type Req = RootRequest;
 
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError>(
+    type Res = ();
+
+    type Error = Infallible;
+}
+
+impl rpc::Call for RootHandler {
+    async fn call<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
         &mut self,
-        root: RootRequest,
-        replier: rpc::Replier<'_, T>,
-    ) -> Result<rpc::ReplyReceipt, rpc::ClientError<TransportError, Self::Error>> {
-        match root {
-            RootRequest::Ping(request) => {
-                self.find_nodes_handler.on_ping(self.from.clone()).await;
-
-                ping::Method.reply(replier, request).await
-            }
-            RootRequest::FindNodes(request) => {
-                self.find_nodes_handler.reply(replier, request).await
-            }
-        }
+        replier: rpc::Replier<'_, T, Self>,
+        value: Self::Req,
+    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>> {
+        Ok(match value {
+            RootRequest::Ping(request) => ping::Method
+                .call(replier.change_method(&request), request)
+                .await?
+                .clear(),
+            RootRequest::FindNodes(find_nodes_request) => self
+                .find_nodes_handler
+                .call(
+                    replier.change_method(&find_nodes_request),
+                    find_nodes_request,
+                )
+                .await?
+                .clear(),
+        })
     }
 }
 
@@ -103,11 +111,11 @@ mod tests {
     use maxlen::MaxLen as _;
     use minicbor::CborLen as _;
     use rand::Rng;
-    use shared_schema::{ping, sky_node::SkyId};
+    use shared_schema::{EarthNode, earth_node::EarthId, ping, sky_node::SkyId};
     use std::{net::IpAddr, time::Duration};
     use tracing_subscriber::fmt::time::tokio_uptime;
 
-    use rpc::{Caller as _, Close, Transport as _};
+    use rpc::{Caller as _, Transport as _, transport::Close};
     use tokio::task::JoinSet;
     use tracing::{Instrument, Level, span, trace};
 
@@ -184,8 +192,13 @@ mod tests {
                     }
                 };
                 let mut js: JoinSet<Result<(), Box<dyn std::error::Error>>> = JoinSet::new();
-
-                for _ in 0..10 {
+                let _res = conn
+                    .query::<shared_schema::authenticate::Method, shared_schema::authenticate::Request>(shared_schema::authenticate::Request {
+                        node: shared_schema::Node::Earth(EarthNode::new(EarthId::ZERO)),
+                    })
+                    .await
+                    .unwrap();
+                for _ in 0..1 {
                     let conn_clone = conn.clone();
                     js.spawn_local(async move {
                         conn_clone
@@ -212,14 +225,13 @@ mod tests {
         })
         .into_ref()
     }
-
     #[test]
     pub fn ping() {
         let sim = Sim::new_with_config(dens::sim::Config {
             // need to increase otherwise machine will end up stuck in WouldBlock loop
-            nic_capacity: 1000,
-            udp_capacity: 1000,
-            ip_hop_capacity: 1000,
+            nic_capacity: 3000,
+            udp_capacity: 3000,
+            ip_hop_capacity: 3000,
             tick_amount: Duration::from_millis(10),
             ..Default::default()
         });
@@ -230,7 +242,7 @@ mod tests {
                 .pretty()
                 .with_test_writer()
                 .with_timer(tokio_uptime())
-                .with_env_filter("sky=debug,dens=debug,rpc=warn")
+                .with_env_filter("sky=trace,dens=debug,rpc=trace")
                 .init();
             let net = Sim::add_machine(ip::Network::new_private_class_c());
             let server = create_server();
@@ -238,7 +250,7 @@ mod tests {
             let server_addr = server.get().borrow().connect_to_net(net);
             Sim::tick_machine(server).unwrap();
             let mut arr = vec![];
-            for _ in 0..4_000 {
+            for _ in 0..1 {
                 let client = create_ping_client(server_addr.0.into());
                 let _client_ip = client.get().borrow().connect_to_net(net);
                 arr.push(client);

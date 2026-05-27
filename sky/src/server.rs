@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rpc::{Client as _, ClientError, Transport as _};
+use rpc::{ClientError, Transport as _, transport::Client as _};
 use shared_schema::SkyNode;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{Instrument as _, debug, info, info_span, instrument::WithSubscriber as _, trace};
@@ -8,7 +8,7 @@ use tracing::{Instrument as _, debug, info, info_span, instrument::WithSubscribe
 use crate::{
     get_system_time::get_system_time,
     quinn_transport,
-    request_handler::{Error, KadRpcManager, RootHandler, RootRequest},
+    request_handler::{Error, KadRpcManager, RootHandler},
 };
 
 #[derive(Clone)]
@@ -81,7 +81,7 @@ impl SkyServer {
                 let span = info_span!("handling request", self_addr = %incoming_client.inner().local_ip().unwrap(), client = %incoming_client.inner().remote_address());
                 js.spawn(async move {
                     trace!("accepting {}", incoming_client.inner().remote_address());
-                    let conn = match rpc::Incoming::accept(incoming_client).await {
+                    let conn = match rpc::transport::Incoming::accept(incoming_client).await {
                         Ok(v) => v,
                         Err(e) => {
                             info!("timing out...");
@@ -89,8 +89,8 @@ impl SkyServer {
                         }
                     };
                     let mut auth_handler = shared_schema::authenticate::Method::new();
-                    let stream = conn.accept_stream().await.map_err(ClientError::Transport)?;
-                    if let Err(e) = conn.handle_one_request(stream, &mut auth_handler).await {
+                    let mut stream = conn.accept_stream().await.map_err(ClientError::Transport)?;
+                    if let Err(e) = conn.handle_one_request(&mut stream, &mut auth_handler).await {
 
                         match e {
                             ClientError::Rpc(rpc_error) => Err(ClientError::Rpc(rpc_error))?,
@@ -105,7 +105,7 @@ impl SkyServer {
                     while conn.inner().close_reason().is_none() {
                         let cloned_handler = handler.clone();
                         let conn = conn.clone();
-                        let stream = match conn.accept_stream().await {
+                        let mut stream = match conn.accept_stream().await {
                             Ok(stream) => stream,
                             Err(e) => {
                                 debug!("Err while accepting stream: {}", e);
@@ -116,7 +116,7 @@ impl SkyServer {
                         js.spawn(async move {
 
                             let mut root_handler = RootHandler::new((from, get_system_time()).into(), &cloned_handler);
-                            if let Err(e) = conn.handle_one_request::<RootRequest, _>(stream, &mut root_handler).await {
+                            if let Err(e) = conn.handle_one_request::<RootHandler>(&mut stream, &mut root_handler).await {
                                 match e {
                                     ClientError::Transport(crate::quinn_transport::Error::Connection(
                                         quinn::ConnectionError::ApplicationClosed(close),

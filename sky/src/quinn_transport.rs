@@ -24,7 +24,7 @@ use std::{
 };
 
 use quinn::{EndpointConfig, ServerConfig, VarInt, crypto::rustls::QuicClientConfig};
-use rpc::BiStream;
+use rpc::transport::BiStream;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use shared_schema::{
     SkyNode,
@@ -283,7 +283,7 @@ pub enum Error {
     ConnectionClosed,
 }
 
-impl rpc::Transport for Transport {
+impl rpc::transport::Transport for Transport {
     type Address = SkyNode;
 
     type Error = Error;
@@ -383,7 +383,7 @@ impl From<quinn::Incoming> for Incoming {
     }
 }
 
-impl rpc::Incoming for Incoming {
+impl rpc::transport::Incoming for Incoming {
     type Client = Client;
     type Error = Error;
     async fn accept(self) -> Result<Self::Client, Self::Error> {
@@ -391,7 +391,7 @@ impl rpc::Incoming for Incoming {
     }
 }
 
-impl rpc::Close for Transport {
+impl rpc::transport::Close for Transport {
     async fn close(self) {
         // self.endpoint.close(VarInt::from_u32(0), b"");
         self.endpoint.wait_idle().await
@@ -403,7 +403,7 @@ pub struct Caller {
     conn: quinn::Connection,
 }
 
-impl rpc::Close for Caller {
+impl rpc::transport::Close for Caller {
     async fn close(self) {
         self.conn.close(VarInt::from_u32(10), b"");
     }
@@ -421,7 +421,7 @@ impl BiStream for Caller {
     type SendStream = quinn::SendStream;
 }
 
-impl rpc::Caller for Caller {
+impl rpc::transport::Caller for Caller {
     type Error = Error;
 
     async fn open_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
@@ -457,7 +457,7 @@ impl BiStream for Client {
     type SendStream = quinn::SendStream;
 }
 
-impl rpc::Client for Client {
+impl rpc::transport::Client for Client {
     type Error = Error;
 
     async fn accept_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
@@ -465,7 +465,7 @@ impl rpc::Client for Client {
     }
 }
 
-impl rpc::Close for Client {
+impl rpc::transport::Close for Client {
     async fn close(self) {
         self.conn.close(VarInt::from_u32(20), b"");
     }
@@ -476,7 +476,10 @@ mod tests {
 
     use dens::sim::MachineIntoRef;
     use expect_test::expect;
-    use rpc::{Call, Caller, Client, Close, Incoming, Transport as _};
+    use rpc::{
+        Transport as _,
+        transport::{Caller, Client, Close, Incoming},
+    };
     use std::convert::Infallible;
 
     use std::net::IpAddr;
@@ -491,22 +494,28 @@ mod tests {
 
     struct PingHandler;
 
-    impl rpc::RootHandler<shared_schema::ping::Request> for PingHandler {
-        type Error = Infallible;
-        type Response = ();
+    impl rpc::Method for PingHandler {
+        type Req = shared_schema::ping::Request;
 
-        async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError: Send>(
+        type Res = ();
+
+        type Error = Infallible;
+    }
+
+    impl rpc::Call for PingHandler {
+        async fn call<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
             &mut self,
-            root: shared_schema::ping::Request,
-            replier: rpc::Replier<'_, T>,
-        ) -> Result<rpc::ReplyReceipt, rpc::ClientError<TransportError, Self::Error>> {
+            replier: rpc::Replier<'_, T, Self>,
+            value: Self::Req,
+        ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>>
+        {
             trace!("Handling client");
-            let res = ping::Method.call(root).await?;
-            let out = replier
-                .reply::<_, _, shared_schema::ping::Method>(res)
+
+            let res = ping::Method
+                .call(replier.change_method(&value), value)
                 .await?;
             trace!("finished handling client");
-            Ok(out.clear())
+            Ok(res.clear())
         }
     }
 
@@ -523,8 +532,10 @@ mod tests {
 
                     let client = tp.accept().await?.accept().await?;
                     trace!("accepted client conn");
-                    let stream = client.accept_stream().await?;
-                    client.handle_one_request(stream, &mut PingHandler).await?;
+                    let mut stream = client.accept_stream().await?;
+                    client
+                        .handle_one_request(&mut stream, &mut PingHandler)
+                        .await?;
 
                     trace!("handled client");
                     tp.close().await;
@@ -572,8 +583,10 @@ mod tests {
                 async {
                     let tp = Transport::self_signed_server().await?;
                     let client = tp.accept().await?.accept().await?;
-                    let stream = client.accept_stream().await?;
-                    client.handle_one_request(stream, &mut PingHandler).await?;
+                    let mut stream = client.accept_stream().await?;
+                    client
+                        .handle_one_request(&mut stream, &mut PingHandler)
+                        .await?;
                     tp.close().await;
                     Ok(())
                 }
@@ -633,8 +646,10 @@ mod tests {
 
                     let client = tp.accept().await?.accept().await?;
                     trace!("accepted client conn");
-                    let stream = client.accept_stream().await?;
-                    client.handle_one_request(stream, &mut PingHandler).await?;
+                    let mut stream = client.accept_stream().await?;
+                    client
+                        .handle_one_request(&mut stream, &mut PingHandler)
+                        .await?;
 
                     trace!("handled client");
                     tp.close().await;
