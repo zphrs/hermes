@@ -10,7 +10,7 @@ use tracing::debug;
 pub use replier::{Replier, ReplyReceipt};
 pub use streams::BiStream;
 
-use crate::{Method, RootHandler, RpcError, RpcMessage, StreamMethod};
+use crate::{Method, RpcError, RpcMessage, StreamMethod};
 use streams::InitializedMessageStream;
 #[derive(Debug, thiserror::Error)]
 pub enum CallerError<T> {
@@ -137,34 +137,32 @@ pub trait Client: Send + Sync + BiStream {
         &self,
     ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> + Send;
 
-    fn handle_one_request<'a, Root: RpcMessage, Rh: RootHandler<Root> + 'a>(
+    fn handle_one_request<'a, Rh: crate::Call + 'a + std::marker::Send>(
         &'a self,
         stream: &mut (Self::SendStream, Self::RecvStream),
         handler: &mut Rh,
-    ) -> impl Future<Output = Result<Rh::Response, ClientError<Self::Error, Rh::Error>>> + Send
+    ) -> impl Future<Output = Result<Rh::Res, ClientError<Self::Error, Rh::Error>>> + Send
     where
         Rh::Error: Send,
         <Self as BiStream>::SendStream: Sync,
-        Root: Debug,
+        Rh::Req: Debug,
+        <Rh as Method>::Req: crate::RpcMessage,
     {
         async move {
             let (write, read) = stream;
             let mut receiver = minicbor_io::AsyncReader::new(read);
 
-            receiver.set_max_len(Root::max_len() as u32);
+            receiver.set_max_len(Rh::Req::max_len() as u32);
 
             let Some(root) = receiver
-                .read::<Root>()
+                .read::<Rh::Req>()
                 .await
                 .map_err(|e| ClientError::Rpc(RpcError::from(e)))?
             else {
                 return Err(ClientError::Rpc(RpcError::Closed));
             };
             let mut sender = minicbor_io::AsyncWriter::new(write);
-            let out = match handler
-                .handle::<_, Self::Error>(root, Replier::new(&mut sender))
-                .await
-            {
+            let out = match handler.call(Replier::new(&mut sender), root).await {
                 Ok(v) => v,
                 Err(e) => return Err(e),
             };

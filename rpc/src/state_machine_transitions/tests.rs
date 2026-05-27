@@ -22,7 +22,7 @@ mod authenticate {
     use std::convert::Infallible;
 
     use super::actions;
-    use crate::{RootHandler, state_machine_transitions::RootHandlerWrapper};
+    use crate::{state_machine_transitions::RootHandlerWrapper};
 
     #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
     pub struct LoginRequest {
@@ -55,25 +55,6 @@ mod authenticate {
 
     pub struct LoginMethod;
 
-    impl RootHandler<LoginRequest> for LoginMethod {
-        type Error = Infallible;
-        type Response = Responses;
-
-        async fn handle<
-            T: futures_io::AsyncWrite + Unpin + Sync + Send,
-            TransportError: Send,
-        >(
-            &mut self,
-            root: LoginRequest,
-            replier: crate::Replier<'_, T>,
-        ) -> Result<
-            crate::ReplyReceipt<Self::Response>,
-            crate::ClientError<TransportError, Self::Error>,
-        > {
-            replier.reply_with::<_, _, LoginMethod>(self, root).await
-        }
-    }
-
     impl crate::Method for LoginMethod {
         type Req = LoginRequest;
 
@@ -83,11 +64,15 @@ mod authenticate {
     }
 
     impl crate::Call for LoginMethod {
-        async fn call(&mut self, value: Self::Req) -> Result<Self::Res, Self::Error> {
+        async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
+            &mut self,
+            value: Self::Req,
+            replier: crate::Replier<'_, T, Self>,
+        ) -> Result<crate::transport::ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>> {
             if value.try_again {
-                Ok(Responses::TryAgain(Default::default()))
+                Ok(replier.reply(Responses::TryAgain(Default::default())))
             } else {
-                Ok(Responses::Ok(Default::default()))
+                Ok(replier.reply(Responses::Ok(Default::default())))
             }
         }
     }
@@ -141,53 +126,36 @@ mod actions {
     }
 
     impl crate::Call for LoopbackHandler {
-        async fn call(
+        async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
             &mut self,
             value: Self::Req,
-        ) -> Result<Self::Res, Self::Error> {
+            replier: crate::Replier<'_, T, Self>,
+        ) -> Result<crate::transport::ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>> {
             match value {
-                LoopbackRequest::Ping(ping_request) => PingMethod.call(ping_request).await.map(LoopbackResponse::Ping),
+                LoopbackRequest::Ping(ping_request) => PingMethod.call(ping_request, replier).await.map(LoopbackResponse::Ping),
             }
         }
     }
 
-    impl crate::RootHandler<LoopbackRequest> for LoopbackHandler {
-        type Response = LoopbackResponse;
-
-        type Error = Infallible;
-
-        async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError: Send>(
-            &mut self,
-            root: LoopbackRequest,
-            replier: crate::Replier<'_, T>,
-        ) -> Result<crate::ReplyReceipt<Self::Response>, crate::ClientError<TransportError, Self::Error>> {
-            let out = match root {
-                LoopbackRequest::Ping(ping_request) => replier.reply_with(&mut PingMethod, ping_request).await,
-            };
-            out.map(|v| v.map(LoopbackResponse::Ping))
-        }
-    }
 
     pub struct RootHandler;
 
-    impl crate::RootHandler<RootRequest> for RootHandler {
-        type Error = Infallible;
-        type Response = NextHandler;
+    impl crate::Method for RootHandler {
+        type Req = RootRequest;
 
-        async fn handle<
-            T: futures_io::AsyncWrite + Unpin + Sync + Send,
-            TransportError: Send,
-        >(
+        type Res = NextHandler;
+
+        type Error = Infallible;
+    }
+
+    impl crate::Call for RootHandler {
+        async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
             &mut self,
-            root: RootRequest,
-            replier: crate::Replier<'_, T>,
-        ) -> Result<
-            crate::ReplyReceipt<Self::Response>,
-            crate::ClientError<TransportError, Self::Error>,
-        > {
-            Ok(match root {
-                RootRequest::Loopback(LoopbackRequest::Ping(ping)) => replier
-                    .reply_with(&mut PingMethod, ping)
+            value: Self::Req,
+            replier: crate::Replier<'_, T, Self>,
+        ) -> Result<crate::transport::ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>> {
+            Ok(match value {
+                RootRequest::Loopback(LoopbackRequest::Ping(ping)) => PingMethod.call(value, replier)
                     .await?
                     .map(|r| NextHandler::Actions(LoopbackResponse::Ping(r).into())),
                 RootRequest::Logout() => replier
@@ -197,6 +165,8 @@ mod actions {
             })
         }
     }
+
+
     #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
     pub struct PingRequest();
 
@@ -254,7 +224,11 @@ mod actions {
     }
 
     impl Call for PingMethod {
-        async fn call(&mut self, _value: Self::Req) -> Result<Self::Res, Self::Error> {
+        async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
+            &mut self,
+            value: Self::Req,
+            replier: crate::Replier<'_, T, Self>,
+        ) -> Result<crate::transport::ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>> {
             Ok(PingResponse::default())
         }
     }

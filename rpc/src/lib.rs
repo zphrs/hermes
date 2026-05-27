@@ -4,10 +4,10 @@ pub mod in_memory_transport;
 mod state_machine_transitions;
 #[cfg(test)]
 mod tests;
-mod transport;
+pub mod transport;
 
 pub use in_memory_transport::MemoryTransport;
-pub use state_machine_transitions::RootHandlerWrapper;
+// pub use state_machine_transitions::RootHandlerWrapper;
 
 use futures_io::{AsyncRead, AsyncWrite};
 
@@ -33,31 +33,13 @@ pub trait StreamMethod: Method {
 }
 
 pub trait Call: Method {
-    fn call(
+    fn call<T: AsyncWrite + Unpin + Send + Sync, TransportError>(
         &mut self,
+        replier: crate::Replier<'_, T, Self>,
         value: Self::Req,
-    ) -> impl Future<Output = Result<Self::Res, Self::Error>> + Send;
-    fn reply<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError, Error>(
-        &mut self,
-        replier: crate::Replier<'_, T>,
-        request: Self::Req,
-    ) -> impl Future<Output = Result<ReplyReceipt<()>, crate::ClientError<TransportError, Error>>> + Send
-    where
-        Self: Send,
-        Error: From<Self::Error>,
-        Self::Res: Sync,
-    {
-        async {
-            let res = self
-                .call(request)
-                .await
-                .map_err(|e| crate::ClientError::App(Error::from(e)))?;
-            replier
-                .reply::<_, _, Self>(res)
-                .await
-                .map(ReplyReceipt::clear)
-        }
-    }
+    ) -> impl Future<
+        Output = Result<ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>>,
+    > + Send;
 }
 
 pub trait IntoRoot<M: Method, Root> {
@@ -81,19 +63,6 @@ pub enum RpcError {
     MinicborIo(#[from] minicbor_io::Error),
     #[error("stream closed")]
     Closed,
-}
-
-pub trait RootHandler<Root: RpcMessage>: Sized + Send {
-    type Response;
-    type Error: Send;
-
-    fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError: Send>(
-        &mut self,
-        root: Root,
-        replier: Replier<T>,
-    ) -> impl std::future::Future<
-        Output = Result<ReplyReceipt<Self::Response>, ClientError<TransportError, Self::Error>>,
-    > + Send;
 }
 
 pub trait StreamTypes {

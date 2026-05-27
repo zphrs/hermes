@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use maxlen::MaxLen;
 use tokio::task::JoinSet;
 
@@ -28,6 +30,8 @@ pub enum Root {
 mod ping {
     use maxlen::MaxLen;
     use std::convert::Infallible;
+
+    use crate::transport::ReplyReceipt;
     #[derive(
         Debug,
         minicbor_derive::Encode,
@@ -62,8 +66,13 @@ mod ping {
     }
 
     impl crate::Call for Method {
-        async fn call(&mut self, _value: Self::Req) -> Result<Self::Res, Self::Error> {
-            Ok(Response)
+        async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
+            &mut self,
+            replier: crate::Replier<'_, T, Self>,
+            _value: Self::Req,
+        ) -> Result<ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>>
+        {
+            replier.reply(Response).await
         }
     }
 }
@@ -98,14 +107,30 @@ mod other_ping {
     }
 
     impl crate::Call for Method {
-        async fn call(&mut self, _value: Self::Req) -> Result<Self::Res, Self::Error> {
-            Ok(Response)
+        fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
+            &mut self,
+            replier: crate::Replier<'_, T, Self>,
+            _value: Self::Req,
+        ) -> impl Future<
+            Output = Result<
+                crate::transport::ReplyReceipt<Self::Res>,
+                crate::ClientError<TransportError, Self::Error>,
+            >,
+        > + Send {
+            replier.reply(Response)
         }
     }
 }
 
-#[allow(dead_code)]
 struct RootHandler;
+
+impl crate::Method for RootHandler {
+    type Req = Root;
+
+    type Res = ();
+
+    type Error = Infallible;
+}
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -113,27 +138,21 @@ pub enum Error {
     Rpc(#[from] RpcError),
 }
 
-impl crate::RootHandler<Root> for RootHandler {
-    type Error = std::convert::Infallible;
-    type Response = ();
-
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError>(
+impl crate::Call for RootHandler {
+    async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
         &mut self,
-        root: Root,
-        replier: crate::Replier<'_, T>,
-    ) -> Result<
-        ReplyReceipt<Self::Response>,
-        crate::transport::ClientError<TransportError, Self::Error>,
-    > {
-        match root {
-            Root::Ping(request) => replier
-                .reply::<_, _, ping::Method>(ping::Method.call(request).await?)
-                .await
-                .map(ReplyReceipt::clear),
-            Root::Other(_request) => replier
-                .reply::<_, _, other_ping::Method>(other_ping::Response)
-                .await
-                .map(ReplyReceipt::clear),
+        replier: crate::Replier<'_, T, Self>,
+        value: Self::Req,
+    ) -> Result<ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>> {
+        match value {
+            Root::Ping(request) => Ok(ping::Method
+                .call(replier.change_method(&request), request)
+                .await?
+                .clear()),
+            Root::Other(request) => Ok(other_ping::Method
+                .call(replier.change_method(&request), request)
+                .await?
+                .clear()),
         }
     }
 }

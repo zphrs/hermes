@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use futures::AsyncWrite;
 use maxlen::MaxLen;
 use minicbor::CborLen as _;
@@ -36,25 +38,36 @@ impl<T> ReplyReceipt<T> {
     }
 }
 
-pub struct Replier<'a, T: AsyncWrite + Unpin + Send + Sync> {
+pub struct Replier<'a, T: AsyncWrite + Unpin + Send + Sync, Method: ?Sized> {
     client: &'a mut minicbor_io::AsyncWriter<T>,
+    _marker: PhantomData<Method>,
 }
 
-impl<'a, T: AsyncWrite + Unpin + Send + Sync> Replier<'a, T> {
+impl<'a, T: AsyncWrite + Unpin + Send + Sync, Method: crate::Method + ?Sized>
+    Replier<'a, T, Method>
+{
     pub(crate) fn new(client: &'a mut minicbor_io::AsyncWriter<T>) -> Self {
-        Self { client }
+        Self {
+            client,
+            _marker: Default::default(),
+        }
     }
-    pub fn reply<TransportError, Error, M: Method + ?Sized>(
+    // take in the request type to verify that the client's request actually
+    // contained the method
+    pub fn change_method<M: crate::Method>(self, _req: &M::Req) -> Replier<'a, T, M> {
+        Replier::new(self.client)
+    }
+    pub fn reply<TransportError, Error>(
         self,
-        res: M::Res,
+        res: Method::Res,
     ) -> impl Future<
-        Output = Result<ReplyReceipt<M::Res>, super::ClientError<TransportError, Error>>,
+        Output = Result<ReplyReceipt<Method::Res>, super::ClientError<TransportError, Error>>,
     > + Send
     where
-        M::Res: Sync,
+        Method::Res: Sync,
     {
         async {
-            assert!(res.cbor_len(&mut ()) <= M::Res::max_len());
+            assert!(res.cbor_len(&mut ()) <= Method::Res::max_len());
             let written = self.client.write(&res).await;
             written
                 .map(move |_| ReplyReceipt(res))
@@ -62,23 +75,20 @@ impl<'a, T: AsyncWrite + Unpin + Send + Sync> Replier<'a, T> {
         }
     }
 
-    pub fn reply_with<TransportError: Send, Error, M: crate::Call>(
+    pub fn reply_with<TransportError: Send>(
         self,
-        handler: &mut M,
-        req: M::Req,
-    ) -> impl Future<Output = Result<ReplyReceipt<M::Res>, super::ClientError<TransportError, Error>>>
+        handler: &mut Method,
+        req: Method::Req,
+    ) -> impl Future<
+        Output = Result<
+            ReplyReceipt<Method::Res>,
+            super::ClientError<TransportError, Method::Error>,
+        >,
+    >
     where
-        <M as Method>::Res: Send + Sync,
-        Error: From<M::Error>,
+        Method: crate::Call,
+        Method::Res: Send + Sync,
     {
-        async {
-            self.reply::<_, _, M>(
-                handler
-                    .call(req)
-                    .await
-                    .map_err(|e| super::ClientError::App(Error::from(e)))?,
-            )
-            .await
-        }
+        async { handler.call(self, req).await }
     }
 }
