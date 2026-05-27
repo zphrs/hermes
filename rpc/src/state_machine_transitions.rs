@@ -51,6 +51,22 @@ impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
             .handle_one_request::<Handler>(&mut stream, handler)
             .await
     }
+
+    pub async fn concurrent_query<M: crate::Method, C: Caller, ParallelHandler>(
+        &self,
+        req: M::Req,
+        caller: &C,
+    ) -> Result<M::Res, crate::transport::CallerError<C::Error>>
+    where
+        ParallelHandler: crate::Call,
+        ParallelHandler::Req: From<M::Req>,
+        Handler::Req: crate::RpcMessage + From<ParallelHandler::Req> + Send,
+        Handler::Req: From<M::Req>,
+        Self: From<ParallelHandler::Res>,
+    {
+        caller.query::<M, Handler::Req>(req).await
+    }
+
     pub async fn query<M: crate::Method, C: Caller>(
         self,
         req: M::Req,

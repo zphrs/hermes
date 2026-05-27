@@ -1,6 +1,7 @@
 use std::{panic, time::Duration};
 
-use tokio::task::JoinSet;
+use futures::{StreamExt, TryStreamExt, stream::FuturesUnordered};
+use tokio::{task::JoinSet, time::Instant};
 use tracing::{debug, warn};
 
 use crate::{
@@ -9,7 +10,10 @@ use crate::{
     state_machine_transitions::{
         MethodWrapper,
         tests::{
-            actions::{LogoutMethod, LogoutRequest, PingMethod, PingRequest},
+            actions::{
+                LogoutMethod, LogoutRequest, LongPingMethod, LongPingRequest, LoopbackHandler,
+                PingMethod, PingRequest,
+            },
             authenticate::{LoginMethod, Responses},
         },
     },
@@ -83,7 +87,7 @@ mod authenticate {
 }
 
 mod actions {
-    use std::convert::Infallible;
+    use std::{convert::Infallible, time::Duration};
 
     use maxlen::MaxLen;
     use minicbor::CborLen;
@@ -103,6 +107,14 @@ mod actions {
     pub enum LoopbackRequest {
         #[n(0)]
         Ping(#[n(0)] PingRequest),
+        #[n(1)]
+        LongPing(#[n(0)] LongPingRequest),
+    }
+
+    #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
+    pub struct LongPingRequest {
+        #[n(0)]
+        pub duration_millis: u64,
     }
 
     #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
@@ -110,17 +122,65 @@ mod actions {
     pub enum LoopbackResponse {
         #[n(0)]
         Ping(#[n(0)] PingResponse),
+        #[n(1)]
+        LongPing(#[n(0)] LongPingResponse),
     }
+    #[derive(minicbor::Encode, Default, minicbor::Decode, minicbor::CborLen, MaxLen)]
+    pub struct LongPingResponse(#[cbor(skip)] pub MethodWrapper<RootHandler>);
 
     impl From<LoopbackResponse> for MethodWrapper<RootHandler> {
         fn from(value: LoopbackResponse) -> Self {
             match value {
                 LoopbackResponse::Ping(ping_response) => ping_response.0,
+                LoopbackResponse::LongPing(long_ping_response) => long_ping_response.0,
             }
         }
     }
+
+    pub struct LongPingMethod;
+
+    impl crate::Method for LongPingMethod {
+        type Req = LongPingRequest;
+
+        type Res = LongPingResponse;
+
+        type Error = Infallible;
+    }
+
+    impl crate::Call for LongPingMethod {
+        async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
+            &mut self,
+            replier: crate::Replier<'_, T, Self>,
+            value: Self::Req,
+        ) -> Result<
+            crate::transport::ReplyReceipt<Self::Res>,
+            crate::ClientError<TransportError, Self::Error>,
+        > {
+            tokio::time::sleep(Duration::from_millis(value.duration_millis)).await;
+            replier.reply(LongPingResponse::default()).await
+        }
+    }
+
+    impl std::fmt::Debug for LongPingResponse {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_tuple("LongPingResponse").finish()
+        }
+    }
+
     #[derive(Clone, Copy)]
     pub struct LoopbackHandler;
+
+    impl From<PingRequest> for LoopbackRequest {
+        fn from(value: PingRequest) -> Self {
+            Self::Ping(value)
+        }
+    }
+
+    impl From<LongPingRequest> for LoopbackRequest {
+        fn from(value: LongPingRequest) -> Self {
+            Self::LongPing(value)
+        }
+    }
 
     impl crate::Method for LoopbackHandler {
         type Req = LoopbackRequest;
@@ -144,10 +204,15 @@ mod actions {
                     .call(replier.change_method(&ping_request), ping_request)
                     .await?
                     .map(LoopbackResponse::Ping),
+                LoopbackRequest::LongPing(long_ping_request) => LongPingMethod
+                    .call(replier.change_method(&long_ping_request), long_ping_request)
+                    .await?
+                    .map(LoopbackResponse::LongPing),
             })
         }
     }
 
+    #[derive(Debug)]
     pub struct RootHandler;
 
     impl crate::Method for RootHandler {
@@ -168,10 +233,10 @@ mod actions {
             crate::ClientError<TransportError, Self::Error>,
         > {
             Ok(match value {
-                RootRequest::Loopback(LoopbackRequest::Ping(ping)) => PingMethod
-                    .call(replier.change_method(&ping), ping)
+                RootRequest::Loopback(loopback) => LoopbackHandler
+                    .call(replier.change_method(&loopback), loopback)
                     .await?
-                    .map(|v| NextHandler::Actions(v.0)),
+                    .map(|v| NextHandler::Actions(v.into())),
                 RootRequest::Logout() => LogoutMethod
                     .call(replier.change_method(&LogoutRequest()), LogoutRequest())
                     .await?
@@ -214,6 +279,12 @@ mod actions {
         }
     }
 
+    impl From<LongPingRequest> for RootRequest {
+        fn from(value: LongPingRequest) -> Self {
+            Self::Loopback(value.into())
+        }
+    }
+
     #[derive(Debug)]
     pub struct LogoutMethod;
 
@@ -253,7 +324,7 @@ mod actions {
         async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
             &mut self,
             replier: crate::Replier<'_, T, Self>,
-            value: Self::Req,
+            _value: Self::Req,
         ) -> Result<
             crate::transport::ReplyReceipt<Self::Res>,
             crate::ClientError<TransportError, Self::Error>,
@@ -471,6 +542,39 @@ async fn concurrent_after_login() {
             else {
                 panic!()
             };
+
+            let set = FuturesUnordered::new();
+
+            let actions_wrapper_ref = &actions_wrapper;
+
+            let now = Instant::now();
+
+            set.push(
+                actions_wrapper_ref.concurrent_query::<LongPingMethod, _, LoopbackHandler>(
+                    LongPingRequest {
+                        duration_millis: 100,
+                    },
+                    &conn,
+                ),
+            );
+
+            set.push(
+                actions_wrapper_ref.concurrent_query::<LongPingMethod, _, LoopbackHandler>(
+                    LongPingRequest {
+                        duration_millis: 100,
+                    },
+                    &conn,
+                ),
+            );
+
+            let diff = now.elapsed();
+
+            assert!(
+                diff.as_millis() < 150,
+                "should take less time than it would if requests were processed serially"
+            );
+
+            let _results = set.try_collect::<Vec<_>>().await.unwrap();
 
             let actions_wrapper = actions_wrapper
                 .query::<PingMethod, _>(PingRequest(), &conn)
