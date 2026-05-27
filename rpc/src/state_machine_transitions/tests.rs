@@ -1,20 +1,19 @@
-
-
 use std::{panic, time::Duration};
 
 use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
 use crate::{
-    transport::{Client, Incoming}, Transport,
+    Transport,
     in_memory_transport::{self, MemoryTransport},
     state_machine_transitions::{
-        RootHandlerWrapper,
+        MethodWrapper,
         tests::{
-            actions::{LogoutRequest, PingRequest},
+            actions::{LogoutMethod, LogoutRequest, PingMethod, PingRequest},
             authenticate::{LoginMethod, Responses},
         },
     },
+    transport::{Client, Incoming},
 };
 
 mod authenticate {
@@ -22,7 +21,7 @@ mod authenticate {
     use std::convert::Infallible;
 
     use super::actions;
-    use crate::{state_machine_transitions::RootHandlerWrapper};
+    use crate::state_machine_transitions::MethodWrapper;
 
     #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
     pub struct LoginRequest {
@@ -39,9 +38,9 @@ mod authenticate {
     #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
     pub enum Responses {
         #[n(0)]
-        Ok(#[cbor(skip)] RootHandlerWrapper<actions::RootRequest, actions::RootHandler>),
+        Ok(#[cbor(skip)] MethodWrapper<actions::RootHandler>),
         #[n(1)]
-        TryAgain(#[cbor(skip)] RootHandlerWrapper<LoginRequest, LoginMethod>),
+        TryAgain(#[cbor(skip)] MethodWrapper<LoginMethod>),
     }
 
     impl std::fmt::Debug for Responses {
@@ -66,13 +65,18 @@ mod authenticate {
     impl crate::Call for LoginMethod {
         async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
             &mut self,
-            value: Self::Req,
             replier: crate::Replier<'_, T, Self>,
-        ) -> Result<crate::transport::ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>> {
+            value: Self::Req,
+        ) -> Result<
+            crate::transport::ReplyReceipt<Self::Res>,
+            crate::ClientError<TransportError, Self::Error>,
+        > {
             if value.try_again {
-                Ok(replier.reply(Responses::TryAgain(Default::default())))
+                Ok(replier
+                    .reply(Responses::TryAgain(Default::default()))
+                    .await?)
             } else {
-                Ok(replier.reply(Responses::Ok(Default::default())))
+                Ok(replier.reply(Responses::Ok(Default::default())).await?)
             }
         }
     }
@@ -82,8 +86,9 @@ mod actions {
     use std::convert::Infallible;
 
     use maxlen::MaxLen;
+    use minicbor::CborLen;
 
-    use crate::{Call, state_machine_transitions::RootHandlerWrapper};
+    use crate::{Call, state_machine_transitions::MethodWrapper};
 
     #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
     #[cbor(flat)]
@@ -104,10 +109,10 @@ mod actions {
     #[cbor(flat)]
     pub enum LoopbackResponse {
         #[n(0)]
-        Ping(#[n(0)] PingResponse)
+        Ping(#[n(0)] PingResponse),
     }
 
-    impl From<LoopbackResponse> for RootHandlerWrapper<RootRequest, RootHandler> {
+    impl From<LoopbackResponse> for MethodWrapper<RootHandler> {
         fn from(value: LoopbackResponse) -> Self {
             match value {
                 LoopbackResponse::Ping(ping_response) => ping_response.0,
@@ -128,15 +133,20 @@ mod actions {
     impl crate::Call for LoopbackHandler {
         async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
             &mut self,
-            value: Self::Req,
             replier: crate::Replier<'_, T, Self>,
-        ) -> Result<crate::transport::ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>> {
-            match value {
-                LoopbackRequest::Ping(ping_request) => PingMethod.call(ping_request, replier).await.map(LoopbackResponse::Ping),
-            }
+            value: Self::Req,
+        ) -> Result<
+            crate::transport::ReplyReceipt<Self::Res>,
+            crate::ClientError<TransportError, Self::Error>,
+        > {
+            Ok(match value {
+                LoopbackRequest::Ping(ping_request) => PingMethod
+                    .call(replier.change_method(&ping_request), ping_request)
+                    .await?
+                    .map(LoopbackResponse::Ping),
+            })
         }
     }
-
 
     pub struct RootHandler;
 
@@ -151,21 +161,24 @@ mod actions {
     impl crate::Call for RootHandler {
         async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
             &mut self,
-            value: Self::Req,
             replier: crate::Replier<'_, T, Self>,
-        ) -> Result<crate::transport::ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>> {
+            value: Self::Req,
+        ) -> Result<
+            crate::transport::ReplyReceipt<Self::Res>,
+            crate::ClientError<TransportError, Self::Error>,
+        > {
             Ok(match value {
-                RootRequest::Loopback(LoopbackRequest::Ping(ping)) => PingMethod.call(value, replier)
+                RootRequest::Loopback(LoopbackRequest::Ping(ping)) => PingMethod
+                    .call(replier.change_method(&ping), ping)
                     .await?
-                    .map(|r| NextHandler::Actions(LoopbackResponse::Ping(r).into())),
-                RootRequest::Logout() => replier
-                    .reply::<_, _, LogoutMethod>(LogoutResponse::default())
+                    .map(|v| NextHandler::Actions(v.0)),
+                RootRequest::Logout() => LogoutMethod
+                    .call(replier.change_method(&LogoutRequest()), LogoutRequest())
                     .await?
-                    .map(|r| NextHandler::Authenticate(r.0)),
+                    .map(|v| NextHandler::Authenticate(v.0)),
             })
         }
     }
-
 
     #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
     pub struct PingRequest();
@@ -175,8 +188,6 @@ mod actions {
             Self::Loopback(LoopbackRequest::Ping(value))
         }
     }
-
-    pub struct LogoutRequest();
 
     impl TryFrom<RootRequest> for LoopbackRequest {
         type Error = RootRequest;
@@ -195,6 +206,8 @@ mod actions {
         }
     }
 
+    pub struct LogoutRequest();
+
     impl From<LogoutRequest> for RootRequest {
         fn from(_value: LogoutRequest) -> Self {
             Self::Logout()
@@ -212,6 +225,19 @@ mod actions {
         type Error = Infallible;
     }
 
+    impl crate::Call for LogoutMethod {
+        async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
+            &mut self,
+            replier: crate::Replier<'_, T, Self>,
+            _value: Self::Req,
+        ) -> Result<
+            crate::transport::ReplyReceipt<Self::Res>,
+            crate::ClientError<TransportError, Self::Error>,
+        > {
+            replier.reply(LogoutResponse::default()).await
+        }
+    }
+
     #[derive(Debug)]
     pub struct PingMethod;
 
@@ -226,15 +252,18 @@ mod actions {
     impl Call for PingMethod {
         async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
             &mut self,
-            value: Self::Req,
             replier: crate::Replier<'_, T, Self>,
-        ) -> Result<crate::transport::ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>> {
-            Ok(PingResponse::default())
+            value: Self::Req,
+        ) -> Result<
+            crate::transport::ReplyReceipt<Self::Res>,
+            crate::ClientError<TransportError, Self::Error>,
+        > {
+            replier.reply(PingResponse::default()).await
         }
     }
 
     #[derive(Default, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-    pub struct PingResponse(#[cbor(skip)] pub RootHandlerWrapper<RootRequest, RootHandler>);
+    pub struct PingResponse(#[cbor(skip)] pub MethodWrapper<RootHandler>);
 
     impl std::fmt::Debug for PingResponse {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -243,22 +272,23 @@ mod actions {
     }
 
     #[derive(Default, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-    pub struct LogoutResponse(
-        #[cbor(skip)]
-        pub  RootHandlerWrapper<
-            super::authenticate::LoginRequest,
-            super::authenticate::LoginMethod,
-        >,
-    );
+    pub struct LogoutResponse(#[cbor(skip)] pub MethodWrapper<super::authenticate::LoginMethod>);
 
+    #[derive(CborLen, maxlen::MaxLen, minicbor::Encode, minicbor::Decode)]
     pub enum NextHandler {
-        Actions(RootHandlerWrapper<RootRequest, RootHandler>),
-        Authenticate(
-            RootHandlerWrapper<
-                super::authenticate::LoginRequest,
-                super::authenticate::LoginMethod,
-            >,
-        ),
+        #[n(0)]
+        Actions(#[cbor(skip)] MethodWrapper<RootHandler>),
+        #[n(1)]
+        Authenticate(#[cbor(skip)] MethodWrapper<super::authenticate::LoginMethod>),
+    }
+
+    impl std::fmt::Debug for NextHandler {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Actions(_arg0) => f.debug_tuple("Actions").finish(),
+                Self::Authenticate(_arg0) => f.debug_tuple("Authenticate").finish(),
+            }
+        }
     }
 
     impl std::fmt::Debug for LogoutResponse {
@@ -271,6 +301,7 @@ mod actions {
 #[tokio::test]
 #[test_log::test]
 async fn login_flow() {
+    use authenticate::LoginMethod;
     let net = in_memory_transport::Network::new();
 
     let net1 = net.clone();
@@ -282,8 +313,7 @@ async fn login_flow() {
         let mut js = JoinSet::new();
         // server
         js.spawn_local(async move {
-            let mut login_wrapper: RootHandlerWrapper<authenticate::LoginRequest, LoginMethod> =
-                RootHandlerWrapper::default();
+            let mut login_wrapper: MethodWrapper<LoginMethod> = MethodWrapper::default();
             let incoming = tp.accept().await.unwrap();
             let conn = incoming.accept().await.unwrap();
             'outer: loop {
@@ -297,10 +327,8 @@ async fn login_flow() {
                         .await
                         .unwrap()
                     {
-                        authenticate::Responses::Ok(method_wrapper) => break method_wrapper,
-                        authenticate::Responses::TryAgain(new_login_wrapper) => {
-                            login_wrapper = new_login_wrapper
-                        }
+                        Responses::Ok(method_wrapper) => break method_wrapper,
+                        Responses::TryAgain(new_login_wrapper) => login_wrapper = new_login_wrapper,
                     }
                 };
 
@@ -310,7 +338,7 @@ async fn login_flow() {
                         Err(e) => {
                             warn!("{e}");
                             break 'outer;
-                        },
+                        }
                     };
                     match actions
                         .handle_state_transition_request(&conn, stream, &mut actions::RootHandler)
@@ -318,9 +346,7 @@ async fn login_flow() {
                         .unwrap()
                     {
                         actions::NextHandler::Actions(method_wrapper) => actions = method_wrapper,
-                        actions::NextHandler::Authenticate(method_wrapper) => {
-                            break method_wrapper
-                        }
+                        actions::NextHandler::Authenticate(method_wrapper) => break method_wrapper,
                     }
                 }
             }
@@ -331,10 +357,7 @@ async fn login_flow() {
             let tp = MemoryTransport::new(net);
             let conn = tp.connect(&server_addr).await.unwrap();
 
-            let login_wrapper: RootHandlerWrapper<
-                authenticate::LoginRequest,
-                authenticate::LoginMethod,
-            > = Default::default();
+            let login_wrapper: MethodWrapper<LoginMethod> = Default::default();
 
             let res = login_wrapper
                 .query::<LoginMethod, _>(authenticate::LoginRequest::new(true), &conn)
@@ -354,13 +377,13 @@ async fn login_flow() {
             };
 
             let actions_wrapper = actions_wrapper
-                .query::<actions::PingMethod, _>(PingRequest(), &conn)
+                .query::<PingMethod, _>(PingRequest(), &conn)
                 .await
                 .unwrap()
                 .0;
 
             let _login_wrapper = actions_wrapper
-                .query::<actions::LogoutMethod, _>(LogoutRequest(), &conn)
+                .query::<LogoutMethod, _>(LogoutRequest(), &conn)
                 .await
                 .unwrap()
                 .0;
@@ -385,8 +408,7 @@ async fn concurrent_after_login() {
         let mut js = JoinSet::new();
         // server
         js.spawn_local(async move {
-            let mut login_wrapper: RootHandlerWrapper<authenticate::LoginRequest, LoginMethod> =
-                RootHandlerWrapper::default();
+            let mut login_wrapper: MethodWrapper<LoginMethod> = MethodWrapper::default();
             let incoming = tp.accept().await.unwrap();
             let conn = incoming.accept().await.unwrap();
             'outer: loop {
@@ -400,10 +422,8 @@ async fn concurrent_after_login() {
                         .await
                         .unwrap()
                     {
-                        authenticate::Responses::Ok(method_wrapper) => break method_wrapper,
-                        authenticate::Responses::TryAgain(new_login_wrapper) => {
-                            login_wrapper = new_login_wrapper
-                        }
+                        Responses::Ok(method_wrapper) => break method_wrapper,
+                        Responses::TryAgain(new_login_wrapper) => login_wrapper = new_login_wrapper,
                     }
                 };
                 login_wrapper = loop {
@@ -422,7 +442,7 @@ async fn concurrent_after_login() {
                             actions = root_handler_wrapper
                         }
                         actions::NextHandler::Authenticate(root_handler_wrapper) => {
-                            break root_handler_wrapper
+                            break root_handler_wrapper;
                         }
                     };
                 };
@@ -433,10 +453,7 @@ async fn concurrent_after_login() {
             let tp = MemoryTransport::new(net);
             let conn = tp.connect(&server_addr).await.unwrap();
 
-            let login_wrapper: RootHandlerWrapper<
-                authenticate::LoginRequest,
-                authenticate::LoginMethod,
-            > = Default::default();
+            let login_wrapper: MethodWrapper<LoginMethod> = Default::default();
 
             let res = login_wrapper
                 .query::<LoginMethod, _>(authenticate::LoginRequest::new(true), &conn)
@@ -456,13 +473,13 @@ async fn concurrent_after_login() {
             };
 
             let actions_wrapper = actions_wrapper
-                .query::<actions::PingMethod, _>(PingRequest(), &conn)
+                .query::<PingMethod, _>(PingRequest(), &conn)
                 .await
                 .unwrap()
                 .0;
 
             let _login_wrapper = actions_wrapper
-                .query::<actions::LogoutMethod, _>(LogoutRequest(), &conn)
+                .query::<LogoutMethod, _>(LogoutRequest(), &conn)
                 .await
                 .unwrap()
                 .0;

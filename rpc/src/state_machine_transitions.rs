@@ -15,67 +15,40 @@ use crate::transport::Client;
 use crate::transport::ClientError;
 use crate::transport::Replier;
 
-pub struct RootHandlerWrapper<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>>(
-    PhantomData<(Root, Handler)>,
-);
+pub struct MethodWrapper<Handler: crate::Method>(PhantomData<Handler>);
 
-impl<'b, C, Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> minicbor::Decode<'b, C>
-    for RootHandlerWrapper<Root, Handler>
-{
-    fn decode(d: &mut minicbor::Decoder<'b>, ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
-        PhantomData::decode(d, ctx).map(|pd| RootHandlerWrapper(pd))
-    }
-}
-
-impl<C, Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> minicbor::Encode<C>
-    for RootHandlerWrapper<Root, Handler>
-{
-    fn encode<W: minicbor::encode::Write>(
-        &self,
-        e: &mut minicbor::Encoder<W>,
-        ctx: &mut C,
-    ) -> Result<(), minicbor::encode::Error<W::Error>> {
-        PhantomData::encode(&self.0, e, ctx)
-    }
-}
-
-impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> Default
-    for RootHandlerWrapper<Root, Handler>
-{
+impl<Handler: crate::Method> Default for MethodWrapper<Handler> {
     fn default() -> Self {
         Self(Default::default())
     }
 }
 
-impl<C, Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> minicbor::CborLen<C>
-    for RootHandlerWrapper<Root, Handler>
-{
+impl<C, Handler: crate::Method> minicbor::CborLen<C> for MethodWrapper<Handler> {
     fn cbor_len(&self, ctx: &mut C) -> usize {
         PhantomData::cbor_len(&self.0, ctx)
     }
 }
 
-impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> MaxLen
-    for RootHandlerWrapper<Root, Handler>
-{
+impl<Handler: crate::Method> MaxLen for MethodWrapper<Handler> {
     fn biggest_instantiation() -> Self {
         Self::default()
     }
 }
 
-impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> RootHandlerWrapper<Root, Handler> {
+impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
     pub async fn handle_state_transition_request<'a, C: crate::transport::Client>(
         self,
         client: &'a C,
         mut stream: (C::SendStream, C::RecvStream),
         handler: &'a mut Handler,
-    ) -> Result<Handler::Response, crate::ClientError<C::Error, Handler::Error>>
+    ) -> Result<Handler::Res, crate::ClientError<C::Error, Handler::Error>>
     where
-        Handler: 'a,
-        Root: 'a,
+        Handler: 'a + crate::Call + Send,
+        Handler::Req: 'a + crate::RpcMessage,
+        Handler::Error: std::marker::Send,
     {
         client
-            .handle_one_request::<Root, Handler>(&mut stream, handler)
+            .handle_one_request::<Handler>(&mut stream, handler)
             .await
     }
     pub async fn query<M: crate::Method, C: Caller>(
@@ -84,42 +57,34 @@ impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> RootHandlerWrap
         caller: &C,
     ) -> Result<M::Res, crate::transport::CallerError<C::Error>>
     where
-        Root: crate::RpcMessage + From<M::Req> + Send,
+        Handler::Req: crate::RpcMessage + From<M::Req> + Send,
     {
-        caller.query::<M, Root>(req).await
+        caller.query::<M, Handler::Req>(req).await
     }
 
-    pub async fn handle_concurrent_requests<
-        'a,
-        C: crate::transport::Client,
-        ParallelRoot,
-        ParallelHandler,
-    >(
+    pub async fn handle_concurrent_requests<'a, C: crate::transport::Client, ParallelHandler>(
         self,
         client: &'a C,
         parallel_handler: ParallelHandler,
         handler: &'a mut Handler,
-    ) -> Result<
-        <Handler as crate::RootHandler<Root>>::Response,
-        ClientError<<C as Client>::Error, <Handler as crate::RootHandler<Root>>::Error>,
-    >
+    ) -> Result<Handler::Res, ClientError<<C as Client>::Error, Handler::Error>>
     where
-        Root: crate::RpcMessage
+        Handler::Req: crate::RpcMessage
             + Send
             + std::marker::Sync
-            + From<<ParallelRoot as TryFrom<Root>>::Error>,
-        Handler: crate::RootHandler<Root>,
-        ParallelHandler: crate::RootHandler<ParallelRoot> + std::marker::Send + Clone,
-        ParallelRoot: TryFrom<Root> + crate::RpcMessage + std::marker::Send,
-        <ParallelHandler as crate::RootHandler<ParallelRoot>>::Error: std::marker::Send,
-        <ParallelHandler as crate::RootHandler<ParallelRoot>>::Response: Sync,
+            + From<<ParallelHandler::Req as TryFrom<Handler::Req>>::Error>,
+        Handler: crate::Call,
+        ParallelHandler: crate::Call + std::marker::Send + Clone,
+        ParallelHandler::Req: TryFrom<Handler::Req> + crate::RpcMessage + std::marker::Send,
+        ParallelHandler::Error: std::marker::Send,
+        ParallelHandler::Res: Sync,
+        Handler::Req: From<<ParallelHandler::Req as TryFrom<Handler::Req>>::Error>,
+        Handler::Error: From<ParallelHandler::Error>,
     {
         let mut js = FuturesUnordered::new();
 
         let concurrent_handler =
-            ConcurrentRequestHandler::<Root, Handler, ParallelRoot, ParallelHandler>::new(
-                parallel_handler,
-            );
+            ConcurrentRequestHandler::<Handler, ParallelHandler>::new(parallel_handler);
         loop {
             select! {
                 maybe_stream = client.accept_stream().fuse() => {
@@ -133,44 +98,32 @@ impl<Root: crate::RpcMessage, Handler: crate::RootHandler<Root>> RootHandlerWrap
                 }
                 next_result = js.select_next_some() => {
                     match next_result {
-                        (Ok(Ok(_response)), _) => {
+                        (Ok(_response), _) => {
                             trace!("successfully replied")
                         },
-                        (Ok(Err(root)), stream) => {
+                        (Err(ClientError::App(ConcurrentRequestHandlerError::Root(root))), stream) => {
                             let mut writer = minicbor_io::AsyncWriter::new(stream.0);
                             // got to non-concurrent value
-                            return handler.handle(root, Replier::new(&mut writer)).await.map(crate::ReplyReceipt::into_inner)
+                            return handler.call(Replier::new(&mut writer), root).await.map(crate::ReplyReceipt::into_inner)
                         }
-                        (Err(e), _) => {
-                            return Err(match e {
-                                ClientError::Rpc(rpc_error) => ClientError::Rpc(rpc_error),
-                                ClientError::Transport(tp) => ClientError::Transport(tp),
-                                ClientError::App(e) => ClientError::App(e.into()),
-                            });
-                        },
-                    }
+                        (Err(ClientError::App(ConcurrentRequestHandlerError::ParallelHandler(e))), _) => return Err(ClientError::App(Handler::Error::from(e))),
+                        (Err(ClientError::Rpc(rpc_error)), _) => return Err(ClientError::Rpc(rpc_error)),
+                        (Err(ClientError::Transport(transport_error)), _) => return Err(ClientError::Transport(transport_error)),
+
+                    };
                 }
             };
         }
     }
 }
 
-pub struct ConcurrentRequestHandler<
-    Root: crate::RpcMessage,
-    Handler: crate::RootHandler<Root>,
-    ParallelRoot: crate::RpcMessage,
-    ParallelHandler: crate::RootHandler<ParallelRoot>,
-> {
+pub struct ConcurrentRequestHandler<Handler: crate::Call, ParallelHandler: crate::Call> {
     handler: ParallelHandler,
-    _marker: PhantomData<(Handler, ParallelRoot, Root)>,
+    _marker: PhantomData<Handler>,
 }
 
-impl<
-    Root: crate::RpcMessage,
-    Handler: crate::RootHandler<Root>,
-    ParallelRoot: crate::RpcMessage,
-    ParallelHandler: crate::RootHandler<ParallelRoot> + Clone,
-> Clone for ConcurrentRequestHandler<Root, Handler, ParallelRoot, ParallelHandler>
+impl<Handler: crate::Call, ParallelHandler: crate::Call + Clone> Clone
+    for ConcurrentRequestHandler<Handler, ParallelHandler>
 {
     fn clone(&self) -> Self {
         Self {
@@ -180,24 +133,16 @@ impl<
     }
 }
 
-impl<
-    Root: crate::RpcMessage,
-    Handler: crate::RootHandler<Root>,
-    ParallelRoot: crate::RpcMessage,
-    ParallelHandler: crate::RootHandler<ParallelRoot>,
-> std::fmt::Debug for ConcurrentRequestHandler<Root, Handler, ParallelRoot, ParallelHandler>
+impl<Handler: crate::Call, ParallelHandler: crate::Call> std::fmt::Debug
+    for ConcurrentRequestHandler<Handler, ParallelHandler>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConcurrentRequestHandler").finish()
     }
 }
 
-impl<
-    Root: crate::RpcMessage,
-    Handler: crate::RootHandler<Root>,
-    ParallelRoot: crate::RpcMessage,
-    ParallelHandler: crate::RootHandler<ParallelRoot>,
-> ConcurrentRequestHandler<Root, Handler, ParallelRoot, ParallelHandler>
+impl<Handler: crate::Call, ParallelHandler: crate::Call>
+    ConcurrentRequestHandler<Handler, ParallelHandler>
 {
     pub fn new(handler: ParallelHandler) -> Self {
         Self {
@@ -207,70 +152,40 @@ impl<
     }
 }
 
-// impl<Handler, Root, ParallelRoot, ParallelHandler> crate::Method
-//     for ConcurrentRequestHandler<Root, Handler, ParallelRoot, ParallelHandler>
-// where
-//     Root: crate::RpcMessage + Send,
-//     Handler: crate::RootHandler<Root>,
-//     ParallelHandler: crate::Method,
-// {
-//     type Req = Root;
-
-//     type Res = Result<ParallelHandler::Res, Root>;
-
-//     type Error = ParallelHandler::Error;
-// }
-
-// impl<Handler, Root, ParallelHandler> crate::Call
-//     for ConcurrentRequestHandler<Root, Handler, ParallelHandler>
-// where
-//     Root: crate::RpcMessage
-//         + Send
-//         + From<<<ParallelHandler as crate::Method>::Req as TryFrom<Root>>::Error>,
-//     Handler: crate::RootHandler<Root>,
-//     ParallelHandler: crate::Call + std::marker::Send,
-//     ParallelHandler::Req: TryFrom<Root>,
-// {
-//     async fn call(&mut self, value: Self::Req) -> Result<Self::Res, Self::Error> {
-//         let parallel_req = match ParallelHandler::Req::try_from(value) {
-//             Ok(v) => v,
-//             Err(root) => return Ok(Err(root.into())),
-//         };
-
-//         Ok(Ok(self.handler.call(parallel_req).await?))
-//     }
-// }
-//
-//
-impl<
-    Root: crate::RpcMessage,
-    Handler: crate::RootHandler<Root>,
-    ParallelRoot: crate::RpcMessage,
-    ParallelHandler: crate::RootHandler<ParallelRoot>,
-> crate::RootHandler<Root>
-    for ConcurrentRequestHandler<Root, Handler, ParallelRoot, ParallelHandler>
-where
-    Root:
-        crate::RpcMessage + Send + std::marker::Sync + From<<ParallelRoot as TryFrom<Root>>::Error>,
-    Handler: crate::RootHandler<Root>,
-    ParallelHandler: crate::RootHandler<ParallelRoot> + std::marker::Send,
-    ParallelRoot: TryFrom<Root> + crate::RpcMessage + std::marker::Send,
-    <ParallelHandler as crate::RootHandler<ParallelRoot>>::Error: std::marker::Send,
-    <ParallelHandler as crate::RootHandler<ParallelRoot>>::Response: Sync,
+impl<Handler: crate::Call, ParallelHandler: crate::Call> crate::Method
+    for ConcurrentRequestHandler<Handler, ParallelHandler>
 {
-    type Response = ParallelHandler::Response;
+    type Req = Handler::Req;
 
-    type Error = ConcurrentRequestHandlerError<
-        ClientError<ParallelHandler::Error, ParallelHandler::Error>,
-        Root,
-    >;
+    type Res = ParallelHandler::Res;
 
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Sync + Send, TransportError: Send>(
+    type Error = ConcurrentRequestHandlerError<ParallelHandler::Error, Handler::Req>;
+}
+
+impl<Handler: crate::Call, ParallelHandler: crate::Call> crate::Call
+    for ConcurrentRequestHandler<Handler, ParallelHandler>
+where
+    Handler::Req: crate::RpcMessage
+        + Send
+        + std::marker::Sync
+        + From<<ParallelHandler::Req as TryFrom<Handler::Req>>::Error>,
+    Handler: crate::Call,
+    ParallelHandler: crate::Call + std::marker::Send + Clone,
+    ParallelHandler::Req: TryFrom<Handler::Req> + crate::RpcMessage + std::marker::Send,
+    ParallelHandler::Error: std::marker::Send,
+    ParallelHandler::Res: Sync,
+    Handler::Req: From<<ParallelHandler::Req as TryFrom<Handler::Req>>::Error>,
+    Self: Send,
+{
+    async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
         &mut self,
-        root: Root,
-        replier: crate::Replier<'_, T>,
-    ) -> Result<crate::ReplyReceipt<Self::Response>, ClientError<TransportError, Self::Error>> {
-        let parallel_req = match ParallelRoot::try_from(root) {
+        replier: crate::Replier<'_, T, Self>,
+        value: Self::Req,
+    ) -> Result<
+        crate::transport::ReplyReceipt<Self::Res>,
+        crate::ClientError<TransportError, Self::Error>,
+    > {
+        let parallel_req = match ParallelHandler::Req::try_from(value) {
             Ok(v) => v,
             Err(root) => {
                 return Err(ClientError::App(ConcurrentRequestHandlerError::Root(
@@ -278,10 +193,19 @@ where
                 )));
             }
         };
-        self.handler.handle(parallel_req, replier).await
+        self.handler
+            .call(replier.change_method(&parallel_req), parallel_req)
+            .await
+            .map_err(|e| match e {
+                ClientError::Rpc(rpc_error) => ClientError::Rpc(rpc_error),
+                ClientError::Transport(tp) => ClientError::Transport(tp),
+                ClientError::App(app) => {
+                    ClientError::App(ConcurrentRequestHandlerError::ParallelHandler(app))
+                }
+            })
     }
 }
-enum ConcurrentRequestHandlerError<ParallelError, Root> {
+pub enum ConcurrentRequestHandlerError<ParallelError, Root> {
     ParallelHandler(ParallelError),
     Root(Root),
 }
