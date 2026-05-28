@@ -15,7 +15,14 @@ impl<Node: Eq, const ID_LEN: usize, const BUCKET_SIZE: usize> Leaf<Node, ID_LEN,
         distance_pair: impl Into<DistancePair<Node, ID_LEN>>,
     ) -> Result<(), Error> {
         let pair = distance_pair.into();
-        if self.contains(&pair) {
+        if let Some(inner) = self
+            .bucket
+            .iter_mut()
+            .find(|existing| existing.node() == pair.node())
+        {
+            // replace if they are equal, to allow for tracking the most recently
+            // pinged time
+            *inner = pair;
             return Ok(());
         }
 

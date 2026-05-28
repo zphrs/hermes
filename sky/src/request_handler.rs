@@ -88,6 +88,7 @@ impl rpc::Call for RootHandler {
         replier: rpc::Replier<'_, T, Self>,
         value: Self::Req,
     ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>> {
+        self.find_nodes_handler.on_ping(self.from.clone()).await;
         Ok(match value {
             RootRequest::Ping(request) => ping::Method
                 .call(replier.change_method(&request), request)

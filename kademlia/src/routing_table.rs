@@ -166,8 +166,15 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
         let iter = iter.inspect(|pair| {
             bucket_updated_at_entry!(self, pair.distance()).or_insert(*STARTUP_INSTANT);
         });
-        self.nearest_siblings_list.extend(iter);
+        // splice inserts at the beginning of the vec
+        self.nearest_siblings_list.splice(0..0, iter);
+        // sort is stable, which means that the newly inserted items will be
+        // first in the list in the case there's an equal DistancePair already
+        // in the list
         self.nearest_siblings_list.sort();
+        // `dedup` removes the second and subsequent duplicate items. In this
+        // case, will keep the newly inserted node and remove all duplicate
+        // nodes after the newly inserted one
         self.nearest_siblings_list.dedup();
         self.nearest_siblings_list.drain(
             min(

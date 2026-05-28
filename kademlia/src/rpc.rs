@@ -290,11 +290,6 @@ impl<
         let nodes: Vec<_> = nodes
             .into_iter()
             .filter(|v| v.id() != self.local_node.id())
-            .filter(|n| {
-                let dist_pair: DistancePair<Node, ID_LEN> = (n.clone(), self.local_addr()).into();
-                let leaf = write_lock.get_leaf(dist_pair.distance());
-                !leaf.contains(&dist_pair)
-            })
             .collect();
 
         // now if there are any leftover, they are all alive nodes that
