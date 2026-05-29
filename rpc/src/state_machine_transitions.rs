@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests;
 
+use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use futures::FutureExt as _;
@@ -16,6 +17,12 @@ use crate::transport::ClientError;
 use crate::transport::Replier;
 
 pub struct MethodWrapper<Handler: crate::Method>(PhantomData<Handler>);
+
+impl<Handler: crate::Method> Debug for MethodWrapper<Handler> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("MethodWrapper").finish()
+    }
+}
 
 impl<Handler: crate::Method> Default for MethodWrapper<Handler> {
     fn default() -> Self {
@@ -36,20 +43,37 @@ impl<Handler: crate::Method> MaxLen for MethodWrapper<Handler> {
 }
 
 impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
-    pub async fn handle_state_transition_request<'a, C: crate::transport::Client>(
+    pub fn handle_state_transition_request<'a, C: crate::transport::Client>(
         self,
         client: &'a C,
         mut stream: (C::SendStream, C::RecvStream),
-        handler: &'a mut Handler,
-    ) -> Result<Handler::Res, crate::ClientError<C::Error, Handler::Error>>
+        handler: &mut Handler,
+    ) -> impl Future<Output = Result<Handler::Res, crate::ClientError<C::Error, Handler::Error>>> + Send
     where
-        Handler: 'a + crate::Call + Send,
-        Handler::Req: 'a + crate::RpcMessage,
+        Handler: crate::Call + Send + 'a,
+        Handler::Req: crate::RpcMessage,
         Handler::Error: std::marker::Send,
     {
-        client
-            .handle_one_request::<Handler>(&mut stream, handler)
-            .await
+        async move {
+            client
+                .handle_one_request::<Handler>(&mut stream, handler)
+                .await
+        }
+    }
+
+    pub async fn concurrent_root_query<M: crate::Method, C: Caller>(
+        &self,
+        req: M::Req,
+        caller: &C,
+    ) -> Result<M::Res, crate::transport::CallerError<C::Error>>
+    where
+        Handler: crate::Call,
+        Handler::Req: From<M::Req>,
+        Handler::Req: crate::RpcMessage + From<Handler::Req> + Send,
+        Handler::Req: From<M::Req>,
+        Self: From<Handler::Res>,
+    {
+        caller.query::<M, Handler::Req>(req).await
     }
 
     pub async fn concurrent_query<M: crate::Method, C: Caller, ParallelHandler>(
@@ -76,6 +100,44 @@ impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
         Handler::Req: crate::RpcMessage + From<M::Req> + Send,
     {
         caller.query::<M, Handler::Req>(req).await
+    }
+
+    pub fn handle_only_concurrent_requests<'a, C: crate::transport::Client>(
+        self,
+        client: &'a C,
+        handler: Handler,
+    ) -> impl std::future::Future<
+        Output = Result<Handler::Res, ClientError<<C as Client>::Error, Handler::Error>>,
+    > + Send
+    where
+        Handler::Req: crate::RpcMessage + Send + std::marker::Sync,
+        Handler: crate::Call + std::marker::Send + Clone + 'a,
+        Handler::Req: TryFrom<Handler::Req> + crate::RpcMessage + std::marker::Send,
+        Handler::Error: std::marker::Send,
+        Handler::Res: Sync,
+        Handler::Error: From<Handler::Error> + From<<Handler::Req as TryFrom<Handler::Req>>::Error>,
+    {
+        async move {
+            let mut js = FuturesUnordered::new();
+
+            loop {
+                select! {
+                    maybe_stream = client.accept_stream().fuse() => {
+                        let mut stream = match maybe_stream {
+                            Ok(stream) => stream,
+                            Err(e) => return Err(ClientError::Transport(e)),
+
+                        };
+                        let mut handler = handler.clone();
+                        js.push(async move { client.handle_one_request(&mut stream, &mut handler).await });
+                    }
+                    next_result = js.select_next_some() => {
+                        let _response = next_result?;
+                        trace!("successfully replied");
+                    }
+                };
+            }
+        }
     }
 
     pub async fn handle_concurrent_requests<'a, C: crate::transport::Client, ParallelHandler>(
