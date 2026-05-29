@@ -6,6 +6,7 @@ use std::cmp::min;
 use futures::StreamExt as _;
 use futures::stream::FuturesUnordered;
 use tokio::sync::Semaphore;
+use tracing::warn;
 
 use crate::routing_table::NEARBY_NODES_MULTIP;
 use crate::{BUCKET_SIZE, Distance, DistancePair, HasId, Id, RequestHandler};
@@ -78,13 +79,14 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize> SiblingsList<Node, I
         handler: &impl RequestHandler<Node, ID_LEN>,
     ) -> HashSet<Id<ID_LEN>> {
         let mut to_remove_set = HashSet::new();
+        warn!("move semaphore up to include the remove step as well");
         let _semaphore_permit = self.ping.acquire().await.unwrap();
         {
             let to_remove = FuturesUnordered::from_iter(self.inner.iter().map(|pair| async move {
                 (!handler.ping(local_node, pair.node()).await).then_some(pair.node().id().clone())
             }));
 
-            // once at least half have responded, continue.
+            // once all have responded, continue.
             let mut chunks = to_remove.ready_chunks(BUCKET_SIZE);
             let mut total_pinged = 0;
             while let Some(chunk) = chunks.next().await {
