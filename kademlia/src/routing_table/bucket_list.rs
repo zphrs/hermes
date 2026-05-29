@@ -95,7 +95,7 @@ impl<Node: Eq + Debug, const ID_LEN: usize, const BUCKET_SIZE: usize> Debug
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut dl = f.debug_list();
-        for leaf in self.leaves_iter().rev() {
+        for leaf in self.leaves_iter() {
             dl.entry(&helpers::from_fn(|f| {
                 f.debug_list().entries(leaf.iter()).finish()
             }));
