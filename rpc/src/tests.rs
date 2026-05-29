@@ -163,7 +163,7 @@ async fn test() {
     let mut js = JoinSet::new();
     let net1 = network.clone();
     // server
-    let tp = MemoryTransport::new(net1);
+    let tp = MemoryTransport::new(net1, 1u64);
     let server_addr = tp.address();
     js.spawn(async move {
         let incoming = tp.accept().await.unwrap();
@@ -173,7 +173,7 @@ async fn test() {
     });
     // client
     js.spawn(async move {
-        let tp = MemoryTransport::new(network);
+        let tp = MemoryTransport::new(network, 2u64);
         let conn = tp.connect(&server_addr).await.unwrap();
         let _res = conn
             .query::<ping::Method, Root>(ping::Request)

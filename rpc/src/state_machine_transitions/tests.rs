@@ -368,7 +368,7 @@ async fn login_flow() {
     let net = in_memory_transport::Network::new();
 
     let net1 = net.clone();
-    let tp = MemoryTransport::new(net1);
+    let tp = MemoryTransport::new(net1, 1);
     let server_addr = tp.address();
 
     let ls = tokio::task::LocalSet::new();
@@ -417,7 +417,7 @@ async fn login_flow() {
         // client
         let _client_handle = js.spawn_local(async move {
             tokio::time::sleep(Duration::from_millis(1)).await;
-            let tp = MemoryTransport::new(net);
+            let tp = MemoryTransport::new(net, 2);
             let conn = tp.connect(&server_addr).await.unwrap();
 
             let login_wrapper: MethodWrapper<LoginMethod> = Default::default();
@@ -467,7 +467,7 @@ async fn concurrent_after_login() {
     let net = in_memory_transport::Network::new();
 
     let net1 = net.clone();
-    let tp = MemoryTransport::new(net1);
+    let tp = MemoryTransport::new(net1, 1);
     let server_addr = tp.address();
 
     let ls = tokio::task::LocalSet::new();
@@ -518,7 +518,7 @@ async fn concurrent_after_login() {
         });
         // client
         let _client_handle = js.spawn_local(async move {
-            let tp = MemoryTransport::new(net);
+            let tp = MemoryTransport::new(net, 2);
             let conn = tp.connect(&server_addr).await.unwrap();
 
             let login_wrapper: MethodWrapper<LoginMethod> = Default::default();

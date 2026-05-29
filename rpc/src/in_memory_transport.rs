@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
+    hash::Hash,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -13,28 +14,25 @@ use futures::AsyncRead;
 
 type StreamChannelTx = tokio::sync::mpsc::Sender<(SendStream, RecvStream)>;
 type StreamChannelRx = tokio::sync::mpsc::Receiver<(SendStream, RecvStream)>;
-type IncomingChannelTx = tokio::sync::mpsc::Sender<([u8; 32], StreamChannelRx)>;
-type IncomingChannelRx = tokio::sync::mpsc::Receiver<([u8; 32], StreamChannelRx)>;
+type IncomingChannelTx<Address> = tokio::sync::mpsc::Sender<(Address, StreamChannelRx)>;
+type IncomingChannelRx<Address> = tokio::sync::mpsc::Receiver<(Address, StreamChannelRx)>;
 
 #[derive(Clone)]
-pub struct Network {
-    registry: Arc<Mutex<HashMap<[u8; 32], IncomingChannelTx>>>,
-    next_id: Arc<AtomicU64>,
+pub struct Network<Address = [u8; 16]> {
+    registry: Arc<Mutex<HashMap<Address, IncomingChannelTx<Address>>>>,
 }
 
-impl Network {
+impl<Address> Network<Address>
+where
+    Address: Eq + Hash + Copy,
+{
     pub fn new() -> Self {
         Self {
             registry: Arc::new(Mutex::new(HashMap::new())),
-            next_id: Arc::new(AtomicU64::new(1)),
         }
     }
 
-    pub fn new_transport(&self) -> MemoryTransport {
-        let mut address = [0u8; 32];
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        address[0..8].copy_from_slice(&id.to_le_bytes());
-
+    pub fn new_transport(&self, address: Address) -> MemoryTransport<Address> {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         self.registry.lock().unwrap().insert(address, tx);
 
@@ -48,26 +46,32 @@ impl Network {
 
 /// 100% reliable transport
 #[derive(Clone)]
-pub struct MemoryTransport {
-    address: [u8; 32],
-    network: Network,
-    incoming_rx: Arc<tokio::sync::Mutex<IncomingChannelRx>>,
+pub struct MemoryTransport<Address = [u8; 16]> {
+    address: Address,
+    network: Network<Address>,
+    incoming_rx: Arc<tokio::sync::Mutex<IncomingChannelRx<Address>>>,
 }
 
-impl MemoryTransport {
-    pub fn new(network: Network) -> Self {
-        network.new_transport()
+impl<Address> MemoryTransport<Address>
+where
+    Address: Eq + Hash + Copy,
+{
+    pub fn new(network: Network<Address>, address: Address) -> Self {
+        network.new_transport(address)
     }
 
-    pub fn address(&self) -> [u8; 32] {
+    pub fn address(&self) -> Address {
         self.address
     }
 }
 
-impl crate::transport::Transport for MemoryTransport {
-    type Address = [u8; 32];
+impl<Address> crate::transport::Transport for MemoryTransport<Address>
+where
+    Address: Eq + Hash + Copy + std::marker::Sync + std::marker::Send,
+{
+    type Address = Address;
     type Error = Infallible;
-    type Caller = Caller;
+    type Caller = Caller<Address>;
 
     async fn connect(&self, to: &Self::Address) -> Result<Self::Caller, Self::Error> {
         let tx = self
@@ -87,8 +91,8 @@ impl crate::transport::Transport for MemoryTransport {
         })
     }
 
-    type Client = Client;
-    type Incoming = Incoming;
+    type Client = Client<Address>;
+    type Incoming = Incoming<Address>;
 
     async fn accept(&self) -> Result<Self::Incoming, Self::Error> {
         Ok(Incoming {
@@ -98,28 +102,28 @@ impl crate::transport::Transport for MemoryTransport {
     }
 }
 
-pub struct Client {
+pub struct Client<Address = [u8; 16]> {
     stream_rx: Arc<tokio::sync::Mutex<StreamChannelRx>>,
-    remote_addr: [u8; 32],
-    local_addr: [u8; 32],
+    remote_addr: Address,
+    local_addr: Address,
 }
 
-impl Client {
-    pub fn remote_addr(&self) -> &[u8; 32] {
+impl<Address> Client<Address> {
+    pub fn remote_addr(&self) -> &Address {
         &self.remote_addr
     }
 
-    pub fn local_addr(&self) -> &[u8; 32] {
+    pub fn local_addr(&self) -> &Address {
         &self.local_addr
     }
 }
 
-impl crate::transport::BiStream for Client {
+impl<Address> crate::transport::BiStream for Client<Address> {
     type RecvStream = RecvStream;
     type SendStream = SendStream;
 }
 
-impl crate::transport::Client for Client {
+impl<Address: Send + Sync> crate::transport::Client for Client<Address> {
     type Error = std::io::Error;
 
     async fn accept_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
@@ -134,28 +138,28 @@ impl crate::transport::Client for Client {
     }
 }
 
-pub struct Caller {
+pub struct Caller<Address = [u8; 16]> {
     stream_tx: StreamChannelTx,
-    remote_addr: [u8; 32],
-    local_addr: [u8; 32],
+    remote_addr: Address,
+    local_addr: Address,
 }
 
-impl Caller {
-    pub fn remote_addr(&self) -> &[u8; 32] {
+impl<Address> Caller<Address> {
+    pub fn remote_addr(&self) -> &Address {
         &self.remote_addr
     }
 
-    pub fn local_addr(&self) -> &[u8; 32] {
+    pub fn local_addr(&self) -> &Address {
         &self.local_addr
     }
 }
 
-impl crate::transport::BiStream for Caller {
+impl<Address> crate::transport::BiStream for Caller<Address> {
     type RecvStream = RecvStream;
     type SendStream = SendStream;
 }
 
-impl crate::transport::Caller for Caller {
+impl<Address: Send + Sync> crate::transport::Caller for Caller<Address> {
     type Error = Infallible;
 
     async fn open_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
@@ -247,13 +251,13 @@ impl futures::AsyncWrite for SendStream {
     }
 }
 
-pub struct Incoming {
-    rx: Arc<tokio::sync::Mutex<IncomingChannelRx>>,
-    local_addr: [u8; 32],
+pub struct Incoming<Address = [u8; 16]> {
+    rx: Arc<tokio::sync::Mutex<IncomingChannelRx<Address>>>,
+    local_addr: Address,
 }
 
-impl crate::transport::Incoming for Incoming {
-    type Client = Client;
+impl<Address: Send + Sync> crate::transport::Incoming for Incoming<Address> {
+    type Client = Client<Address>;
     type Error = std::io::Error;
 
     async fn accept(self) -> Result<Self::Client, Self::Error> {
