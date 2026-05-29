@@ -66,10 +66,9 @@ impl<'a> FindNodesMethod {
         let Some(sky_node) = from.as_sky() else {
             return;
         };
-        let sky_node_arr = [sky_node.clone()];
         warn!("should make sure that pinged nodes have their last_reached timer reset");
         self.rpc_manager
-            .add_nodes_without_removing(sky_node_arr.into_iter())
+            .add_nodes_without_removing([sky_node.clone()].into_iter())
             .await;
     }
 
