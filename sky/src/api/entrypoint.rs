@@ -57,7 +57,7 @@ impl rpc::Call for Method {
                     .await?
                     .map(Response::Sky)
             }
-            Request::Earth(earth_node) => todo!(),
+            Request::Earth(_earth_node) => todo!(),
         })
     }
 }

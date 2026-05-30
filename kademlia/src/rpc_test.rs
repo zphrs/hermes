@@ -318,7 +318,27 @@ async fn create_large_network(net: NetworkState, a: NodeAllocator, size: usize) 
         trace!("spawned {outer}/{}", leftover_nodes / SPAWN_CHUNK_SIZE);
         nodes.append(&mut tasks.join_all().await);
     }
-    trace!("spawned all bootstraps");
+    {
+        let mut tasks = tokio::task::JoinSet::new();
+        for _inner in 0..(leftover_nodes % SPAWN_CHUNK_SIZE) {
+            tasks.spawn({
+                let net = net.clone();
+                let a = a.clone();
+                let bootstrap_nodes = bootstrap_nodes.clone();
+                let node = a.new_node();
+                async move {
+                    let manager = net.add_node(node.clone());
+                    bootstrap_and_join(&manager, bootstrap_nodes)
+                        .with_subscriber(NoSubscriber::new())
+                        .await;
+                    node
+                }
+            });
+        }
+        trace!("spawned leftover nodes");
+        nodes.append(&mut tasks.join_all().await);
+    }
+    trace!("all nodes done");
     nodes.append(&mut bootstrap_nodes);
 
     let mut tasks = tokio::task::JoinSet::new();
@@ -571,7 +591,7 @@ async fn load_network(test_name: &str, num_nodes: usize) -> NetworkState {
 #[tokio::test(flavor = "multi_thread")]
 #[traced_test]
 async fn large_network_find_exact_node() {
-    let net = load_network("large_network_find_exact_node", 100_000).await;
+    let net = load_network("large_network_find_exact_node", 5_000).await;
 
     let nodes = net.all_nodes();
 

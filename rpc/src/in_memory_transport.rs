@@ -2,10 +2,7 @@ use std::{
     collections::HashMap,
     convert::Infallible,
     hash::Hash,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
     task::{Poll, ready},
 };
 

@@ -2,7 +2,6 @@ mod bucket_list;
 mod leaf;
 mod siblings_list;
 
-use std::cmp::min;
 use std::collections::hash_map;
 use std::sync::LazyLock;
 use tokio::time::Instant;
@@ -12,8 +11,6 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use thiserror::Error;
 
-use futures::stream::FuturesUnordered;
-use futures::stream::StreamExt;
 use tracing::instrument;
 
 use crate::routing_table::leaf::Leaf;
