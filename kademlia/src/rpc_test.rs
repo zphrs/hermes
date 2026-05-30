@@ -217,7 +217,7 @@ impl NodeAllocator {
 }
 
 async fn bootstrap_and_join(manager: &RpcManager, bootstrap_nodes: impl IntoIterator<Item = Node>) {
-    manager.add_nodes(bootstrap_nodes).await;
+    manager.add_nodes_without_removing(bootstrap_nodes).await;
     manager.join_network().await;
 }
 

@@ -5,15 +5,13 @@ use std::cmp::min;
 
 use futures::StreamExt as _;
 use futures::stream::FuturesUnordered;
-use tokio::sync::Semaphore;
-use tracing::warn;
 
 use crate::routing_table::NEARBY_NODES_MULTIP;
+use crate::traits::NodeStatus;
 use crate::{BUCKET_SIZE, Distance, DistancePair, HasId, Id, RequestHandler};
 
 pub struct SiblingsList<Node: HasId<ID_LEN>, const ID_LEN: usize> {
     inner: Vec<DistancePair<Node, ID_LEN>>,
-    ping: Semaphore,
 }
 
 impl<Node: HasId<ID_LEN> + Debug, const ID_LEN: usize> Debug for SiblingsList<Node, ID_LEN> {
@@ -26,7 +24,6 @@ impl<Node: HasId<ID_LEN> + Clone, const ID_LEN: usize> Clone for SiblingsList<No
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            ping: Semaphore::new(1),
         }
     }
 }
@@ -35,7 +32,6 @@ impl<Node: HasId<ID_LEN>, const ID_LEN: usize> Default for SiblingsList<Node, ID
     fn default() -> Self {
         Self {
             inner: Vec::with_capacity(NEARBY_NODES_MULTIP * BUCKET_SIZE + 1),
-            ping: Semaphore::new(1),
         }
     }
 }
@@ -44,10 +40,20 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize> SiblingsList<Node, I
     pub fn maybe_add_nodes<DP, Iter: IntoIterator<Item = DP>>(
         &mut self,
         pairs: Iter,
+        local_node: &Node,
+        handler: &impl RequestHandler<Node, ID_LEN>,
     ) -> impl IntoIterator<Item = DistancePair<Node, ID_LEN>>
     where
         DistancePair<Node, ID_LEN>: From<DP>,
     {
+        self.inner.retain(|n| {
+            // we keep nodes with a status of good or unknown and remove the bad
+            // nodes before doing anything else
+            matches!(
+                handler.node_status(local_node, n.node()),
+                NodeStatus::Good | NodeStatus::Unknown
+            )
+        });
         let last_in_list: &Distance<_> = &self
             .inner
             .get(NEARBY_NODES_MULTIP * BUCKET_SIZE)
@@ -79,11 +85,16 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize> SiblingsList<Node, I
         handler: &impl RequestHandler<Node, ID_LEN>,
     ) -> HashSet<Id<ID_LEN>> {
         let mut to_remove_set = HashSet::new();
-        warn!("move semaphore up to include the remove step as well");
-        let _semaphore_permit = self.ping.acquire().await.unwrap();
         {
             let to_remove = FuturesUnordered::from_iter(self.inner.iter().map(|pair| async move {
-                (!handler.ping(local_node, pair.node()).await).then_some(pair.node().id().clone())
+                match handler.node_status(local_node, pair.node()) {
+                    crate::traits::NodeStatus::Good => None,
+                    crate::traits::NodeStatus::Bad => Some(pair.node().id().clone()),
+                    crate::traits::NodeStatus::Unknown => {
+                        (!handler.ping(local_node, pair.node()).await)
+                            .then_some(pair.node().id().clone())
+                    }
+                }
             }));
 
             // once all have responded, continue.

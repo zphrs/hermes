@@ -148,11 +148,14 @@ impl<Node: Eq + Debug + HasId<ID_LEN>, const ID_LEN: usize, const BUCKET_SIZE: u
     pub fn maybe_add_nodes_to_siblings_list<DP, Iter: IntoIterator<Item = DP>>(
         &mut self,
         pairs: Iter,
+        local_node: &Node,
+        handler: &impl RequestHandler<Node, ID_LEN>,
     ) -> impl IntoIterator<Item = DistancePair<Node, ID_LEN>>
     where
         DistancePair<Node, ID_LEN>: From<DP>,
     {
-        self.nearest_siblings_list.maybe_add_nodes(pairs)
+        self.nearest_siblings_list
+            .maybe_add_nodes(pairs, local_node, handler)
     }
 
     pub fn sibling_list_pairs(&self) -> impl Iterator<Item = &DistancePair<Node, ID_LEN>> {
@@ -230,6 +233,17 @@ mod tests {
     use tracing_test::traced_test;
 
     use crate::{HasId, RoutingTable, node::Node};
+
+    struct RpcHandler;
+    impl crate::RequestHandler<Node, 32> for RpcHandler {
+        async fn ping(&self, _from: &Node, _node: &Node) -> bool {
+            unimplemented!()
+        }
+
+        async fn find_node(&self, _from: &Node, _to: &Node, _address: &crate::Id<32>) -> Vec<Node> {
+            unimplemented!()
+        }
+    }
     #[test]
     #[traced_test]
     pub fn siblings() {
@@ -243,7 +257,11 @@ mod tests {
                     self_node.id(),
                 )
             });
-            table.maybe_add_nodes_to_siblings_list(nodes);
+            table.maybe_add_nodes_to_siblings_list(
+                nodes,
+                &Node::new(([0, 0, 0, 0], 1000).into()),
+                &RpcHandler,
+            );
         }
         expect![[r#"
             SiblingsList(

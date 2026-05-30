@@ -3,10 +3,10 @@ use std::{cmp::min, collections::HashSet, fmt::Debug, ops::Deref, sync::Arc, tim
 use futures::{prelude::*, stream::FuturesUnordered};
 // sync is runtime agnostic;
 // see https://docs.rs/tokio/latest/tokio/sync/index.html#runtime-compatibility
-use tokio::sync::{RwLock, RwLockWriteGuard};
-use tracing::{Instrument, debug, instrument, trace, trace_span};
+use tokio::sync::{RwLock, RwLockWriteGuard, Semaphore};
+use tracing::{Instrument, debug, info, instrument, trace, trace_span};
 
-use crate::{Distance, DistancePair, HasId, Id, RequestHandler, RoutingTable};
+use crate::{Distance, DistancePair, HasId, Id, RequestHandler, RoutingTable, traits::NodeStatus};
 
 const ALPHA: usize = 3;
 
@@ -21,6 +21,7 @@ pub struct RpcManager<
     handler: Handler,
     pub(crate) routing_table: Arc<RwLock<RoutingTable<Node, ID_LEN, BUCKET_SIZE>>>,
     local_node: Node,
+    free_up_space: Arc<Semaphore>,
 }
 
 impl<
@@ -37,6 +38,7 @@ impl<
             handler,
             routing_table: Arc::new(RwLock::new(routing_table)),
             local_node,
+            free_up_space: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -167,6 +169,13 @@ impl<
         lock: &mut RwLockWriteGuard<'_, RoutingTable<Node, ID_LEN, BUCKET_SIZE>>,
     ) -> bool {
         let mut leaf = lock.get_leaf_mut(pair.distance());
+        // remove all bad nodes
+        leaf.remove_where(|pair| {
+            matches!(
+                self.handler.node_status(&self.local_node, pair.node()),
+                NodeStatus::Bad
+            )
+        });
         // if full just skip pings
         leaf.try_insert(pair).is_ok()
     }
@@ -185,10 +194,14 @@ impl<
                 let unordered_futures = FuturesUnordered::new();
                 for pair in leaf.iter() {
                     unordered_futures.push(async move {
-                        (
-                            self.handler.ping(&self.local_node, pair.node()).await,
-                            pair.node().id(),
-                        )
+                        match self.handler.node_status(&self.local_node, pair.node()) {
+                            crate::traits::NodeStatus::Good => (true, pair.node().id()),
+                            crate::traits::NodeStatus::Bad => (false, pair.node().id()),
+                            crate::traits::NodeStatus::Unknown => (
+                                self.handler.ping(&self.local_node, pair.node()).await,
+                                pair.node().id(),
+                            ),
+                        }
                     });
                 }
                 let mut unordered_futures_chunks = unordered_futures.ready_chunks(leaf_len);
@@ -221,13 +234,19 @@ impl<
     ) -> impl IntoIterator<Item = DistancePair<Node, ID_LEN>> {
         let local_addr = self.local_addr();
         let pairs = nodes.into_iter().map(move |node| (node, local_addr));
-        table_lock.maybe_add_nodes_to_siblings_list(pairs)
+        table_lock.maybe_add_nodes_to_siblings_list(pairs, &self.local_node, &self.handler)
     }
 
     /// pipelines the three stages for the nodes which allows all to complete
     /// their write, read, write stages in synchronicity when inserting.
+    ///
+    /// Will ping nodes in a blocking manner to free up space in the inner
+    /// [`RoutingTable`].
     #[instrument(skip_all)]
     pub async fn add_nodes(&self, nodes: impl IntoIterator<Item = Node>) {
+        info!("acquiring add_nodes semaphore");
+        let sem_lock = self.free_up_space.acquire().await.unwrap();
+        info!("starting add_nodes");
         // first remove unreachable siblings list nodes
         let remove_set = {
             let read_lock = self.routing_table.read().await;
@@ -235,6 +254,7 @@ impl<
                 .get_unreachable_siblings_list_nodes(&self.local_node, &self.handler)
                 .await
         };
+        // block to ensure that this write lock section executes synchronously
         let leftover: Vec<_> = {
             let mut write_lock = self.routing_table.write().await;
             write_lock.remove_unreachable_siblings_list_nodes(remove_set);
@@ -256,6 +276,8 @@ impl<
                 .into_iter()
                 .collect()
         };
+        drop(sem_lock);
+
         // collect pairs into buckets
         let mut buckets: Vec<Vec<DistancePair<Node, ID_LEN>>> =
             vec![Vec::with_capacity(BUCKET_SIZE); Id::<ID_LEN>::BITS];
@@ -329,9 +351,8 @@ impl<
             self.insert_into_tree(pair, &mut write_lock);
         }
     }
-    /// Note: should always separately add the requesting node in
+
     pub async fn find_node(&self, from: Option<Node>, id: &Id<ID_LEN>) -> Vec<Node> {
-        // TODO: uncomment
         if let Some(from) = from {
             self.add_nodes_without_removing([from.clone()]).await;
         }
