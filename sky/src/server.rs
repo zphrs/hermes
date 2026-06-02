@@ -1,15 +1,12 @@
-use std::time::Duration;
+use std::{convert::Infallible, time::Duration};
 
 use rpc::{ClientError, Transport as _, transport::Client as _};
 use shared_schema::SkyNode;
 use tokio::task::{JoinHandle, JoinSet};
-use tracing::{Instrument as _, debug, info, info_span, instrument::WithSubscriber as _, trace};
+use tracing::{Instrument as _, info, info_span, instrument::WithSubscriber as _, trace};
 
-use crate::{
-    get_system_time::get_system_time,
-    quinn_transport,
-    request_handler::{Error, KadRpcManager, RootHandler},
-};
+use crate::{api::find_nodes_method::KadRpcManager, entrypoint::as_sky, quinn_transport};
+use rpc::server_conn::Wrapper;
 
 #[derive(Clone)]
 pub struct SkyServer {
@@ -18,7 +15,7 @@ pub struct SkyServer {
 }
 
 impl SkyServer {
-    pub async fn new() -> Result<Self, ClientError<quinn_transport::Error, Error>> {
+    pub async fn new() -> Result<Self, ClientError<quinn_transport::Error, Infallible>> {
         let tp = quinn_transport::Transport::self_signed_server()
             .await
             .map_err(ClientError::Transport)?;
@@ -65,96 +62,81 @@ impl SkyServer {
         );
     }
 
-    pub fn run(&self) -> JoinHandle<Result<(), ClientError<quinn_transport::Error, Error>>> {
+    pub fn run(&self) -> JoinHandle<Result<(), ClientError<quinn_transport::Error, Infallible>>> {
         self.run_refresh_loop();
 
-        let (handler, tp) = self.clone().into_parts();
+        let (manager, tp) = self.clone().into_parts();
 
-        let jh = tokio::task::spawn(async move {
-            let mut js: JoinSet<Result<(), ClientError<quinn_transport::Error, Error>>> =
-                JoinSet::new();
-            loop {
-                trace!("awaiting client");
-                let incoming_client: quinn_transport::Incoming =
-                    tp.accept().await.map_err(ClientError::Transport)?;
-                let handler = handler.clone();
-                let span = info_span!("handling request", self_addr = %incoming_client.inner().local_ip().unwrap(), client = %incoming_client.inner().remote_address());
-                js.spawn(async move {
-                    trace!("accepting {}", incoming_client.inner().remote_address());
-                    let conn = match rpc::transport::Incoming::accept(incoming_client).await {
-                        Ok(v) => v,
-                        Err(e) => {
-                            info!("timing out...");
-                            Err(e).map_err(ClientError::Transport)?
-                        }
-                    };
-                    let mut auth_handler = shared_schema::authenticate::Method::new();
-                    let mut stream = conn.accept_stream().await.map_err(ClientError::Transport)?;
-                    if let Err(e) = conn.handle_one_request(&mut stream, &mut auth_handler).await {
-
-                        match e {
-                            ClientError::Rpc(rpc_error) => Err(ClientError::Rpc(rpc_error))?,
-                            ClientError::Transport(tp) => Err(ClientError::Transport(tp))?,
-                            ClientError::App(e) => unreachable!("Supposed to be infallible: {}", e),
-                        }
-                    }
-                    let from = auth_handler.into_node().unwrap();
-                    debug!("accepted client {}", conn.inner().remote_address());
-                    let mut js: JoinSet<_> =
-                        JoinSet::new();
-                    while conn.inner().close_reason().is_none() {
-                        let cloned_handler = handler.clone();
-                        let conn = conn.clone();
-                        let mut stream = match conn.accept_stream().await {
-                            Ok(stream) => stream,
-                            Err(e) => {
-                                debug!("Err while accepting stream: {}", e);
-                                continue;
-                            }
-                        };
-                        let from = from.clone();
-                        js.spawn(async move {
-
-                            let mut root_handler = RootHandler::new((from, get_system_time()).into(), &cloned_handler);
-                            if let Err(e) = conn.handle_one_request::<RootHandler>(&mut stream, &mut root_handler).await {
-                                match e {
-                                    ClientError::Transport(crate::quinn_transport::Error::Connection(
-                                        quinn::ConnectionError::ApplicationClosed(close),
-                                    )) if close.error_code == 0u32.into()
-                                        && close.reason.len() == 0 =>
-                                    {
-                                        tracing::warn!("normal client closure")
-                                    },
-                                    ClientError::Transport(crate::quinn_transport::Error::Connection(quinn::ConnectionError::TimedOut)) => {
-                                        tracing::debug!("connection to server timed out. Okay if the client still got all their responses")
+        let jh = tokio::task::spawn(
+            async move {
+                let mut js: JoinSet<Result<(), ClientError<quinn_transport::Error, Infallible>>> =
+                    JoinSet::new();
+                loop {
+                    trace!("awaiting client");
+                    let incoming_client: quinn_transport::Incoming =
+                        tp.accept().await.map_err(ClientError::Transport)?;
+                    let manager = manager.clone();
+                    let span = info_span!("handling request",
+                        self_addr = %incoming_client.inner().local_ip().unwrap(),
+                        client = %incoming_client.inner().remote_address()
+                    );
+                    js.spawn(
+                        async move {
+                            trace!("accepting {}", incoming_client.inner().remote_address());
+                            let conn = match rpc::transport::Incoming::accept(incoming_client).await
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    info!("timing out...");
+                                    Err(e).map_err(ClientError::Transport)?
+                                }
+                            };
+                            let handler = crate::api::entrypoint::Method::new(
+                                conn.inner().remote_address().ip(),
+                            );
+                            let mut login = Wrapper::new(handler, conn);
+                            let ((actions, parts), sky_node) = loop {
+                                let (res, parts) =
+                                    login.handle_state_transition().await?.extract_res();
+                                use crate::entrypoint::Response::*;
+                                match res {
+                                    Sky(as_sky::Response::Ok(actions), sky_node) => {
+                                        // continue on
+                                        break ((actions, parts), sky_node);
                                     }
-                                    ClientError::Rpc(rpc::RpcError::MinicborIo(minicbor_io::Error::Io(e))) => {
-                                        tracing::debug!("probably normal client closure {}", e);
+                                    Sky(as_sky::Response::Invalid(loopback), _sky_node) => {
+                                        // restore login from the parts
+                                        login = Wrapper::from(parts.method_restore(loopback));
                                     }
-                                    e => tracing::warn!("Error: {e}"),
+                                }
+                            };
+                            let handler = crate::api::sky_root::Method::new(&manager, sky_node);
+                            let logged_in = Wrapper::from(parts.method_change(actions, handler));
+                            logged_in.handle_loopback().await?;
+
+                            Ok(())
+                        }
+                        .instrument(span),
+                    );
+                    while let Some(result) = js.try_join_next() {
+                        if let Err(e) = result.unwrap() {
+                            match e {
+                                ClientError::Transport(quinn_transport::Error::Connection(
+                                    quinn::ConnectionError::TimedOut,
+                                )) => {
+                                    tracing::warn!("timed out!");
+                                }
+                                e => {
+                                    tracing::error!("error while handling client: {e}: {e:?}");
                                 }
                             }
-                        });
+                        };
                     }
-                    js.join_all().await;
-                    Ok(())
-                }.instrument(span));
-                while let Some(result) = js.try_join_next() {
-                    if let Err(e) = result.unwrap() {
-                        match e {
-                            ClientError::Transport(quinn_transport::Error::Connection(
-                                quinn::ConnectionError::TimedOut,
-                            )) => {
-                                tracing::warn!("timed out!");
-                            }
-                            e => {
-                                tracing::error!("error while handling client: {e}: {e:?}");
-                            }
-                        }
-                    };
                 }
             }
-        }.with_current_subscriber().instrument(tracing::Span::current()));
+            .with_current_subscriber()
+            .instrument(tracing::Span::current()),
+        );
         jh
     }
 }

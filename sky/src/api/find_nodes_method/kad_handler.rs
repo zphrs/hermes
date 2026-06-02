@@ -1,13 +1,16 @@
 use std::{convert::Infallible, time::Duration};
 
 use super::{FindNodesMethod, FindNodesRequest};
-use crate::request_handler::RootRequest;
+use crate::api::sky_root;
+use crate::entrypoint::as_sky;
 
-use rpc::{Caller, ClientError, Transport};
+use rpc::client_conn::Wrapper;
+
+use rpc::{ClientError, Transport};
 use shared_schema::{SkyNode, sky_node::SkyId};
 use tracing::{debug, trace, warn};
 
-use crate::quinn_transport;
+use crate::{entrypoint, quinn_transport};
 
 #[derive(Clone)]
 pub struct KadHandler {
@@ -77,16 +80,30 @@ impl KadHandler {
             trace!("returning early because we've heard from them recently");
             return Ok(());
         }
-
+        warn!("should reuse conns instead of making new conn for every ping req");
         let conn = self
             .transport
             .connect(node)
             .await
             .map_err(ClientError::Transport)?;
 
-        conn.query::<shared_schema::ping::Method, RootRequest>(shared_schema::ping::Request)
+        let login: Wrapper<entrypoint::Method, _> = Wrapper::new(conn);
+
+        let sky_root: Wrapper<sky_root::Method, _> = login
+            .query::<as_sky::Method>(as_sky::Request::new())
+            .await
+            .map_err(ClientError::from_caller)?
+            .map_res(|res| match res {
+                as_sky::Response::Ok(method_wrapper) => method_wrapper,
+                as_sky::Response::Invalid(_method_wrapper) => unimplemented!(),
+            })
+            .into();
+
+        sky_root
+            .query_loopback::<sky_root::Method>(shared_schema::ping::Request.into())
             .await
             .map_err(ClientError::from_caller)?;
+
         node.reset_last_reached_at();
         Ok(())
     }
@@ -97,20 +114,32 @@ impl KadHandler {
         to: &SkyNode,
         address: &kademlia::Id<32>,
     ) -> Result<Vec<SkyNode>, ClientError<quinn_transport::Error, Infallible>> {
+        warn!("should reuse conns instead of making new conn for every find_node req");
         let conn = self
             .transport
             .connect(to)
             .await
             .map_err(ClientError::Transport)?;
 
-        let nodes = conn
-            .query::<FindNodesMethod, RootRequest>(FindNodesRequest {
+        let login: Wrapper<entrypoint::Method, quinn_transport::Caller> = Wrapper::new(conn);
+        let sky_root: Wrapper<sky_root::Method, _> = login
+            .query::<as_sky::Method>(as_sky::Request::new())
+            .await
+            .map_err(ClientError::from_caller)?
+            .map_res(|res| match res {
+                as_sky::Response::Ok(method_wrapper) => method_wrapper,
+                as_sky::Response::Invalid(_method_wrapper) => unimplemented!(),
+            })
+            .into();
+
+        let nodes = sky_root
+            .query_loopback::<FindNodesMethod>(FindNodesRequest {
                 sky_id:
                 // SAFETY: this kademlia handler is only used on SkyNodes, so the lookup operations are
                 // operating in SkyId space.
                 unsafe {
                     SkyId::from_kademlia_id_unchecked(address.clone())
-                },
+                }
             })
             .await
             .map_err(ClientError::from_caller)?;
@@ -120,6 +149,16 @@ impl KadHandler {
 }
 
 impl kademlia::RequestHandler<SkyNode, 32> for KadHandler {
+    fn node_status(&self, from: &SkyNode, node: &SkyNode) -> kademlia::traits::NodeStatus {
+        // throw away in the def so auto generated impls and docs will not have
+        // underscores in front of the parameters
+        let _ = (from, node);
+        if node.last_reached_at().elapsed() < Duration::from_secs(120) {
+            kademlia::traits::NodeStatus::Good
+        } else {
+            kademlia::traits::NodeStatus::Unknown
+        }
+    }
     #[tracing::instrument(skip(self))]
     async fn ping(&self, from: &SkyNode, node: &SkyNode) -> bool {
         trace!("handling ping");

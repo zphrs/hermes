@@ -3,7 +3,10 @@ pub mod as_sky;
 use std::{convert::Infallible, net::IpAddr};
 
 use maxlen::MaxLen;
-use shared_schema::EarthNode;
+use rpc::MethodWrapper;
+use shared_schema::{EarthNode, SkyNode};
+
+pub type Entrypoint = MethodWrapper<Method>;
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Request {
@@ -22,7 +25,7 @@ impl From<as_sky::Request> for Request {
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Response {
     #[n(0)]
-    Sky(#[n(0)] as_sky::Response),
+    Sky(#[n(0)] as_sky::Response, #[n(1)] SkyNode),
 }
 
 pub struct Method {
@@ -55,7 +58,7 @@ impl rpc::Call for Method {
                 as_sky::Method
                     .call(replier.change_method(&request), request)
                     .await?
-                    .map(Response::Sky)
+                    .map(|v| Response::Sky(v, SkyNode::from(self.peer_ip)))
             }
             Request::Earth(_earth_node) => todo!(),
         })

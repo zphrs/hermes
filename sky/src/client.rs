@@ -2,14 +2,15 @@ mod sky_or_earth;
 pub use sky_or_earth::SkyOrEarth;
 use std::time::Duration;
 
-use rpc::{Transport, transport::Caller};
+use rpc::Transport;
 use shared_schema::{EarthNode, SkyNode, sky_node::SkyId};
 use tracing::{debug, instrument, warn};
 
 use crate::{
+    api::find_nodes_method::FindNodesRequest,
+    entrypoint::{self, as_sky},
     get_system_time::get_system_time,
     quinn_transport,
-    request_handler::{self, FindNodesRequest, RootRequest},
 };
 
 pub struct SkyClient {
@@ -20,7 +21,22 @@ struct Handler {
     transport: quinn_transport::Transport,
 }
 
+use rpc::client_conn::Wrapper;
+
+use kademlia::traits::NodeStatus;
 impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
+    fn node_status(&self, _from: &SkyOrEarth, node: &SkyOrEarth) -> NodeStatus {
+        let Some(sky_node) = node.as_sky() else {
+            warn!("earth lookup");
+            // this is a client for the sky, earth nodes should not be here
+            return NodeStatus::Bad;
+        };
+        if sky_node.last_reached_at().elapsed() < Duration::from_secs(60) {
+            return NodeStatus::Good;
+        }
+        return NodeStatus::Unknown;
+    }
+
     #[instrument(skip(self))]
     async fn ping(&self, from: &SkyOrEarth, node: &SkyOrEarth) -> bool {
         let Some(sky_node) = node.as_sky() else {
@@ -32,20 +48,31 @@ impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
         }
 
         debug!("pinging");
+        warn!("should reuse conns instead of making new conn for every ping req");
         let Ok(conn) = self.transport.connect(sky_node).await else {
             return false;
         };
 
-        if let Ok(_v) = conn
-            .query::<shared_schema::ping::Method, crate::request_handler::RootRequest>(
-                shared_schema::ping::Request,
-            )
+        let login: Wrapper<entrypoint::Method, _> = Wrapper::new(conn);
+        let Ok(v) = login.query::<as_sky::Method>(Default::default()).await else {
+            return false;
+        };
+
+        let sky_root: Wrapper<_, _> = v
+            .map_res(|res| match res {
+                as_sky::Response::Ok(method_wrapper) => method_wrapper,
+                as_sky::Response::Invalid(_method_wrapper) => unimplemented!(),
+            })
+            .into();
+
+        let reached_node = sky_root
+            .query_loopback::<shared_schema::ping::Method>(shared_schema::ping::Request)
             .await
-        {
+            .is_ok();
+        if reached_node {
             sky_node.reset_last_reached_at();
-            return true;
         }
-        return false;
+        reached_node
     }
 
     #[instrument(skip(self))]
@@ -59,16 +86,25 @@ impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
         let Some(to) = to.as_sky() else {
             return vec![]; // this is a client for the sky, doesn't make sense to find through earth nodes
         };
-
+        warn!("should reuse conns instead of making new conn for every ping req");
         let Ok(conn) = self.transport.connect(to).await else {
-            return vec![]; // unreachable
+            return vec![];
         };
 
-        let Ok(v): Result<
-            request_handler::FindNodesResponse,
-            rpc::CallerError<quinn_transport::Error>,
-        > = conn
-            .query::<request_handler::FindNodesMethod, RootRequest>(FindNodesRequest {
+        let login: Wrapper<entrypoint::Method, _> = Wrapper::new(conn);
+        let Ok(v) = login.query::<as_sky::Method>(Default::default()).await else {
+            return vec![];
+        };
+
+        let sky_root: Wrapper<_, _> = v
+            .map_res(|res| match res {
+                as_sky::Response::Ok(method_wrapper) => method_wrapper,
+                as_sky::Response::Invalid(_method_wrapper) => unimplemented!(),
+            })
+            .into();
+
+        let Ok(v) = sky_root
+            .query_loopback::<crate::api::find_nodes_method::FindNodesMethod>(FindNodesRequest {
                 sky_id: unsafe { SkyId::from_kademlia_id_unchecked(address.clone()) },
             })
             .await

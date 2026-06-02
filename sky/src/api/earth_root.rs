@@ -6,44 +6,25 @@ use maxlen::MaxLen;
 use rpc::MethodWrapper;
 use shared_schema::SkyNode;
 
-use super::find_nodes_method::{
-    FindNodesMethod, FindNodesRequest, FindNodesResponse, KadRpcManager,
-};
+use crate::api::find_nodes_method::{FindNodesMethod, FindNodesResponse, KadRpcManager};
 
 use super::find_nodes_method;
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Request {
     #[n(0)]
-    Ping(#[n(0)] shared_schema::ping::Request),
-    #[n(1)]
     FindNodes(#[n(0)] find_nodes_method::FindNodesRequest),
-}
-
-impl From<shared_schema::ping::Request> for Request {
-    fn from(value: shared_schema::ping::Request) -> Self {
-        Self::Ping(value)
-    }
-}
-
-impl From<FindNodesRequest> for Request {
-    fn from(value: FindNodesRequest) -> Self {
-        Self::FindNodes(value)
-    }
 }
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 #[cbor(flat)]
 pub enum Response {
     #[n(0)]
-    Ping(#[cbor(skip)] LoopbackMethod),
-    #[n(1)]
     FindNodes(#[n(0)] FindNodesResponse, #[cbor(skip)] LoopbackMethod),
 }
 
 impl From<Response> for LoopbackMethod {
     fn from(value: Response) -> Self {
         match value {
-            Response::Ping(method_wrapper) => method_wrapper,
             Response::FindNodes(_find_nodes_response, method_wrapper) => method_wrapper,
         }
     }
@@ -83,7 +64,6 @@ impl rpc::Call for Method {
         value: Self::Req,
     ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>> {
         Ok(match value {
-            Request::Ping(_request) => replier.reply(Response::Ping(Default::default())).await?,
             Request::FindNodes(find_nodes_request) => replier
                 .change_method(&find_nodes_request)
                 .reply_with(&mut self.find_nodes, find_nodes_request)

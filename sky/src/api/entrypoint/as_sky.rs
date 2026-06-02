@@ -4,11 +4,18 @@ use maxlen::MaxLen;
 use rpc::MethodWrapper;
 use shared_schema::SkyNode;
 
-type LoopbackWrapper = MethodWrapper<Method>;
+type LoopbackWrapper = MethodWrapper<super::Method>;
 
-/// if it is not provided, it will be filled in on the request handling
+/// Use new to construct this Request. No need to specify a SkyNode since one
+/// will be constructed on the server based on the IP address of the sender.
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub struct Request(#[cbor(skip)] Option<SkyNode>);
+
+impl Default for Request {
+    fn default() -> Self {
+        Self(None)
+    }
+}
 
 impl Request {
     pub fn new() -> Self {

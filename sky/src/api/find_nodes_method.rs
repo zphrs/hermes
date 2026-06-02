@@ -3,14 +3,12 @@ mod kad_manager;
 use kad_handler::KadHandler;
 pub use kad_manager::KadRpcManager;
 
-use std::{convert::Infallible, time::Duration};
+use std::convert::Infallible;
 
 use max_sized_vec::MaxSizedVec;
 use maxlen::MaxLen;
 use shared_schema::{SkyNode, sky_node::SkyId};
-use tracing::{trace, warn};
-
-use crate::client::SkyOrEarth;
+use tracing::trace;
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
 pub struct FindNodesRequest {
@@ -60,32 +58,6 @@ impl<'a> FindNodesMethod {
             rpc_manager: rpc_manager.clone().into_inner(),
             remote: from,
         }
-    }
-
-    pub async fn on_ping(&self, from: SkyOrEarth) {
-        let Some(sky_node) = from.as_sky() else {
-            return;
-        };
-        warn!("should make sure that pinged nodes have their last_reached timer reset");
-        self.rpc_manager
-            .add_nodes_without_removing([sky_node.clone()].into_iter())
-            .await;
-    }
-
-    pub fn local_node(&self) -> &SkyNode {
-        self.rpc_manager.local_node()
-    }
-
-    pub async fn refresh_stale_buckets(&self, duration: &Duration) {
-        self.rpc_manager.refresh_stale_buckets(duration).await
-    }
-
-    pub async fn add_nodes(&self, nodes: impl IntoIterator<Item = SkyNode>) {
-        self.rpc_manager.add_nodes(nodes).await
-    }
-
-    pub async fn join_network(&self) {
-        self.rpc_manager.join_network().await
     }
 }
 

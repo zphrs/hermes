@@ -2,7 +2,7 @@ mod id;
 pub mod prelude;
 mod routing_table;
 mod rpc;
-mod traits;
+pub mod traits;
 
 mod helpers;
 #[cfg(test)]

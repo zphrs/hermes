@@ -1,5 +1,7 @@
+mod earth_root;
 pub mod entrypoint;
-mod sky_root;
+pub mod find_nodes_method;
+pub mod sky_root;
 
 #[cfg(test)]
 mod tests {
@@ -11,9 +13,13 @@ mod tests {
     use tokio::task::JoinSet;
     use tracing::info;
 
-    use crate::api::{
-        entrypoint::{self, as_sky},
-        sky_root,
+    use crate::{
+        api::{
+            entrypoint::{self, as_sky},
+            find_nodes_method::KadRpcManager,
+            sky_root,
+        },
+        quinn_transport,
     };
 
     #[tokio::test]
@@ -38,17 +44,23 @@ mod tests {
                 .handle_state_transition_request(&conn, stream, &mut handler)
                 .await
                 .unwrap();
-            let maybe_logged_in = match res {
-                entrypoint::Response::Sky(response) => response,
-            };
-            let actions = {
+
+            let (actions, sky_node) = {
                 use as_sky::Response::*;
-                match maybe_logged_in {
-                    Ok(method_wrapper) => method_wrapper,
-                    Invalid(_method_wrapper) => unimplemented!(),
+                match res {
+                    entrypoint::Response::Sky(Ok(method_wrapper), sky_node) => {
+                        (method_wrapper, sky_node)
+                    }
+                    entrypoint::Response::Sky(Invalid(_method_wrapper), _) => unimplemented!(),
                 }
             };
-            let concurrent_handler = sky_root::Method;
+            let rpc_manager = KadRpcManager::new(
+                quinn_transport::Transport::self_signed_server()
+                    .await
+                    .unwrap(),
+                server_addr.into(),
+            );
+            let concurrent_handler = sky_root::Method::new(&rpc_manager, sky_node);
             actions
                 .handle_only_concurrent_requests(&conn, concurrent_handler)
                 .await
