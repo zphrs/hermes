@@ -27,7 +27,7 @@ pub enum Root {
     Other(#[n(0)] other_ping::Request),
 }
 
-mod ping {
+pub mod ping {
     use maxlen::MaxLen;
     use std::convert::Infallible;
 
@@ -77,7 +77,7 @@ mod ping {
     }
 }
 
-mod other_ping {
+pub mod other_ping {
     use maxlen::MaxLen;
 
     #[derive(

@@ -73,7 +73,7 @@ impl<'a, T: AsyncWrite + Unpin + Send + Sync, Method: crate::Method + ?Sized>
         }
     }
 
-    pub fn reply_with<TransportError: Send>(
+    pub fn reply_with<TransportError>(
         self,
         handler: &mut Method,
         req: Method::Req,

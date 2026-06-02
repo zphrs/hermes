@@ -11,7 +11,7 @@ use crate::{
     transport::{Client, Incoming},
 };
 
-mod authenticate {
+pub mod authenticate {
     use maxlen::MaxLen;
     use std::convert::Infallible;
 
@@ -77,7 +77,7 @@ mod authenticate {
     }
 }
 
-mod actions {
+pub mod actions {
     use std::{convert::Infallible, time::Duration};
 
     use maxlen::MaxLen;
@@ -547,7 +547,7 @@ async fn concurrent_after_login() {
             let now = Instant::now();
 
             set.push(
-                actions_wrapper_ref.concurrent_query::<LongPingMethod, _, LoopbackHandler>(
+                actions_wrapper_ref.query_loopback_child::<LongPingMethod, _, LoopbackHandler>(
                     LongPingRequest {
                         duration_millis: 100,
                     },
@@ -556,7 +556,7 @@ async fn concurrent_after_login() {
             );
 
             set.push(
-                actions_wrapper_ref.concurrent_query::<LongPingMethod, _, LoopbackHandler>(
+                actions_wrapper_ref.query_loopback_child::<LongPingMethod, _, LoopbackHandler>(
                     LongPingRequest {
                         duration_millis: 100,
                     },
@@ -566,12 +566,11 @@ async fn concurrent_after_login() {
 
             let diff = now.elapsed();
 
+            let _results = set.try_collect::<Vec<_>>().await.unwrap();
             assert!(
                 diff.as_millis() < 150,
                 "should take less time than it would if requests were processed serially"
             );
-
-            let _results = set.try_collect::<Vec<_>>().await.unwrap();
 
             let actions_wrapper = actions_wrapper
                 .query::<PingMethod, _>(PingRequest(), &conn)

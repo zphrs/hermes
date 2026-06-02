@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -43,6 +43,10 @@ impl<Handler: crate::Method> MaxLen for MethodWrapper<Handler> {
 }
 
 impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+
     pub fn handle_state_transition_request<'a, C: crate::transport::Client>(
         self,
         client: &'a C,
@@ -61,7 +65,7 @@ impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
         }
     }
 
-    pub async fn concurrent_root_query<M: crate::Method, C: Caller>(
+    pub async fn query_loopback<M: crate::Method, C: Caller>(
         &self,
         req: M::Req,
         caller: &C,
@@ -76,7 +80,7 @@ impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
         caller.query::<M, Handler::Req>(req).await
     }
 
-    pub async fn concurrent_query<M: crate::Method, C: Caller, ParallelHandler>(
+    pub async fn query_loopback_child<M: crate::Method, C: Caller, ParallelHandler>(
         &self,
         req: M::Req,
         caller: &C,
@@ -107,7 +111,7 @@ impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
         client: &'a C,
         handler: Handler,
     ) -> impl std::future::Future<
-        Output = Result<Handler::Res, ClientError<<C as Client>::Error, Handler::Error>>,
+        Output = Result<(), ClientError<<C as Client>::Error, Handler::Error>>,
     > + Send
     where
         Handler::Req: crate::RpcMessage + Send + std::marker::Sync,
@@ -172,7 +176,9 @@ impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
 
                     };
                     let mut handler = concurrent_handler.clone();
-                    js.push(async move { (client.handle_one_request(&mut stream, &mut handler).await, stream) });
+                    js.push(async move {
+                        (client.handle_one_request(&mut stream, &mut handler).await, stream)
+                    });
                 }
                 next_result = js.select_next_some() => {
                     match next_result {

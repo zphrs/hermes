@@ -73,7 +73,7 @@ mod tests {
                 }
             };
             let _res = actions
-                .concurrent_root_query::<sky_root::Method, _>(
+                .query_loopback::<sky_root::Method, _>(
                     sky_root::Request::Ping(shared_schema::ping::Request),
                     &conn,
                 )

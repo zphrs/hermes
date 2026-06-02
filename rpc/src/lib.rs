@@ -5,6 +5,9 @@ mod state_machine_transitions;
 #[cfg(test)]
 mod tests;
 pub mod transport;
+mod wrappers;
+
+pub use wrappers::{client_conn, server_conn};
 
 pub use state_machine_transitions::{ConcurrentRequestHandler, MethodWrapper};
 
