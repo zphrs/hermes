@@ -40,6 +40,10 @@ where
         }
     }
 
+    pub fn conn(&self) -> &Caller {
+        &self.conn
+    }
+
     /// intentionally private to ensure that the conn is not accessed except
     /// when necessary to transition between states after a query request
     fn into_parts(self) -> Parts<MethodWrapper<Method>, Caller> {

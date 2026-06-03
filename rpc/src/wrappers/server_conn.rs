@@ -49,6 +49,10 @@ where
         }
     }
 
+    pub fn conn(&self) -> &Client {
+        &self.conn
+    }
+
     fn into_parts(self) -> Parts<MethodWrapper<Handler>, Client, Handler> {
         Parts(self.wrapper, self.conn, self.handler)
     }
