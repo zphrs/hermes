@@ -1,6 +1,6 @@
 mod earth_root;
 pub mod entrypoint;
-pub mod find_nodes_method;
+pub mod find_nodes;
 pub mod sky_root;
 
 #[cfg(test)]
@@ -16,7 +16,7 @@ mod tests {
     use crate::{
         api::{
             entrypoint::{self, as_sky},
-            find_nodes_method::KadRpcManager,
+            find_nodes::KadRpcManager,
             sky_root,
         },
         quinn_transport,

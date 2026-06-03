@@ -6,20 +6,18 @@ use maxlen::MaxLen;
 use rpc::MethodWrapper;
 use shared_schema::SkyNode;
 
-use crate::api::find_nodes_method::{FindNodesMethod, FindNodesResponse, KadRpcManager};
-
-use super::find_nodes_method;
+use crate::api::find_nodes::{self, KadRpcManager};
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Request {
     #[n(0)]
-    FindNodes(#[n(0)] find_nodes_method::FindNodesRequest),
+    FindNodes(#[n(0)] find_nodes::Request),
 }
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 #[cbor(flat)]
 pub enum Response {
     #[n(0)]
-    FindNodes(#[n(0)] FindNodesResponse, #[cbor(skip)] LoopbackMethod),
+    FindNodes(#[n(0)] find_nodes::Response, #[cbor(skip)] LoopbackMethod),
 }
 
 impl From<Response> for LoopbackMethod {
@@ -32,7 +30,7 @@ impl From<Response> for LoopbackMethod {
 
 #[derive(Clone)]
 pub struct Method {
-    find_nodes: FindNodesMethod,
+    find_nodes: find_nodes::Method,
 }
 
 impl std::fmt::Debug for Method {
@@ -44,7 +42,7 @@ impl std::fmt::Debug for Method {
 impl Method {
     pub fn new(rpc_manager: &KadRpcManager, from: SkyNode) -> Self {
         Self {
-            find_nodes: FindNodesMethod::from_manager(rpc_manager, Some(from)),
+            find_nodes: find_nodes::Method::from_manager(rpc_manager, Some(from)),
         }
     }
 }

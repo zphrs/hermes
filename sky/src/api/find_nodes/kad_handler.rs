@@ -1,6 +1,5 @@
 use std::{convert::Infallible, time::Duration};
 
-use super::{FindNodesMethod, FindNodesRequest};
 use crate::api::sky_root;
 use crate::entrypoint::as_sky;
 
@@ -133,7 +132,7 @@ impl KadHandler {
             .into();
 
         let nodes = sky_root
-            .query_loopback::<FindNodesMethod>(FindNodesRequest {
+            .query_loopback::<super::Method>(super::Request {
                 sky_id:
                 // SAFETY: this kademlia handler is only used on SkyNodes, so the lookup operations are
                 // operating in SkyId space.

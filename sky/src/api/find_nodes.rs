@@ -11,18 +11,18 @@ use shared_schema::{SkyNode, sky_node::SkyId};
 use tracing::trace;
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
-pub struct FindNodesRequest {
+pub struct Request {
     #[n(0)]
     pub sky_id: SkyId,
 }
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
-pub struct FindNodesResponse {
+pub struct Response {
     #[n(0)]
     pub sky_nodes: MaxSizedVec<SkyNode, 20>,
 }
 
-impl FindNodesResponse {
+impl Response {
     pub fn inner(&self) -> &arrayvec::ArrayVec<SkyNode, 20> {
         self.sky_nodes.inner()
     }
@@ -32,7 +32,7 @@ impl FindNodesResponse {
     }
 }
 
-impl From<Vec<SkyNode>> for FindNodesResponse {
+impl From<Vec<SkyNode>> for Response {
     fn from(sky_nodes: Vec<SkyNode>) -> Self {
         Self {
             sky_nodes: sky_nodes.into_iter().collect(),
@@ -40,19 +40,19 @@ impl From<Vec<SkyNode>> for FindNodesResponse {
     }
 }
 
-impl From<FindNodesResponse> for Vec<SkyNode> {
-    fn from(res: FindNodesResponse) -> Self {
+impl From<Response> for Vec<SkyNode> {
+    fn from(res: Response) -> Self {
         res.sky_nodes.into_inner().into_iter().collect()
     }
 }
 
 #[derive(Clone)]
-pub struct FindNodesMethod {
+pub struct Method {
     rpc_manager: kademlia::RpcManager<SkyNode, KadHandler, 32, 20>,
     remote: Option<SkyNode>,
 }
 
-impl<'a> FindNodesMethod {
+impl<'a> Method {
     pub fn from_manager(rpc_manager: &KadRpcManager, from: Option<SkyNode>) -> Self {
         Self {
             rpc_manager: rpc_manager.clone().into_inner(),
@@ -61,15 +61,15 @@ impl<'a> FindNodesMethod {
     }
 }
 
-impl rpc::Method for FindNodesMethod {
-    type Req = FindNodesRequest;
+impl rpc::Method for Method {
+    type Req = Request;
 
-    type Res = FindNodesResponse;
+    type Res = Response;
 
     type Error = Infallible;
 }
 
-impl rpc::Call for FindNodesMethod {
+impl rpc::Call for Method {
     #[tracing::instrument(skip(self, replier))]
     async fn call<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
         &mut self,

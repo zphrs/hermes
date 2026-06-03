@@ -7,7 +7,7 @@ use shared_schema::{EarthNode, SkyNode, sky_node::SkyId};
 use tracing::{debug, instrument, warn};
 
 use crate::{
-    api::find_nodes_method::FindNodesRequest,
+    api::find_nodes,
     entrypoint::{self, as_sky},
     get_system_time::get_system_time,
     quinn_transport,
@@ -104,7 +104,7 @@ impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
             .into();
 
         let Ok(v) = sky_root
-            .query_loopback::<crate::api::find_nodes_method::FindNodesMethod>(FindNodesRequest {
+            .query_loopback::<find_nodes::Method>(find_nodes::Request {
                 sky_id: unsafe { SkyId::from_kademlia_id_unchecked(address.clone()) },
             })
             .await

@@ -5,7 +5,7 @@ use shared_schema::SkyNode;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{Instrument as _, info, info_span, instrument::WithSubscriber as _, trace};
 
-use crate::{api::find_nodes_method::KadRpcManager, entrypoint::as_sky, quinn_transport};
+use crate::{api::find_nodes::KadRpcManager, entrypoint::as_sky, quinn_transport};
 use rpc::server_conn::Wrapper;
 
 #[derive(Clone)]

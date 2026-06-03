@@ -13,8 +13,8 @@ use shared_schema::{EarthNode, SkyNode, earth_node::EarthId};
 use tracing::{Instrument, info, info_span, instrument::WithSubscriber, trace, warn};
 
 use crate::{
-    client::SkyClient, get_system_time::since_epoch, quinn_transport::Transport, server::SkyServer,
-    tokio_uptime,
+    api::sky_root, client::SkyClient, entrypoint::as_sky, get_system_time::since_epoch,
+    quinn_transport::Transport, server::SkyServer, tokio_uptime,
 };
 
 #[test]
