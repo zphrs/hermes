@@ -8,7 +8,7 @@ type LoopbackWrapper = MethodWrapper<super::Method>;
 
 /// Use new to construct this Request. No need to specify a SkyNode since one
 /// will be constructed on the server based on the IP address of the sender.
-#[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
+#[derive(Debug, Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub struct Request(#[cbor(skip)] Option<SkyNode>);
 
 impl Default for Request {

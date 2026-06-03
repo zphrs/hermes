@@ -8,7 +8,7 @@ use shared_schema::{EarthNode, SkyNode};
 
 pub type Entrypoint = MethodWrapper<Method>;
 
-#[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
+#[derive(Debug, Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Request {
     #[n(0)]
     Sky(#[n(0)] as_sky::Request),
