@@ -12,11 +12,10 @@ use skip_server_verification::SkipServerVerification;
 pub use dens::os_mock::net::UdpSocket;
 #[cfg(not(test))]
 pub use tokio::net::UdpSocket;
-use tokio::task::JoinHandle;
-use tracing::{Instrument, debug, instrument};
+
+use tracing::instrument;
 
 use std::{
-    collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
@@ -34,9 +33,6 @@ use shared_schema::{
 #[derive(Clone)]
 pub struct Transport {
     endpoint: quinn::Endpoint,
-    open_conns: Arc<
-        tokio::sync::RwLock<HashMap<SocketAddr, tokio::sync::Mutex<Option<quinn::Connection>>>>,
-    >,
 }
 
 impl Transport {
@@ -213,10 +209,7 @@ impl Transport {
 
         let client_config = Self::client_config(keepalive);
         endpoint.set_default_client_config(client_config);
-        Ok(Self {
-            endpoint,
-            open_conns: Default::default(),
-        })
+        Ok(Self { endpoint })
     }
 
     /// id should be based on current public ip
@@ -258,10 +251,7 @@ impl Transport {
         )?;
         endpoint.set_default_client_config(Self::client_config(false));
 
-        Ok(Self {
-            endpoint,
-            open_conns: Default::default(),
-        })
+        Ok(Self { endpoint })
     }
 }
 
@@ -291,61 +281,11 @@ impl rpc::transport::Transport for Transport {
     type Caller = Caller;
     #[instrument(skip(self))]
     async fn connect(&self, to: &Self::Address) -> Result<Self::Caller, Self::Error> {
-        let cloned_self = self.clone();
-        let to = to.clone();
-        let mut read_lock = cloned_self.open_conns.clone().read_owned().await;
-        if let Some(conn_mutex) = read_lock.get(&to.socket_address()) {
-            let mut conn_lock = conn_mutex.lock().await;
-            if let Some(conn) = &*conn_lock {
-                if conn.close_reason().is_none() {
-                    debug!("reusing connection");
-
-                    return Ok(conn.clone().into());
-                } else {
-                    debug!("close reason: {}", conn.close_reason().unwrap());
-                    *conn_lock = None;
-                }
-            }
-        }
-        let jh: JoinHandle<Result<Self::Caller, Self::Error>> = tokio::spawn(
-            async move {
-                // now we need to get a lock on open_conns[to.socket_address()] so we only init a conn once
-                let conn_mutex = match read_lock.get(&to.socket_address()) {
-                    Some(m) => m,
-                    None => {
-                        // implicit maybe_conn_mutex drop
-                        drop(read_lock);
-                        debug!("opening a connection with {to:?}");
-                        let mut write_lock = cloned_self.open_conns.write_owned().await;
-                        debug!("got write lock");
-
-                        // theoretically someone could have filled it because we dropped the read lock
-                        // momentarily
-                        write_lock.entry(to.socket_address()).or_default();
-                        read_lock = tokio::sync::OwnedRwLockWriteGuard::downgrade(write_lock);
-                        read_lock.get(&to.socket_address()).unwrap()
-                    }
-                };
-
-                let mut conn_lock = conn_mutex.lock().await;
-                // someone could have beaten us here
-                if let Some(conn) = &*conn_lock {
-                    return Ok(conn.clone().into());
-                }
-                debug!("creating new connection");
-
-                let url = to.sky_id().to_url();
-                let new_conn = cloned_self
-                    .endpoint
-                    .connect(to.socket_address(), &url)?
-                    .await?;
-                *conn_lock = Some(new_conn.clone());
-                Ok(new_conn.into())
-            }
-            .instrument(tracing::span::Span::current()),
-        );
-
-        Ok(jh.await.unwrap()?)
+        Ok(self
+            .endpoint
+            .connect(to.socket_address(), &to.sky_id().to_url())?
+            .await?
+            .into())
     }
 
     type Client = Client;
