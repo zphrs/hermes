@@ -10,6 +10,8 @@ use crate::api::find_nodes::{self, KadRpcManager};
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Request {
     #[n(0)]
+    Ping(#[n(0)] shared_schema::ping::Request),
+    #[n(1)]
     FindNodes(#[n(0)] find_nodes::Request),
 }
 
@@ -17,12 +19,15 @@ pub enum Request {
 #[cbor(flat)]
 pub enum Response {
     #[n(0)]
-    FindNodes(#[n(0)] find_nodes::Response, #[cbor(skip)] LoopbackMethod),
+    Ping(#[cbor(skip)] LoopbackMethod),
+    #[n(1)]
+    FindNodes(#[n(1)] find_nodes::Response, #[cbor(skip)] LoopbackMethod),
 }
 
 impl From<Response> for LoopbackMethod {
     fn from(value: Response) -> Self {
         match value {
+            Response::Ping(method_wrapper) => method_wrapper,
             Response::FindNodes(_find_nodes_response, method_wrapper) => method_wrapper,
         }
     }
@@ -62,6 +67,7 @@ impl rpc::Call for Method {
         value: Self::Req,
     ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>> {
         Ok(match value {
+            Request::Ping(_request) => replier.reply(Response::Ping(Default::default())).await?,
             Request::FindNodes(find_nodes_request) => replier
                 .change_method(&find_nodes_request)
                 .reply_with(&mut self.find_nodes, find_nodes_request)
