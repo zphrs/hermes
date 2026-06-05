@@ -1,30 +1,35 @@
+use std::sync::Arc;
 use std::{convert::Infallible, time::Duration};
 
 use crate::api::sky_root;
+use crate::client::{Cache, cache};
 use crate::entrypoint::as_sky;
 
 use rpc::client_conn::Wrapper;
 
-use rpc::{ClientError, Transport};
+use rpc::ClientError;
 use shared_schema::{SkyNode, sky_node::SkyId};
+use tokio::sync::RwLock;
 use tracing::{debug, trace, warn};
 
-use crate::{entrypoint, quinn_transport};
+use crate::quinn_transport;
 
 #[derive(Clone)]
 pub struct KadHandler {
-    transport: quinn_transport::Transport,
+    cache: Arc<RwLock<Cache<sky_root::Method, as_sky::Method>>>,
 }
 
 impl From<quinn_transport::Transport> for KadHandler {
     fn from(transport: quinn_transport::Transport) -> Self {
-        Self { transport }
+        Self::new(transport)
     }
 }
 
 impl KadHandler {
     pub fn new(transport: quinn_transport::Transport) -> Self {
-        Self { transport }
+        Self {
+            cache: Arc::new(RwLock::new(Cache::new(transport, as_sky::Request::new()))),
+        }
     }
 
     /// Executes an async operation with exponential backoff retry logic.
@@ -34,7 +39,6 @@ impl KadHandler {
     /// - `operation`: The async function to execute
     /// - `default_value`: The value to return if all attempts fail
     async fn retry_with_backoff<F, Fut, T>(
-        &self,
         max_attempts: usize,
         mut operation: F,
         default_value: T,
@@ -79,24 +83,7 @@ impl KadHandler {
             trace!("returning early because we've heard from them recently");
             return Ok(());
         }
-        warn!("should reuse conns instead of making new conn for every ping req");
-        let conn = self
-            .transport
-            .connect(node)
-            .await
-            .map_err(ClientError::Transport)?;
-
-        let login: Wrapper<entrypoint::Method, _> = Wrapper::new(conn);
-
-        let sky_root: Wrapper<sky_root::Method, _> = login
-            .query::<as_sky::Method>(as_sky::Request::new())
-            .await
-            .map_err(ClientError::from_caller)?
-            .map_res(|res| match res {
-                as_sky::Response::Ok(method_wrapper) => method_wrapper,
-                as_sky::Response::Invalid(_method_wrapper) => unimplemented!(),
-            })
-            .into();
+        let sky_root = self.get_sky_root(node).await?;
 
         sky_root
             .query_loopback::<sky_root::Method>(shared_schema::ping::Request.into())
@@ -106,6 +93,39 @@ impl KadHandler {
         node.reset_last_reached_at();
         Ok(())
     }
+
+    async fn get_sky_root(
+        &self,
+        remote: &SkyNode,
+    ) -> Result<
+        Arc<Wrapper<sky_root::Method, quinn_transport::Caller>>,
+        ClientError<quinn_transport::Error, Infallible>,
+    > {
+        let mut cache = self.cache.read().await;
+
+        loop {
+            match cache
+                .try_connect(remote, &mut |res| match res {
+                    as_sky::Response::Ok(sky_root) => Some(sky_root),
+                    as_sky::Response::Invalid(_method_wrapper) => None,
+                })
+                .await
+            {
+                Ok(v) => break Ok(v),
+                Err(cache::ConnectError::MissingNodeEntry(_)) => {
+                    drop(cache);
+                    self.cache.write().await.insert_node_entry(remote);
+                    cache = self.cache.read().await;
+                }
+                Err(cache::ConnectError::Caller(e)) => {
+                    break Err(ClientError::from_caller(e));
+                }
+                Err(cache::ConnectError::LoginFailed) => {
+                    todo!("handle a login failure for sky-to-sky")
+                }
+            }
+        }
+    }
     #[tracing::instrument(skip(self))]
     async fn try_find_node(
         &self,
@@ -113,23 +133,7 @@ impl KadHandler {
         to: &SkyNode,
         address: &kademlia::Id<32>,
     ) -> Result<Vec<SkyNode>, ClientError<quinn_transport::Error, Infallible>> {
-        warn!("should reuse conns instead of making new conn for every find_node req");
-        let conn = self
-            .transport
-            .connect(to)
-            .await
-            .map_err(ClientError::Transport)?;
-
-        let login: Wrapper<entrypoint::Method, quinn_transport::Caller> = Wrapper::new(conn);
-        let sky_root: Wrapper<sky_root::Method, _> = login
-            .query::<as_sky::Method>(as_sky::Request::new())
-            .await
-            .map_err(ClientError::from_caller)?
-            .map_res(|res| match res {
-                as_sky::Response::Ok(method_wrapper) => method_wrapper,
-                as_sky::Response::Invalid(_method_wrapper) => unimplemented!(),
-            })
-            .into();
+        let sky_root = self.get_sky_root(to).await?;
 
         let nodes = sky_root
             .query_loopback::<super::Method>(super::Request {
@@ -161,7 +165,7 @@ impl kademlia::RequestHandler<SkyNode, 32> for KadHandler {
     #[tracing::instrument(skip(self))]
     async fn ping(&self, from: &SkyNode, node: &SkyNode) -> bool {
         trace!("handling ping");
-        self.retry_with_backoff(
+        Self::retry_with_backoff(
             2,
             || async { self.try_ping(from.clone(), node).await.map(|_| true) },
             false,
@@ -176,7 +180,6 @@ impl kademlia::RequestHandler<SkyNode, 32> for KadHandler {
         address: &kademlia::Id<32>,
     ) -> Vec<SkyNode> {
         trace!("finding node");
-        self.retry_with_backoff(3, || self.try_find_node(from, to, address), vec![])
-            .await
+        Self::retry_with_backoff(3, || self.try_find_node(from, to, address), vec![]).await
     }
 }
