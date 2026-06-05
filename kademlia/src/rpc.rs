@@ -4,7 +4,7 @@ use futures::{prelude::*, stream::FuturesUnordered};
 // sync is runtime agnostic;
 // see https://docs.rs/tokio/latest/tokio/sync/index.html#runtime-compatibility
 use tokio::sync::{RwLock, RwLockWriteGuard, Semaphore};
-use tracing::{Instrument, debug, info, instrument, trace, trace_span};
+use tracing::{Instrument, debug, instrument, trace, trace_span};
 
 use crate::{Distance, DistancePair, HasId, Id, RequestHandler, RoutingTable, traits::NodeStatus};
 
@@ -244,9 +244,9 @@ impl<
     /// [`RoutingTable`].
     #[instrument(skip_all)]
     pub async fn add_nodes(&self, nodes: impl IntoIterator<Item = Node>) {
-        info!("acquiring add_nodes semaphore");
+        trace!("acquiring add_nodes semaphore");
         let sem_lock = self.free_up_space.acquire().await.unwrap();
-        info!("starting add_nodes");
+        trace!("starting add_nodes");
         // first remove unreachable siblings list nodes
         let remove_set = {
             let read_lock = self.routing_table.read().await;
@@ -276,6 +276,7 @@ impl<
                 .into_iter()
                 .collect()
         };
+        trace!("dropped semaphore lock");
         drop(sem_lock);
 
         // collect pairs into buckets

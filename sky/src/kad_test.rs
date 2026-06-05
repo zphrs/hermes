@@ -13,8 +13,8 @@ use shared_schema::{EarthNode, SkyNode, earth_node::EarthId};
 use tracing::{Instrument, info, info_span, instrument::WithSubscriber, trace, warn};
 
 use crate::{
-    api::sky_root, client::SkyClient, entrypoint::as_sky, get_system_time::since_epoch,
-    quinn_transport::Transport, server::SkyServer, tokio_uptime,
+    client::SkyClient, get_system_time::since_epoch, quinn_transport::Transport, server::SkyServer,
+    tokio_uptime,
 };
 
 #[test]
@@ -51,8 +51,8 @@ fn kad() {
             spawned_so_far += round_size;
         }
         // spawn fixed sized rounds (finished bootstrapping)
-        for _ in 0..2 {
-            let round_size = 100;
+        for _ in 0..10 {
+            let round_size = 300;
             let mut prev_bootstrap_addresses = machine_addresses.clone();
             for _ in 0..round_size {
                 let (sample_of_machine_addresses, _) =
@@ -78,7 +78,7 @@ fn kad() {
                 net,
                 sample_of_servers.into(),
                 machine_addresses.clone(),
-                EarthId::ZERO,
+                EarthId::from_array(rand::random()),
                 num_inited.clone(),
             );
             clients.push(client);
@@ -137,17 +137,12 @@ fn create_client(
                     .collect();
 
                 let sky_client = SkyClient::new(server_addrs);
-
-                let nearby_sky_id = nearby.to_sky_id(since_epoch()).into();
+                let nearby_sky_id = nearby.to_sky_id(since_epoch());
                 let span = info_span!("client_lookup");
                 let res = tokio::time::timeout(
                     Duration::from_secs(30),
                     sky_client
-                        .node_lookup(
-                            tp,
-                            EarthNode::new(EarthId::from_array(rand::random())),
-                            nearby.to_sky_id(since_epoch()),
-                        )
+                        .node_lookup(tp, EarthNode::new(EarthId::ZERO), nearby_sky_id.clone())
                         .instrument(span),
                 )
                 .await
@@ -157,12 +152,12 @@ fn create_client(
 
                 let mut all_server_addrs: Vec<_> = all_server_addrs
                     .into_iter()
-                    .map(|n| (n.id().xor_distance(&nearby_sky_id), n))
+                    .map(|n| (n.id().xor_distance(nearby_sky_id.id()), n))
                     .collect();
 
                 let mut res: Vec<_> = res
                     .into_iter()
-                    .map(|n| (n.id().xor_distance(&nearby_sky_id), n))
+                    .map(|n| (n.id().xor_distance(nearby_sky_id.id()), n))
                     .collect();
 
                 all_server_addrs.sort_by_key(|v| v.0.clone());

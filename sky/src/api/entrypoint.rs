@@ -1,10 +1,11 @@
+pub mod as_earth;
 pub mod as_sky;
 
 use std::{convert::Infallible, net::IpAddr};
 
 use maxlen::MaxLen;
 use rpc::MethodWrapper;
-use shared_schema::{EarthNode, SkyNode};
+use shared_schema::SkyNode;
 
 pub type Entrypoint = MethodWrapper<Method>;
 
@@ -13,12 +14,18 @@ pub enum Request {
     #[n(0)]
     Sky(#[n(0)] as_sky::Request),
     #[n(1)]
-    Earth(#[n(0)] EarthNode),
+    Earth(#[n(0)] as_earth::Request),
 }
 
 impl From<as_sky::Request> for Request {
     fn from(value: as_sky::Request) -> Self {
         Self::Sky(value)
+    }
+}
+
+impl From<as_earth::Request> for Request {
+    fn from(value: as_earth::Request) -> Self {
+        Self::Earth(value)
     }
 }
 

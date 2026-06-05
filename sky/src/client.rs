@@ -2,16 +2,16 @@ pub mod cache;
 mod sky_or_earth;
 pub use sky_or_earth::SkyOrEarth;
 use std::time::Duration;
+use tokio::sync::RwLock;
 
 pub use cache::Cache;
 
-use rpc::Transport;
 use shared_schema::{EarthNode, SkyNode, sky_node::SkyId};
 use tracing::{debug, instrument, warn};
 
 use crate::{
-    api::find_nodes,
-    entrypoint::{self, as_sky},
+    api::{earth_root, find_nodes},
+    entrypoint::as_earth,
     get_system_time::get_system_time,
     quinn_transport,
 };
@@ -21,7 +21,37 @@ pub struct SkyClient {
 }
 
 struct Handler {
-    transport: quinn_transport::Transport,
+    cache: RwLock<cache::Cache<earth_root::Method, as_earth::Method>>,
+}
+
+impl Handler {
+    async fn get_sky_root<'a>(
+        &self,
+        remote: &'a SkyNode,
+    ) -> Result<
+        std::sync::Arc<Wrapper<earth_root::Method, quinn_transport::Caller>>,
+        cache::ConnectError<'a>,
+    > {
+        {
+            let mut this = self.cache.read().await;
+            let mut handle_req = |v| match v {
+                as_earth::Response::Ok(method_wrapper) => Some(method_wrapper),
+            };
+            async move {
+                loop {
+                    match this.try_connect(remote, &mut handle_req).await {
+                        Err(cache::ConnectError::MissingNodeEntry(_)) => {
+                            drop(this);
+                            self.cache.write().await.insert_node_entry(remote);
+                            this = self.cache.read().await;
+                        }
+                        res => return res,
+                    }
+                }
+            }
+        }
+        .await
+    }
 }
 
 use rpc::client_conn::Wrapper;
@@ -51,22 +81,10 @@ impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
         }
 
         debug!("pinging");
-        warn!("should reuse conns instead of making new conn for every ping req");
-        let Ok(conn) = self.transport.connect(sky_node).await else {
+
+        let Ok(sky_root) = self.get_sky_root(sky_node).await else {
             return false;
         };
-
-        let login: Wrapper<entrypoint::Method, _> = Wrapper::new(conn);
-        let Ok(v) = login.query::<as_sky::Method>(Default::default()).await else {
-            return false;
-        };
-
-        let sky_root: Wrapper<_, _> = v
-            .map_res(|res| match res {
-                as_sky::Response::Ok(method_wrapper) => method_wrapper,
-                as_sky::Response::Invalid(_method_wrapper) => unimplemented!(),
-            })
-            .into();
 
         let reached_node = sky_root
             .query_loopback::<shared_schema::ping::Method>(shared_schema::ping::Request)
@@ -89,22 +107,10 @@ impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
         let Some(to) = to.as_sky() else {
             return vec![]; // this is a client for the sky, doesn't make sense to find through earth nodes
         };
-        warn!("should reuse conns instead of making new conn for every ping req");
-        let Ok(conn) = self.transport.connect(to).await else {
+
+        let Ok(sky_root) = self.get_sky_root(to).await else {
             return vec![];
         };
-
-        let login: Wrapper<entrypoint::Method, _> = Wrapper::new(conn);
-        let Ok(v) = login.query::<as_sky::Method>(Default::default()).await else {
-            return vec![];
-        };
-
-        let sky_root: Wrapper<_, _> = v
-            .map_res(|res| match res {
-                as_sky::Response::Ok(method_wrapper) => method_wrapper,
-                as_sky::Response::Invalid(_method_wrapper) => unimplemented!(),
-            })
-            .into();
 
         let Ok(v) = sky_root
             .query_loopback::<find_nodes::Method>(find_nodes::Request {
@@ -132,7 +138,9 @@ impl SkyClient {
     ) -> Vec<SkyNode> {
         debug!("looking up node");
         let table = kademlia::RpcManager::<SkyOrEarth, _, 32, 1>::new(
-            Handler { transport: tp },
+            Handler {
+                cache: RwLock::new(Cache::new(tp, as_earth::Request::new(from.clone()))),
+            },
             (from, get_system_time()).into(),
         );
         table

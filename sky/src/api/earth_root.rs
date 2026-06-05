@@ -15,6 +15,18 @@ pub enum Request {
     FindNodes(#[n(0)] find_nodes::Request),
 }
 
+impl From<find_nodes::Request> for Request {
+    fn from(value: find_nodes::Request) -> Self {
+        Self::FindNodes(value)
+    }
+}
+
+impl From<shared_schema::ping::Request> for Request {
+    fn from(value: shared_schema::ping::Request) -> Self {
+        Self::Ping(value)
+    }
+}
+
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 #[cbor(flat)]
 pub enum Response {
