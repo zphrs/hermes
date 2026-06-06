@@ -1,7 +1,9 @@
-mod cache;
+pub mod cache;
 mod sky_or_earth;
 pub use sky_or_earth::SkyOrEarth;
 use std::time::Duration;
+
+pub use cache::Cache;
 
 use rpc::Transport;
 use shared_schema::{EarthNode, SkyNode, sky_node::SkyId};
