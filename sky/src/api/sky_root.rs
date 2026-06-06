@@ -6,7 +6,7 @@ use maxlen::MaxLen;
 use rpc::MethodWrapper;
 use shared_schema::SkyNode;
 
-use super::find_nodes::{KadRpcManager};
+use super::find_nodes::KadRpcManager;
 
 use super::find_nodes;
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
@@ -61,7 +61,7 @@ impl std::fmt::Debug for Method {
 impl Method {
     pub fn new(rpc_manager: &KadRpcManager, from: SkyNode) -> Self {
         Self {
-            find_nodes: find_nodes::Method::from_manager(rpc_manager, Some(from)),
+            find_nodes: find_nodes::Method::new(rpc_manager, Some(from)),
         }
     }
 }

@@ -53,7 +53,7 @@ pub struct Method {
 }
 
 impl<'a> Method {
-    pub fn from_manager(rpc_manager: &KadRpcManager, from: Option<SkyNode>) -> Self {
+    pub fn new(rpc_manager: &KadRpcManager, from: Option<SkyNode>) -> Self {
         Self {
             rpc_manager: rpc_manager.clone().into_inner(),
             remote: from,

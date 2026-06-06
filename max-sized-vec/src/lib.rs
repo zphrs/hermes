@@ -10,6 +10,10 @@ impl<T, const N: usize> MaxSizedVec<T, N> {
         &self.0
     }
 
+    pub fn from_inner(inner: arrayvec::ArrayVec<T, N>) -> Self {
+        MaxSizedVec(inner)
+    }
+
     pub fn into_inner(self) -> arrayvec::ArrayVec<T, N> {
         self.0
     }

@@ -53,6 +53,7 @@
 use std::{
     borrow::Cow,
     net::{IpAddr, Ipv6Addr, SocketAddr},
+    time::{Duration, SystemTime},
 };
 
 use minicbor::CborLen;
@@ -141,6 +142,18 @@ where
 impl<T: MaxLen> MaxLen for Option<T> {
     fn biggest_instantiation() -> Self {
         Some(T::biggest_instantiation())
+    }
+}
+
+impl MaxLen for SystemTime {
+    fn biggest_instantiation() -> Self {
+        SystemTime::UNIX_EPOCH.checked_add(Duration::MAX).unwrap()
+    }
+}
+
+impl<A: MaxLen, B: MaxLen> MaxLen for (A, B) {
+    fn biggest_instantiation() -> Self {
+        (A::biggest_instantiation(), B::biggest_instantiation())
     }
 }
 
