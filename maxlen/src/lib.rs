@@ -87,7 +87,6 @@ pub use maxlen_derive::MaxLen;
 /// let instance = u32::biggest_instantiation();
 /// assert_eq!(instance, u32::MAX);
 /// ```
-static INIT_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub trait MaxLen
 where
     Self: CborLen<()> + Sized,
@@ -104,8 +103,6 @@ where
     /// This method creates the biggest instantiation and measures its encoded size.
     /// Use `max_len()` instead if you want caching.
     fn max_len_init() -> usize {
-        INIT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
         minicbor::len(Self::biggest_instantiation())
     }
 
