@@ -12,7 +12,6 @@ pub use api::entrypoint;
 mod get_system_time;
 #[cfg(test)]
 mod kad_test;
-pub mod node;
 #[cfg(test)]
 mod tokio_uptime;
 

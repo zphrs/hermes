@@ -1,6 +1,6 @@
 use std::{convert::Infallible, time::Duration};
 
-use rpc::{ClientError, Transport as _, transport::Client as _};
+use rpc::{ClientError, Transport as _};
 use shared_schema::SkyNode;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{Instrument as _, info, info_span, instrument::WithSubscriber as _, trace};
