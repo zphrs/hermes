@@ -86,7 +86,7 @@ impl KadHandler {
         let sky_root = self.get_sky_root(node).await?;
 
         sky_root
-            .query_loopback::<sky_root::Method>(shared_schema::ping::Request.into())
+            .query_loopback::<shared_schema::ping::Method>(shared_schema::ping::Request)
             .await
             .map_err(ClientError::from_caller)?;
 

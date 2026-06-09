@@ -34,15 +34,10 @@ impl From<shared_schema::ping::Request> for Request {
     }
 }
 
-#[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-#[cbor(flat)]
 pub enum Response {
-    #[n(0)]
-    Ping(#[cbor(skip)] LoopbackMethod),
-    #[n(1)]
-    FindNodes(#[n(0)] find_nodes::Response, #[cbor(skip)] LoopbackMethod),
-    #[n(2)]
-    Register(#[n(0)] register::Response),
+    Ping(LoopbackMethod),
+    FindNodes(find_nodes::Response, LoopbackMethod),
+    Register(register::Response),
 }
 
 impl From<Response> for LoopbackMethod {
@@ -91,7 +86,11 @@ impl rpc::Call for Method {
         value: Self::Req,
     ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>> {
         Ok(match value {
-            Request::Ping(_request) => replier.reply(Response::Ping(Default::default())).await?,
+            Request::Ping(request) => replier
+                .change_method(&request)
+                .reply_with(&mut shared_schema::ping::Method, request)
+                .await?
+                .map(|_res| Response::Ping(Default::default())),
             Request::FindNodes(find_nodes_request) => replier
                 .change_method(&find_nodes_request)
                 .reply_with(&mut self.find_nodes, find_nodes_request)
