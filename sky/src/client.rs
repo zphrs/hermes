@@ -73,7 +73,7 @@ impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
     #[instrument(skip(self))]
     async fn ping(&self, from: &SkyOrEarth, node: &SkyOrEarth) -> bool {
         let Some(sky_node) = node.as_sky() else {
-            warn!("earth lookup");
+            warn!("unexpected earth ping request");
             return false; // this is a client for the sky, doesn't make sense to ping an earth node
         };
         if sky_node.last_reached_at().elapsed() < Duration::from_secs(60) {
@@ -105,7 +105,8 @@ impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
     ) -> Vec<SkyOrEarth> {
         debug!("finding node");
         let Some(to) = to.as_sky() else {
-            return vec![]; // this is a client for the sky, doesn't make sense to find through earth nodes
+            warn!("unexpected earth find_node request");
+            return vec![]; // this is a client for the sky, doesn't make sense to query earth nodes
         };
 
         let Ok(sky_root) = self.get_sky_root(to).await else {
@@ -139,7 +140,7 @@ impl SkyClient {
         debug!("looking up node");
         let table = kademlia::RpcManager::<SkyOrEarth, _, 32, 1>::new(
             Handler {
-                cache: RwLock::new(Cache::new(tp, as_earth::Request::new(from.clone()))),
+                cache: RwLock::new(Cache::new(tp, from.clone())),
             },
             (from, get_system_time()).into(),
         );

@@ -5,13 +5,18 @@ use shared_schema::SkyNode;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{Instrument as _, info, info_span, instrument::WithSubscriber as _, trace};
 
-use crate::{api::find_nodes::KadRpcManager, entrypoint::as_sky, quinn_transport};
+use crate::{
+    api::{earth_root::register::OnlineNodes, find_nodes::KadRpcManager},
+    entrypoint::{as_earth, as_sky},
+    quinn_transport,
+};
 use rpc::server_conn::Wrapper;
 
 #[derive(Clone)]
 pub struct SkyServer {
     manager: KadRpcManager,
     transport: quinn_transport::Transport,
+    online_nodes: OnlineNodes,
 }
 
 impl SkyServer {
@@ -25,11 +30,12 @@ impl SkyServer {
         Ok(Self {
             manager,
             transport: tp,
+            online_nodes: OnlineNodes::new(),
         })
     }
 
-    pub fn into_parts(self) -> (KadRpcManager, quinn_transport::Transport) {
-        (self.manager, self.transport)
+    pub fn into_parts(self) -> (KadRpcManager, quinn_transport::Transport, OnlineNodes) {
+        (self.manager, self.transport, self.online_nodes)
     }
     pub async fn add_nodes(&self, nodes: Vec<SkyNode>) {
         self.manager.inner().add_nodes(nodes).await;
@@ -65,7 +71,7 @@ impl SkyServer {
     pub fn run(&self) -> JoinHandle<Result<(), ClientError<quinn_transport::Error, Infallible>>> {
         self.run_refresh_loop();
 
-        let (manager, tp) = self.clone().into_parts();
+        let (manager, tp, online_nodes) = self.clone().into_parts();
 
         let jh = tokio::task::spawn(
             async move {
@@ -76,10 +82,12 @@ impl SkyServer {
                     let incoming_client: quinn_transport::Incoming =
                         tp.accept().await.map_err(ClientError::Transport)?;
                     let manager = manager.clone();
+                    let online_nodes = online_nodes.clone();
                     let span = info_span!("handling request",
                         self_addr = %incoming_client.inner().local_ip().unwrap(),
                         client = %incoming_client.inner().remote_address()
                     );
+
                     js.spawn(
                         async move {
                             trace!("accepting {}", incoming_client.inner().remote_address());
@@ -95,26 +103,36 @@ impl SkyServer {
                                 conn.inner().remote_address().ip(),
                             );
                             let mut login = Wrapper::new(handler, conn);
-                            let ((actions, parts), sky_node) = loop {
+                            loop {
                                 let (res, parts) =
                                     login.handle_state_transition().await?.extract_res();
                                 use crate::entrypoint::Response::*;
                                 match res {
                                     Sky(as_sky::Response::Ok(actions), sky_node) => {
-                                        // continue on
-                                        break ((actions, parts), sky_node);
+                                        let handler =
+                                            crate::api::sky_root::Method::new(&manager, sky_node);
+                                        let logged_in =
+                                            Wrapper::from(parts.method_change(actions, handler));
+                                        logged_in.handle_loopback().await?;
+                                        return Ok(());
                                     }
                                     Sky(as_sky::Response::Invalid(loopback), _sky_node) => {
                                         // restore login from the parts
                                         login = Wrapper::from(parts.method_restore(loopback));
                                     }
+                                    Earth(as_earth::Response::Ok(actions), earth_node) => {
+                                        let handler = crate::api::earth_root::Method::new(
+                                            &manager,
+                                            earth_node,
+                                            online_nodes.clone(),
+                                        );
+                                        let logged_in =
+                                            Wrapper::from(parts.method_change(actions, handler));
+                                        logged_in.handle_loopback().await?;
+                                        return Ok(());
+                                    }
                                 }
-                            };
-                            let handler = crate::api::sky_root::Method::new(&manager, sky_node);
-                            let logged_in = Wrapper::from(parts.method_change(actions, handler));
-                            logged_in.handle_loopback().await?;
-
-                            Ok(())
+                            }
                         }
                         .instrument(span),
                     );

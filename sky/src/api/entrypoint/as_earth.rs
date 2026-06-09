@@ -4,16 +4,8 @@ use maxlen::MaxLen;
 use rpc::MethodWrapper;
 use shared_schema::EarthNode;
 
-/// Use new to construct this Request. No need to specify a SkyNode since one
-/// will be constructed on the server based on the IP address of the sender.
-#[derive(Debug, Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-pub struct Request(#[n(0)] EarthNode);
+pub type Request = EarthNode;
 
-impl Request {
-    pub fn new(node: EarthNode) -> Self {
-        Self(node)
-    }
-}
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Response {
     #[n(0)]
@@ -22,6 +14,12 @@ pub enum Response {
 
 #[derive(Debug)]
 pub struct Method;
+
+impl Method {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl rpc::Method for Method {
     type Req = Request;
