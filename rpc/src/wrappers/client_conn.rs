@@ -62,6 +62,7 @@ where
     ) -> Result<Parts<M::Res, Caller>, crate::transport::CallerError<Caller::Error>>
     where
         Method::Req: crate::RpcMessage + From<M::Req> + Send,
+        M::Res: crate::RpcMessage,
     {
         let Parts(wrapper, conn) = self.into_parts();
         Ok(Parts(wrapper.query::<M, _>(req, &conn).await?, conn))
@@ -77,6 +78,7 @@ where
         Method::Req: crate::RpcMessage + From<ParallelHandler::Req> + Send,
         Method::Req: From<M::Req>,
         MethodWrapper<Method>: From<ParallelHandler::Res>,
+        M::Res: crate::RpcMessage,
     {
         self.wrapper
             .query_loopback_child::<M, _, ParallelHandler>(req, &self.conn)
@@ -93,6 +95,7 @@ where
         Method::Req: crate::RpcMessage + From<Method::Req> + Send,
         Method::Req: From<M::Req>,
         MethodWrapper<Method>: From<Method::Res>,
+        M::Res: crate::RpcMessage,
     {
         self.wrapper.query_loopback::<M, _>(req, &self.conn).await
     }

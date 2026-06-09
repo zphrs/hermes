@@ -30,6 +30,7 @@ pub enum ConnectError<'a> {
 impl<Method: rpc::Method + Send, LoginMethod: rpc::Method> Cache<Method, LoginMethod>
 where
     Method::Req: rpc::RpcMessage,
+    LoginMethod::Res: rpc::RpcMessage,
     api::entrypoint::Request: From<LoginMethod::Req>,
     LoginMethod::Req: Clone,
 {

@@ -11,6 +11,7 @@ use futures::stream::FuturesUnordered;
 use maxlen::MaxLen;
 use tracing::trace;
 
+use crate::RpcMessage;
 use crate::transport::Caller;
 use crate::transport::Client;
 use crate::transport::ClientError;
@@ -76,6 +77,7 @@ impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
         Handler::Req: crate::RpcMessage + From<Handler::Req> + Send,
         Handler::Req: From<M::Req>,
         Self: From<Handler::Res>,
+        M::Res: RpcMessage,
     {
         caller.query::<M, Handler::Req>(req).await
     }
@@ -91,6 +93,7 @@ impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
         Handler::Req: crate::RpcMessage + From<ParallelHandler::Req> + Send,
         Handler::Req: From<M::Req>,
         Self: From<ParallelHandler::Res>,
+        M::Res: RpcMessage,
     {
         caller.query::<M, Handler::Req>(req).await
     }
@@ -102,6 +105,7 @@ impl<Handler: crate::Method + std::marker::Send> MethodWrapper<Handler> {
     ) -> Result<M::Res, crate::transport::CallerError<C::Error>>
     where
         Handler::Req: crate::RpcMessage + From<M::Req> + Send,
+        M::Res: RpcMessage,
     {
         caller.query::<M, Handler::Req>(req).await
     }

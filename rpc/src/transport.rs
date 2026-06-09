@@ -1,4 +1,5 @@
 mod caller;
+mod conn;
 mod replier;
 mod streams;
 

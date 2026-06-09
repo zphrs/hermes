@@ -4,6 +4,8 @@ use futures::AsyncWrite;
 use maxlen::MaxLen;
 use minicbor::CborLen as _;
 
+use crate::RpcMessage;
+
 /// Returned when you call [`reply`](Call::reply) on a [Method] that implements
 /// [Call].
 ///
@@ -62,7 +64,7 @@ impl<'a, T: AsyncWrite + Unpin + Send + Sync, Method: crate::Method + ?Sized>
         Output = Result<ReplyReceipt<Method::Res>, super::ClientError<TransportError, Error>>,
     > + Send
     where
-        Method::Res: Sync,
+        Method::Res: Sync + RpcMessage,
     {
         async {
             assert!(res.cbor_len(&mut ()) <= Method::Res::max_len());
