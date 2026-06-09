@@ -1,7 +1,9 @@
+mod bi_stream;
 mod caller;
 mod conn;
+pub mod in_memory_transport;
+pub use in_memory_transport::MemoryTransport;
 mod replier;
-mod streams;
 
 pub use conn::Connection;
 
@@ -11,8 +13,8 @@ use maxlen::MaxLen;
 use minicbor::Encode;
 use minicbor_io::AsyncWriter;
 
+pub use bi_stream::BiStream;
 pub use replier::{Replier, ReplyReceipt};
-pub use streams::BiStream;
 
 use crate::{Method, RpcError};
 #[derive(Debug, thiserror::Error)]

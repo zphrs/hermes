@@ -1,57 +1,22 @@
 use std::fmt::Debug;
 
-pub mod in_memory_transport;
 mod state_machine_transitions;
 #[cfg(test)]
 mod tests;
+pub mod traits;
 pub mod transport;
 mod wrappers;
+pub use traits::{Call, Method, RpcMessage};
 
 pub use wrappers::{client_conn, server_conn};
 
 pub use state_machine_transitions::{ConcurrentRequestHandler, MethodWrapper};
 
-pub use in_memory_transport::MemoryTransport;
+pub use transport::{MemoryTransport, in_memory_transport};
+
 // pub use state_machine_transitions::RootHandlerWrapper;
 
-use futures_io::{AsyncRead, AsyncWrite};
-
 pub use crate::transport::{Caller, CallerError, ClientError, Replier, ReplyReceipt, Transport};
-use minicbor::{Decode, Encode};
-
-pub trait RpcMessage: Debug + for<'a> Decode<'a, ()> + Encode<()> + maxlen::MaxLen {}
-
-impl<T> RpcMessage for T where T: Debug + for<'a> Decode<'a, ()> + Encode<()> + maxlen::MaxLen {}
-
-pub trait Method {
-    type Req: Send;
-    type Res: Send;
-    /// used to abort a reply midway through handling a request
-    type Error;
-}
-
-pub trait Call: Method {
-    fn call<T: AsyncWrite + Unpin + Send + Sync, TransportError>(
-        &mut self,
-        replier: crate::Replier<'_, T, Self>,
-        value: Self::Req,
-    ) -> impl Future<
-        Output = Result<ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>>,
-    > + Send;
-}
-
-pub trait IntoRoot<M: Method, Root> {
-    fn into_root(&self, req: M::Req) -> Root;
-}
-
-impl<M: Method, Root, T: ?Sized> IntoRoot<M, Root> for T
-where
-    Root: From<M::Req>,
-{
-    fn into_root(&self, req: M::Req) -> Root {
-        req.into()
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RpcError {
@@ -61,13 +26,4 @@ pub enum RpcError {
     MinicborIo(#[from] minicbor_io::Error),
     #[error("stream closed")]
     Closed,
-}
-
-pub trait StreamTypes {
-    // the error type
-    type Error: std::error::Error;
-
-    type RecvStream: AsyncRead;
-
-    type SendStream: AsyncWrite;
 }
