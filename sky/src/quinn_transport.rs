@@ -278,7 +278,7 @@ impl rpc::transport::Transport for Transport {
 
     type Error = Error;
 
-    type Caller = Caller;
+    type Caller = Connection;
     #[instrument(skip(self))]
     async fn connect(&self, to: &Self::Address) -> Result<Self::Caller, Self::Error> {
         Ok(self
@@ -288,7 +288,7 @@ impl rpc::transport::Transport for Transport {
             .into())
     }
 
-    type Client = Client;
+    type Client = Connection;
 
     async fn accept(&self) -> Result<Self::Incoming, Self::Error> {
         let incoming = self
@@ -324,10 +324,10 @@ impl From<quinn::Incoming> for Incoming {
 }
 
 impl rpc::transport::Incoming for Incoming {
-    type Client = Client;
+    type Client = Connection;
     type Error = Error;
     async fn accept(self) -> Result<Self::Client, Self::Error> {
-        Ok(Client::from(self.incoming.await?))
+        Ok(Connection::from(self.incoming.await?))
     }
 }
 
@@ -339,29 +339,29 @@ impl rpc::transport::Close for Transport {
 }
 
 #[derive(Clone)]
-pub struct Caller {
+pub struct Connection {
     conn: quinn::Connection,
 }
 
-impl rpc::transport::Close for Caller {
+impl rpc::transport::Close for Connection {
     async fn close(self) {
         self.conn.close(VarInt::from_u32(10), b"");
     }
 }
 
-impl From<quinn::Connection> for Caller {
+impl From<quinn::Connection> for Connection {
     fn from(conn: quinn::Connection) -> Self {
         Self { conn }
     }
 }
 
-impl BiStream for Caller {
+impl BiStream for Connection {
     type RecvStream = quinn::RecvStream;
 
     type SendStream = quinn::SendStream;
 }
 
-impl rpc::transport::Caller for Caller {
+impl rpc::transport::Caller for Connection {
     type Error = Error;
 
     async fn open_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
@@ -369,45 +369,17 @@ impl rpc::transport::Caller for Caller {
     }
 }
 
-#[derive(Clone)]
-pub struct Client {
-    conn: quinn::Connection,
-}
-
-impl Client {
+impl Connection {
     pub fn inner(&self) -> &quinn::Connection {
         &self.conn
     }
 }
 
-impl Caller {
-    pub fn inner(&self) -> &quinn::Connection {
-        &self.conn
-    }
-}
-
-impl From<quinn::Connection> for Client {
-    fn from(conn: quinn::Connection) -> Self {
-        Self { conn }
-    }
-}
-
-impl BiStream for Client {
-    type RecvStream = quinn::RecvStream;
-    type SendStream = quinn::SendStream;
-}
-
-impl rpc::transport::Client for Client {
+impl rpc::transport::Client for Connection {
     type Error = Error;
 
     async fn accept_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
         Ok(self.conn.accept_bi().await?)
-    }
-}
-
-impl rpc::transport::Close for Client {
-    async fn close(self) {
-        self.conn.close(VarInt::from_u32(20), b"");
     }
 }
 

@@ -168,9 +168,6 @@ impl<Address: Send + Sync> crate::transport::Caller for Connection<Address> {
     }
 }
 
-pub type Client<Address = [u8; 16]> = Connection<Address>;
-pub type Caller<Address = [u8; 16]> = Connection<Address>;
-
 pub struct RecvStream {
     inner: tokio::sync::mpsc::Receiver<bytes::Bytes>,
     leftover_bytes: bytes::Bytes,

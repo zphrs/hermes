@@ -11,7 +11,8 @@ use crate::{
 
 pub struct Cache<Method: rpc::Method, LoginMethod: rpc::Method> {
     tp: Transport,
-    cache: HashMap<SkyNode, Mutex<Option<Arc<Wrapper<Method, crate::quinn_transport::Caller>>>>>,
+    cache:
+        HashMap<SkyNode, Mutex<Option<Arc<Wrapper<Method, crate::quinn_transport::Connection>>>>>,
     login_request: LoginMethod::Req,
     _marker: PhantomData<LoginMethod>,
 }
@@ -48,7 +49,7 @@ where
         &self,
         node: &'a SkyNode,
         handle_req: &mut impl FnMut(LoginMethod::Res) -> Option<MethodWrapper<Method>>,
-    ) -> Result<Arc<Wrapper<Method, crate::quinn_transport::Caller>>, ConnectError<'a>> {
+    ) -> Result<Arc<Wrapper<Method, crate::quinn_transport::Connection>>, ConnectError<'a>> {
         let mut entry_lock = self
             .cache
             .get(node)
@@ -92,7 +93,7 @@ where
         &mut self,
         node: &'a SkyNode,
         mut handle_req: impl FnMut(LoginMethod::Res) -> Option<MethodWrapper<Method>>,
-    ) -> Result<Arc<Wrapper<Method, crate::quinn_transport::Caller>>, ConnectError<'a>> {
+    ) -> Result<Arc<Wrapper<Method, crate::quinn_transport::Connection>>, ConnectError<'a>> {
         loop {
             match self.try_connect(node, &mut handle_req).await {
                 Err(ConnectError::MissingNodeEntry(_)) => self.insert_node_entry(node),

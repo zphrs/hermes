@@ -98,7 +98,7 @@ impl KadHandler {
         &self,
         remote: &SkyNode,
     ) -> Result<
-        Arc<Wrapper<sky_root::Method, quinn_transport::Caller>>,
+        Arc<Wrapper<sky_root::Method, quinn_transport::Connection>>,
         ClientError<quinn_transport::Error, Infallible>,
     > {
         let mut cache = self.cache.read().await;

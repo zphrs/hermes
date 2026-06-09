@@ -29,7 +29,7 @@ impl Handler {
         &self,
         remote: &'a SkyNode,
     ) -> Result<
-        std::sync::Arc<Wrapper<earth_root::Method, quinn_transport::Caller>>,
+        std::sync::Arc<Wrapper<earth_root::Method, quinn_transport::Connection>>,
         cache::ConnectError<'a>,
     > {
         {

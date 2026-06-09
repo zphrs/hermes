@@ -3,6 +3,8 @@ mod conn;
 mod replier;
 mod streams;
 
+pub use conn::Connection;
+
 pub use caller::Caller;
 
 use maxlen::MaxLen;
