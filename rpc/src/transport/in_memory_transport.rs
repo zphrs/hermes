@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
+    future::Future,
     hash::Hash,
     sync::{Arc, Mutex},
     task::{Poll, ready},
@@ -11,8 +12,10 @@ use futures::AsyncRead;
 
 type StreamChannelTx = tokio::sync::mpsc::Sender<(SendStream, RecvStream)>;
 type StreamChannelRx = tokio::sync::mpsc::Receiver<(SendStream, RecvStream)>;
-type IncomingChannelTx<Address> = tokio::sync::mpsc::Sender<(Address, StreamChannelRx)>;
-type IncomingChannelRx<Address> = tokio::sync::mpsc::Receiver<(Address, StreamChannelRx)>;
+type IncomingChannelTx<Address> =
+    tokio::sync::mpsc::Sender<(Address, StreamChannelRx, StreamChannelTx)>;
+type IncomingChannelRx<Address> =
+    tokio::sync::mpsc::Receiver<(Address, StreamChannelRx, StreamChannelTx)>;
 
 #[derive(Clone)]
 pub struct Network<Address = [u8; 16]> {
@@ -64,13 +67,16 @@ where
 
 impl<Address> crate::transport::Transport for MemoryTransport<Address>
 where
-    Address: Eq + Hash + Copy + std::marker::Sync + std::marker::Send,
+    Address: Eq + Hash + Copy,
 {
     type Address = Address;
     type Error = Infallible;
     type Caller = Connection<Address>;
 
-    async fn connect(&self, to: &Self::Address) -> Result<Self::Caller, Self::Error> {
+    fn connect(
+        &self,
+        to: &Self::Address,
+    ) -> impl Future<Output = Result<Self::Caller, Self::Error>> {
         let tx = self
             .network
             .registry
@@ -79,32 +85,45 @@ where
             .get(to)
             .cloned()
             .expect("Peer not found");
-        let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(1024);
-        let _ = tx.send((self.address, stream_rx)).await;
-        Ok(Connection {
-            stream_tx: Some(stream_tx),
-            stream_rx: None,
-            remote_addr: *to,
-            local_addr: self.address,
-        })
+        let local_addr = self.address;
+        let remote_addr = *to;
+        async move {
+            // caller -> server channel (caller opens streams to server)
+            let (c2s_stream_tx, c2s_stream_rx) = tokio::sync::mpsc::channel(1024);
+            // server -> caller channel (server opens streams to caller)
+            let (s2c_stream_tx, s2c_stream_rx) = tokio::sync::mpsc::channel(1024);
+            let _ = tx.send((local_addr, c2s_stream_rx, s2c_stream_tx)).await;
+            Ok(Connection {
+                stream_tx: Some(c2s_stream_tx),
+                stream_rx: Some(Arc::new(tokio::sync::Mutex::new(s2c_stream_rx))),
+                remote_addr,
+                local_addr,
+            })
+        }
     }
 
     type Client = Connection<Address>;
     type Incoming = Incoming<Address>;
 
-    async fn accept(&self) -> Result<Self::Incoming, Self::Error> {
-        Ok(Incoming {
-            rx: self.incoming_rx.clone(),
-            local_addr: self.address,
-        })
+    fn accept(&self) -> impl Future<Output = Result<Self::Incoming, Self::Error>> {
+        let rx = self.incoming_rx.clone();
+        let local_addr = self.address;
+        async move { Ok(Incoming { rx, local_addr }) }
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Connection<Address = [u8; 16]> {
     stream_tx: Option<StreamChannelTx>,
     stream_rx: Option<Arc<tokio::sync::Mutex<StreamChannelRx>>>,
     remote_addr: Address,
     local_addr: Address,
+}
+
+impl<T: PartialEq> PartialEq for Connection<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.remote_addr == other.remote_addr && self.local_addr == other.local_addr
+    }
 }
 
 impl<Address> Connection<Address> {
@@ -122,7 +141,7 @@ impl<Address> crate::transport::BiStream for Connection<Address> {
     type SendStream = SendStream;
 }
 
-impl<Address: Send + Sync> crate::transport::Client for Connection<Address> {
+impl<Address> crate::transport::Client for Connection<Address> {
     type Error = std::io::Error;
 
     async fn accept_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
@@ -141,7 +160,7 @@ impl<Address: Send + Sync> crate::transport::Client for Connection<Address> {
     }
 }
 
-impl<Address: Send + Sync> crate::transport::Caller for Connection<Address> {
+impl<Address> crate::transport::Caller for Connection<Address> {
     type Error = Infallible;
 
     async fn open_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
@@ -239,20 +258,20 @@ pub struct Incoming<Address = [u8; 16]> {
     local_addr: Address,
 }
 
-impl<Address: Send + Sync> crate::transport::Incoming for Incoming<Address> {
+impl<Address> crate::transport::Incoming for Incoming<Address> {
     type Client = Connection<Address>;
     type Error = std::io::Error;
 
     async fn accept(self) -> Result<Self::Client, Self::Error> {
-        let (remote_addr, stream_rx) = self
+        let (remote_addr, stream_rx, stream_tx) = self
             .rx
-            .lock()
+            .lock_owned()
             .await
             .recv()
             .await
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))?;
         Ok(Connection {
-            stream_tx: None,
+            stream_tx: Some(stream_tx),
             stream_rx: Some(Arc::new(tokio::sync::Mutex::new(stream_rx))),
             remote_addr,
             local_addr: self.local_addr,

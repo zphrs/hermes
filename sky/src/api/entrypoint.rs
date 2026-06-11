@@ -52,17 +52,18 @@ impl rpc::Method for Method {
     type Error = Infallible;
 }
 
-impl rpc::Call for Method {
-    async fn call<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+impl rpc::Handler for Method {
+    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
         &mut self,
-        replier: rpc::Replier<'_, T, Self>,
+        replier: rpc::ImmediateReplier<'_, T, Self>,
         value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>> {
+    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>>
+    {
         Ok(match value {
             Request::Sky(mut request) => {
                 request.set_sky_node(self.peer_ip);
                 as_sky::Method
-                    .call(replier.change_method(&request), request)
+                    .handle(replier.change_method(&request), request)
                     .await?
                     .map(|v| Response::Sky(v, SkyNode::from(self.peer_ip)))
             }

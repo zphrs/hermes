@@ -1,13 +1,19 @@
-use futures::AsyncWrite;
+use crate::transport::ReplyHelper;
 
-use crate::{Method, ReplyReceipt};
+#[derive(Debug, thiserror::Error)]
+pub enum Error<Replier, Handler> {
+    #[error("Replier: {0}")]
+    Replier(Replier),
+    #[error("Handler: {0}")]
+    Handler(#[from] Handler),
+}
 
-pub trait Call: Method {
-    fn call<T: AsyncWrite + Unpin + Send + Sync, TransportError>(
+pub trait Handler<Method: crate::Method = Self> {
+    /// used to abort a reply midway through handling a request
+    type Error;
+    fn handle<Replier: ReplyHelper<Method>>(
         &mut self,
-        replier: crate::Replier<'_, T, Self>,
-        value: Self::Req,
-    ) -> impl Future<
-        Output = Result<ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>>,
-    > + Send;
+        replier: Replier,
+        value: Method::Req,
+    ) -> impl Future<Output = Result<Replier::Receipt<Method>, Error<Replier::Error, Self::Error>>>;
 }

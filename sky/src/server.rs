@@ -1,6 +1,6 @@
 use std::{convert::Infallible, time::Duration};
 
-use rpc::{ClientError, Transport as _};
+use rpc::{HandleOneRequestError, Transport as _};
 use shared_schema::SkyNode;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{Instrument as _, info, info_span, instrument::WithSubscriber as _, trace};
@@ -20,10 +20,10 @@ pub struct SkyServer {
 }
 
 impl SkyServer {
-    pub async fn new() -> Result<Self, ClientError<quinn_transport::Error, Infallible>> {
+    pub async fn new() -> Result<Self, HandleOneRequestError<quinn_transport::Error, Infallible>> {
         let tp = quinn_transport::Transport::self_signed_server()
             .await
-            .map_err(ClientError::Transport)?;
+            .map_err(HandleOneRequestError::Transport)?;
         let pub_addr = tp.inner().local_addr().unwrap();
         let manager = KadRpcManager::new(tp.clone(), pub_addr.ip().into());
 
@@ -68,19 +68,19 @@ impl SkyServer {
         );
     }
 
-    pub fn run(&self) -> JoinHandle<Result<(), ClientError<quinn_transport::Error, Infallible>>> {
+    pub fn run(&self) -> JoinHandle<Result<(), HandleOneRequestError<quinn_transport::Error, Infallible>>> {
         self.run_refresh_loop();
 
         let (manager, tp, online_nodes) = self.clone().into_parts();
 
         let jh = tokio::task::spawn(
             async move {
-                let mut js: JoinSet<Result<(), ClientError<quinn_transport::Error, Infallible>>> =
+                let mut js: JoinSet<Result<(), HandleOneRequestError<quinn_transport::Error, Infallible>>> =
                     JoinSet::new();
                 loop {
                     trace!("awaiting client");
                     let incoming_client: quinn_transport::Incoming =
-                        tp.accept().await.map_err(ClientError::Transport)?;
+                        tp.accept().await.map_err(HandleOneRequestError::Transport)?;
                     let manager = manager.clone();
                     let online_nodes = online_nodes.clone();
                     let span = info_span!("handling request",
@@ -96,7 +96,7 @@ impl SkyServer {
                                 Ok(v) => v,
                                 Err(e) => {
                                     info!("timing out...");
-                                    Err(e).map_err(ClientError::Transport)?
+                                    Err(e).map_err(HandleOneRequestError::Transport)?
                                 }
                             };
                             let handler = crate::api::entrypoint::Method::new(
@@ -139,7 +139,7 @@ impl SkyServer {
                     while let Some(result) = js.try_join_next() {
                         if let Err(e) = result.unwrap() {
                             match e {
-                                ClientError::Transport(quinn_transport::Error::Connection(
+                                HandleOneRequestError::Transport(quinn_transport::Error::Connection(
                                     quinn::ConnectionError::TimedOut,
                                 )) => {
                                     tracing::warn!("timed out!");

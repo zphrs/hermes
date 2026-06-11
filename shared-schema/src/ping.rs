@@ -18,12 +18,12 @@ impl rpc::Method for Method {
     type Error = Infallible;
 }
 
-impl rpc::Call for Method {
-    async fn call<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+impl rpc::Handler for Method {
+    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
         &mut self,
-        replier: rpc::Replier<'_, T, Self>,
+        replier: rpc::ImmediateReplier<'_, T, Self>,
         _value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>> {
+    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>> {
         replier.reply(Response).await
     }
 }

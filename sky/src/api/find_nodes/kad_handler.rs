@@ -7,7 +7,7 @@ use crate::entrypoint::as_sky;
 
 use rpc::client_conn::Wrapper;
 
-use rpc::ClientError;
+use rpc::HandleOneRequestError;
 use shared_schema::{SkyNode, sky_node::SkyId};
 use tokio::sync::RwLock;
 use tracing::{debug, trace, warn};
@@ -45,7 +45,7 @@ impl KadHandler {
     ) -> T
     where
         F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<T, ClientError<quinn_transport::Error, Infallible>>>,
+        Fut: std::future::Future<Output = Result<T, HandleOneRequestError<quinn_transport::Error, Infallible>>>,
     {
         for attempt in 0..max_attempts {
             // Sleep before retries (but not before the first attempt)
@@ -78,7 +78,7 @@ impl KadHandler {
         &self,
         _from: impl Into<shared_schema::Node>,
         node: &SkyNode,
-    ) -> Result<(), ClientError<quinn_transport::Error, Infallible>> {
+    ) -> Result<(), HandleOneRequestError<quinn_transport::Error, Infallible>> {
         if node.last_reached_at().elapsed() < Duration::from_secs(120) {
             trace!("returning early because we've heard from them recently");
             return Ok(());
@@ -88,7 +88,7 @@ impl KadHandler {
         sky_root
             .query_loopback::<shared_schema::ping::Method>(shared_schema::ping::Request)
             .await
-            .map_err(ClientError::from_caller)?;
+            .map_err(HandleOneRequestError::from_caller)?;
 
         node.reset_last_reached_at();
         Ok(())
@@ -99,7 +99,7 @@ impl KadHandler {
         remote: &SkyNode,
     ) -> Result<
         Arc<Wrapper<sky_root::Method, quinn_transport::Connection>>,
-        ClientError<quinn_transport::Error, Infallible>,
+        HandleOneRequestError<quinn_transport::Error, Infallible>,
     > {
         let mut cache = self.cache.read().await;
 
@@ -118,7 +118,7 @@ impl KadHandler {
                     cache = self.cache.read().await;
                 }
                 Err(cache::ConnectError::Caller(e)) => {
-                    break Err(ClientError::from_caller(e));
+                    break Err(HandleOneRequestError::from_caller(e));
                 }
                 Err(cache::ConnectError::LoginFailed) => {
                     todo!("handle a login failure for sky-to-sky")
@@ -132,7 +132,7 @@ impl KadHandler {
         _from: &SkyNode,
         to: &SkyNode,
         address: &kademlia::Id<32>,
-    ) -> Result<Vec<SkyNode>, ClientError<quinn_transport::Error, Infallible>> {
+    ) -> Result<Vec<SkyNode>, HandleOneRequestError<quinn_transport::Error, Infallible>> {
         let sky_root = self.get_sky_root(to).await?;
 
         let nodes = sky_root
@@ -145,7 +145,7 @@ impl KadHandler {
                 }
             })
             .await
-            .map_err(ClientError::from_caller)?;
+            .map_err(HandleOneRequestError::from_caller)?;
 
         Ok(nodes.into())
     }

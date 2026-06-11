@@ -2,20 +2,20 @@ use maxlen::MaxLen;
 use tracing::debug;
 
 use super::{BiStream, CallerError};
-use crate::{Method, RpcError, RpcMessage};
-use std::fmt::Debug;
+use crate::{Method, RpcMessage};
 
-pub trait Caller: Send + Sync + BiStream + Sized {
+pub trait Caller: BiStream + Sized {
     type Error;
     fn open_stream(
         &self,
-    ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> + Send;
+    ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>>;
 
-    fn query<M: Method, Root: RpcMessage + From<M::Req> + Send + Debug>(
+    fn query<M: Method, RootReq: RpcMessage>(
         &self,
         req: M::Req,
-    ) -> impl Future<Output = Result<M::Res, CallerError<Self::Error>>> + Send
+    ) -> impl Future<Output = Result<M::Res, CallerError<Self::Error>>>
     where
+        RootReq: From<M::Req>,
         M::Res: RpcMessage,
     {
         async {
@@ -23,9 +23,9 @@ pub trait Caller: Send + Sync + BiStream + Sized {
             debug!("sending query");
 
             {
-                let root: Root = req.into();
+                let root: RootReq = req.into();
                 let mut sender = minicbor_io::AsyncWriter::new(write);
-                sender.write(root).await.map_err(RpcError::from)?;
+                sender.write(root).await.map_err(CallerError::Minicbor)?;
                 // drops write here to indicate no more writes will occur
             }
             debug!("sent query");
@@ -36,8 +36,8 @@ pub trait Caller: Send + Sync + BiStream + Sized {
             let out = receiver
                 .read::<M::Res>()
                 .await
-                .map_err(RpcError::from)?
-                .ok_or(RpcError::Closed)?;
+                .map_err(CallerError::Minicbor)?
+                .ok_or(CallerError::Closed)?;
             debug!("received message");
             Ok(out)
         }

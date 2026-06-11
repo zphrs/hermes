@@ -72,12 +72,12 @@ impl<'a> Method<'a> {
     }
 }
 
-impl rpc::Call for Method<'_> {
-    async fn call<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+impl rpc::Handler for Method<'_> {
+    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
         &mut self,
-        replier: rpc::Replier<'_, T, Self>,
+        replier: rpc::ImmediateReplier<'_, T, Self>,
         value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::ClientError<TransportError, Self::Error>> {
+    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>> {
         replier.reply(self.call_inner(value)).await
     }
 }

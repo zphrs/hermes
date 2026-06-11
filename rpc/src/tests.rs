@@ -6,11 +6,9 @@ use tokio::task::JoinSet;
 use crate::{
     RpcError, Transport,
     in_memory_transport::{self, MemoryTransport},
-    transport::Caller,
-    transport::{Client, Incoming},
+    traits::method::can_transition::False,
+    transport::{self, Caller, Client, Incoming},
 };
-
-use crate::transport::ReplyReceipt;
 
 #[derive(
     Debug,
@@ -31,7 +29,7 @@ pub mod ping {
     use maxlen::MaxLen;
     use std::convert::Infallible;
 
-    use crate::transport::ReplyReceipt;
+    use crate::traits::method::can_transition;
     #[derive(
         Debug,
         minicbor_derive::Encode,
@@ -62,15 +60,17 @@ pub mod ping {
     impl crate::Method for Method {
         type Req = Request;
         type Res = Response;
-        type Error = Infallible;
+        type CanTransition = can_transition::False;
     }
 
-    impl crate::Call for Method {
-        async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
+    impl crate::Handler for Method {
+        type Error = Infallible;
+
+        async fn handle<Replier: crate::transport::ReplyHelper<Self>>(
             &mut self,
-            replier: crate::Replier<'_, T, Self>,
-            _value: Self::Req,
-        ) -> Result<ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>>
+            replier: Replier,
+            _value: <Self as crate::Method>::Req,
+        ) -> Result<Replier::Receipt<Self>, crate::traits::HandlerError<Replier::Error, Self::Error>>
         {
             replier.reply(Response).await
         }
@@ -79,6 +79,8 @@ pub mod ping {
 
 pub mod other_ping {
     use maxlen::MaxLen;
+
+    use crate::traits::method::can_transition;
 
     #[derive(
         Debug,
@@ -103,21 +105,19 @@ pub mod other_ping {
     impl crate::Method for Method {
         type Req = Request;
         type Res = Response;
-        type Error = std::convert::Infallible;
+        type CanTransition = can_transition::False;
     }
 
-    impl crate::Call for Method {
-        fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
+    impl crate::Handler for Method {
+        type Error = std::convert::Infallible;
+
+        async fn handle<Replier: crate::transport::ReplyHelper<Self>>(
             &mut self,
-            replier: crate::Replier<'_, T, Self>,
-            _value: Self::Req,
-        ) -> impl Future<
-            Output = Result<
-                crate::transport::ReplyReceipt<Self::Res>,
-                crate::ClientError<TransportError, Self::Error>,
-            >,
-        > + Send {
-            replier.reply(Response)
+            replier: Replier,
+            _value: <Self as crate::Method>::Req,
+        ) -> Result<Replier::Receipt<Self>, crate::traits::HandlerError<Replier::Error, Self::Error>>
+        {
+            replier.reply(Response).await
         }
     }
 }
@@ -128,8 +128,7 @@ impl crate::Method for RootHandler {
     type Req = Root;
 
     type Res = ();
-
-    type Error = Infallible;
+    type CanTransition = False;
 }
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
@@ -138,21 +137,22 @@ pub enum Error {
     Rpc(#[from] RpcError),
 }
 
-impl crate::Call for RootHandler {
-    async fn call<T: futures::AsyncWrite + Unpin + Send + Sync, TransportError>(
+impl crate::Handler for RootHandler {
+    type Error = Infallible;
+
+    async fn handle<Replier: transport::ReplyHelper<Self>>(
         &mut self,
-        replier: crate::Replier<'_, T, Self>,
-        value: Self::Req,
-    ) -> Result<ReplyReceipt<Self::Res>, crate::ClientError<TransportError, Self::Error>> {
+        replier: Replier,
+        value: <Self as crate::Method>::Req,
+    ) -> Result<Replier::Receipt<Self>, crate::traits::HandlerError<Replier::Error, Self::Error>>
+    {
         match value {
-            Root::Ping(request) => Ok(ping::Method
-                .call(replier.change_method(&request), request)
-                .await?
-                .clear()),
-            Root::Other(request) => Ok(other_ping::Method
-                .call(replier.change_method(&request), request)
-                .await?
-                .clear()),
+            Root::Ping(request) => Ok(replier
+                .reply_with(&mut ping::Method, request, |_v| ())
+                .await?),
+            Root::Other(request) => Ok(replier
+                .reply_with(&mut other_ping::Method, request, |_v| ())
+                .await?),
         }
     }
 }

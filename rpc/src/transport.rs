@@ -10,92 +10,92 @@ pub use conn::Connection;
 pub use caller::Caller;
 
 use maxlen::MaxLen;
-use minicbor::Encode;
 use minicbor_io::AsyncWriter;
 
 pub use bi_stream::BiStream;
-pub use replier::{Replier, ReplyReceipt};
+pub use replier::{ImmediateReplier, ReplyHelper, ReplyReceipt};
 
-use crate::{Method, RpcError};
 #[derive(Debug, thiserror::Error)]
 pub enum CallerError<T> {
-    #[error("rpc: {0}")]
-    Rpc(#[from] RpcError),
     #[error("transport: {0}")]
     Transport(T),
+    #[error("io: {0}")]
+    Io(std::io::Error),
+    #[error("connection closed")]
+    Closed,
+    #[error("misc. minicbor_io error: {0}")]
+    Minicbor(minicbor_io::Error),
 }
 
-use std::fmt::Debug;
+use std::{fmt::Debug, io::ErrorKind};
 #[derive(Debug, thiserror::Error)]
-pub enum ClientError<T, E> {
-    #[error("rpc: {0}")]
-    Rpc(RpcError),
-    #[error("transport: {0}")]
-    Transport(T),
+pub enum HandleOneRequestError<R, E> {
+    #[error("replier: {0}")]
+    Replier(R),
     #[error("app: {0}")]
-    App(#[from] E),
+    App(E),
 }
 
-impl<T, E> ClientError<T, E> {
-    pub fn from_caller(err: CallerError<T>) -> Self {
-        match err {
-            CallerError::Rpc(rpc_error) => Self::Rpc(rpc_error),
-            CallerError::Transport(t) => Self::Transport(t),
+impl<R, E> From<crate::traits::HandlerError<R, E>> for HandleOneRequestError<R, E> {
+    fn from(value: crate::traits::HandlerError<R, E>) -> Self {
+        match value {
+            crate::traits::HandlerError::Replier(r) => Self::Replier(r),
+            crate::traits::HandlerError::Handler(h) => Self::App(h),
         }
     }
 }
 
-pub trait Client: Send + Sync + BiStream {
-    type Error: Send;
+pub trait Client: BiStream {
+    type Error;
     fn accept_stream(
         &self,
-    ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> + Send;
-
-    fn handle_one_request<'a, Rh: crate::Call + 'a + std::marker::Send>(
-        &'a self,
-        stream: &mut (Self::SendStream, Self::RecvStream),
-        handler: &mut Rh,
-    ) -> impl Future<Output = Result<Rh::Res, ClientError<Self::Error, Rh::Error>>> + Send
+    ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>>;
+    // uses lifetime here to make it obvious that self is not captured in the
+    // returned future.
+    fn handle_one_request<'a, Method: crate::Method, Rh: crate::Handler<Method>>(
+        &self,
+        stream: &'a mut (Self::SendStream, Self::RecvStream),
+        handler: &'a mut Rh,
+    ) -> impl Future<
+        Output = Result<Method::Res, HandleOneRequestError<minicbor_io::Error, Rh::Error>>,
+    > + 'a
     where
-        Rh::Error: Send,
-        <Self as BiStream>::SendStream: Sync,
-        Rh::Req: Debug,
-        <Rh as Method>::Req: crate::RpcMessage,
+        Method::Req: crate::RpcMessage,
     {
         async move {
             let (write, read) = stream;
             let mut receiver = minicbor_io::AsyncReader::new(read);
 
-            receiver.set_max_len(Rh::Req::max_len() as u32);
+            receiver.set_max_len(Method::Req::max_len() as u32);
 
-            let Some(root) = receiver
-                .read::<Rh::Req>()
-                .await
-                .map_err(|e| ClientError::Rpc(RpcError::from(e)))?
-            else {
-                return Err(ClientError::Rpc(RpcError::Closed));
+            let Some(root) = (match receiver.read::<Method::Req>().await {
+                Ok(v) => v,
+                Err(e) => return Err(HandleOneRequestError::Replier(e)),
+            }) else {
+                return Err(HandleOneRequestError::Replier(minicbor_io::Error::Io(
+                    ErrorKind::ConnectionAborted.into(),
+                )));
             };
             let mut sender = minicbor_io::AsyncWriter::new(write);
-            let out = match handler.call(Replier::new(&mut sender), root).await {
+            let out = match handler
+                .handle(ImmediateReplier::new(&mut sender), root)
+                .await
+            {
                 Ok(v) => v,
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             };
             Ok(out.into_inner())
         }
     }
 
-    fn reply<T: futures::AsyncWrite + Unpin + Send, TransportError>(
+    fn reply<T: futures::AsyncWrite + Unpin, TransportError, M: crate::Method>(
         sender: &mut AsyncWriter<T>,
-        res: impl Encode<()>,
-    ) -> impl Future<Output = Result<ReplyReceipt<()>, ClientError<TransportError, Self::Error>>>
+        res: M::Res,
+    ) -> impl Future<Output = Result<ReplyReceipt<M>, minicbor_io::Error>>
+    where
+        M::Res: minicbor::Encode<()>,
     {
-        async move {
-            sender
-                .write(res)
-                .await
-                .map(|_| ReplyReceipt(()))
-                .map_err(|e| ClientError::Rpc(e.into()))
-        }
+        async move { sender.write(&res).await.map(|_| ReplyReceipt::new(res)) }
     }
 }
 
@@ -110,11 +110,11 @@ pub trait Transport {
     fn connect(
         &self,
         to: &Self::Address,
-    ) -> impl Future<Output = Result<Self::Caller, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Self::Caller, Self::Error>>;
     /// associated Client type with this transport
     type Client: Client;
     type Incoming: Incoming;
-    fn accept(&self) -> impl Future<Output = Result<Self::Incoming, Self::Error>> + Send;
+    fn accept(&self) -> impl Future<Output = Result<Self::Incoming, Self::Error>>;
 }
 
 pub trait Incoming {
@@ -124,5 +124,5 @@ pub trait Incoming {
 }
 
 pub trait Close {
-    fn close(self) -> impl std::future::Future<Output = ()> + Send;
+    fn close(self) -> impl std::future::Future<Output = ()>;
 }
