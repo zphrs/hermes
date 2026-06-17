@@ -207,7 +207,7 @@ async fn test_state_flow() {
                 let (res, split_receipt) =
                     MachineCursor::<login::State, _, state::role::Server>::split_transition_receipt(
                         res, sender,
-                    );
+                    ).await.unwrap();
 
                 match res {
                     login::Response::TryAgain(wrapper) => {
@@ -253,7 +253,7 @@ async fn test_state_flow() {
                     transition_receipt,
                     wrapper,
                     handler,
-                );
+                ).await.unwrap();
         });
     };
     // client
@@ -275,6 +275,8 @@ async fn test_state_flow() {
                     MachineCursor::<login::State, _, state::role::Client>::from_transition_receipt(
                         receipt, wrapper, handler,
                     )
+                    .await
+                    .unwrap()
                 }
                 login::Response::Ok(_wrapper) => {
                     unreachable!("we asked to be rejected")
@@ -295,6 +297,8 @@ async fn test_state_flow() {
                     MachineCursor::<login::State, _, state::role::Client>::from_transition_receipt(
                         receipt, wrapper, handler,
                     )
+                    .await
+                    .unwrap()
                 }
             };
             let (mut handler, sender) = actions_cursor.into_parts(actions::Method);
@@ -325,14 +329,16 @@ async fn test_state_flow() {
                 MachineCursor::<actions::State, _, state::role::Client>::split_transition_receipt(
                     pending_transition_receipt,
                     sender,
-                );
+                )
+                .await
+                .unwrap();
 
             match res {
                 actions::Response::Logout(wrapper) => {
                     let _new_machine = MachineCursor::from_split_receipt(split_receipt, wrapper)
                         .await
                         .unwrap();
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    tokio::time::sleep(Duration::from_millis(1)).await;
                     warn!("got here!");
                 }
                 actions::Response::Ping(wrapper) => {

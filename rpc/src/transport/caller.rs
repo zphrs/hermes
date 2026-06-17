@@ -2,7 +2,7 @@ use maxlen::MaxLen;
 use tracing::debug;
 
 use super::{BiStream, CallerError};
-use crate::{Method, RpcMessage};
+use crate::{Method, RpcMessage, traits::method::not_applicable::NotApplicable};
 
 pub trait Caller: BiStream + Sized {
     type Error;
@@ -40,6 +40,29 @@ pub trait Caller: BiStream + Sized {
                 .ok_or(CallerError::Closed)?;
             debug!("received message");
             Ok(out)
+        }
+    }
+
+    fn notify<M: Method<Res = NotApplicable>, RootReq: RpcMessage>(
+        &self,
+        req: M::Req,
+    ) -> impl Future<Output = Result<(), CallerError<Self::Error>>>
+    where
+        RootReq: From<M::Req>,
+    {
+        async {
+            let (write, _read) = self.open_stream().await.map_err(CallerError::Transport)?;
+            debug!("sending notification");
+
+            {
+                let root: RootReq = req.into();
+                let mut sender = minicbor_io::AsyncWriter::new(write);
+                sender.write(root).await.map_err(CallerError::Minicbor)?;
+                // drops write here to indicate no more writes will occur
+            }
+            debug!("sent notification");
+
+            Ok(())
         }
     }
 }

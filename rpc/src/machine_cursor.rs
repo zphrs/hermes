@@ -15,10 +15,10 @@ mod test;
 use sender::Sender;
 
 use crate::{
-    Method,
+    CallerError, Method,
     machine_cursor::{
         sender::TransitionReceipt,
-        state_handler::{FinalizeFuture, PendingTransitionReceipt, StateHandler},
+        state_handler::{PendingTransitionReceipt, StateHandler},
     },
     traits::{self, state},
 };
@@ -36,6 +36,33 @@ pub struct MachineCursor<
     _role: Role,
 }
 
+pub(super) mod requester_transitioned {
+    use maxlen::MaxLen;
+
+    use crate::traits::method::{can_transition, not_applicable::NotApplicable};
+
+    #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
+    pub struct Notification;
+
+    pub struct Method;
+
+    impl crate::Method for Method {
+        type Req = Notification;
+
+        type Res = NotApplicable;
+
+        type CanTransition = can_transition::False;
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum FromSplitTransitionReceiptError<ClientError, ReplierError> {
+    #[error("client: {0}")]
+    Client(ClientError),
+    #[error("replier: {0}")]
+    Replier(ReplierError),
+}
+
 #[expect(
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
@@ -50,15 +77,31 @@ impl<State: crate::traits::State, Connection: crate::transport::Connection, Role
             _role: role,
         }
     }
-
+    /// Waits for an acknowledgement from the sender that the view change
+    /// went through on the other end before returning a new MachineCursor.
     pub async fn from_split_receipt(
         split_receipt: SplitReceipt<Connection, Role>,
         new_state: state::Wrapper<State>,
-    ) -> Result<Self, std::io::Error> {
+    ) -> Result<
+        Self,
+        FromSplitTransitionReceiptError<
+            <Connection as crate::transport::Client>::Error,
+            minicbor_io::Error,
+        >,
+    > {
         let _ = new_state;
-        let SplitReceipt(finalize_promise, conn, role) = split_receipt;
+        let SplitReceipt(conn, role) = split_receipt;
+        let mut stream = conn
+            .accept_stream()
+            .await
+            .map_err(FromSplitTransitionReceiptError::Client)?;
+        // See [`MachineCursor::from_transition_receipt`] for where the request
+        // is sent.
+        let _notif = conn
+            .handle_one_notification::<requester_transitioned::Method>(&mut stream)
+            .await
+            .map_err(FromSplitTransitionReceiptError::Replier)?;
         let out = Self::new(conn, role);
-        finalize_promise.await?;
         Ok(out)
     }
 }
@@ -68,7 +111,6 @@ impl<State: crate::traits::State, Connection: crate::transport::Connection, Role
     reason = "role trait is private to force role to be either Server or Client"
 )]
 pub struct SplitReceipt<Connection: crate::transport::Connection, Role: state::role::Role>(
-    FinalizeFuture<Connection::SendStream>,
     Connection,
     Role,
 );
@@ -112,20 +154,26 @@ where
     /// requires passing in the [`Sender`] linked to the [`StateHandler`] that
     /// returned the [`DelayedReceipt`] to ensure that a transition is only
     /// approved after all pending requests for the previous state was
-    /// completed.
+    /// completed. Sends off the transition confirmation. Use
+    /// [`MachineCursor::from_split_receipt`] to construct a new cursor using
+    /// the returned [`SplitReceipt`].
     #[must_use]
-    pub fn split_transition_receipt(
+    pub async fn split_transition_receipt<'a>(
         delayed_transition_receipt: PendingTransitionReceipt<
+            'a,
             Connection::SendStream,
             State::ClientMethod,
             state::role::Client,
             Connection,
         >,
         sender: Sender<state::role::Client, State::ServerMethod, Connection>,
-    ) -> (
-        <State::ClientMethod as Method>::Res,
-        SplitReceipt<Connection, state::role::Client>,
-    )
+    ) -> Result<
+        (
+            <State::ClientMethod as Method>::Res,
+            SplitReceipt<Connection, state::role::Client>,
+        ),
+        std::io::Error,
+    >
     where
         Connection::SendStream: futures::AsyncWrite + Unpin + 'static,
         State::ClientMethod: Method + 'static,
@@ -136,10 +184,11 @@ where
         let (role, sender_conn) = sender.into_parts();
         assert_eq!(&*handler_conn, &sender_conn);
         let (res, actually_send) = delayed_receipt.finalize();
-        (res, SplitReceipt(actually_send, sender_conn, role))
+        actually_send.await?;
+        Ok((res, SplitReceipt(sender_conn, role)))
     }
 
-    pub fn from_transition_receipt<
+    pub async fn from_transition_receipt<
         NewState: crate::traits::State,
         H: traits::Handler<State::ClientMethod>,
         T,
@@ -147,15 +196,27 @@ where
         receipt: TransitionReceipt<T, state::role::Client, Connection>,
         wrapper: state::Wrapper<NewState>,
         handler: StateHandler<state::role::Client, State::ClientMethod, Connection, H>,
-    ) -> MachineCursor<NewState, Connection, state::role::Client> {
+    ) -> Result<
+        MachineCursor<NewState, Connection, state::role::Client>,
+        CallerError<<Connection as crate::Caller>::Error>,
+    > {
         // we take in handler to ensure that we stop handling requests
         // from the old state.
         let _ = handler;
-        MachineCursor {
+
+        let conn = receipt.into_connection();
+        // notify the server that we've officially transitioned and we're ready
+        // to field requests.
+        conn.notify::<requester_transitioned::Method, requester_transitioned::Notification>(
+            requester_transitioned::Notification,
+        )
+        .await?;
+
+        Ok(MachineCursor {
             state_wrapper: wrapper,
-            conn: receipt.into_connection(),
+            conn,
             _role: state::role::Client,
-        }
+        })
     }
 }
 
@@ -189,18 +250,22 @@ where
     /// approved after all pending requests for the previous state was
     /// completed.
     #[must_use]
-    pub fn split_transition_receipt(
+    pub async fn split_transition_receipt<'a>(
         delayed_transition_receipt: PendingTransitionReceipt<
+            'a,
             Connection::SendStream,
             State::ServerMethod,
             state::role::Server,
             Connection,
         >,
         sender: Sender<state::role::Server, State::ClientMethod, Connection>,
-    ) -> (
-        <State::ServerMethod as Method>::Res,
-        SplitReceipt<Connection, state::role::Server>,
-    )
+    ) -> Result<
+        (
+            <State::ServerMethod as Method>::Res,
+            SplitReceipt<Connection, state::role::Server>,
+        ),
+        std::io::Error,
+    >
     where
         Connection::SendStream: futures::AsyncWrite + Unpin + 'static,
         State::ClientMethod: Method,
@@ -211,10 +276,11 @@ where
         let (role, sender_conn) = sender.into_parts();
         assert_eq!(&*handler_conn, &sender_conn);
         let (res, actually_send) = delayed_receipt.finalize();
-        (res, SplitReceipt(actually_send, sender_conn, role))
+        actually_send.await?;
+        Ok((res, SplitReceipt(sender_conn, role)))
     }
 
-    pub fn from_transition_receipt<
+    pub async fn from_transition_receipt<
         NewState: crate::traits::State,
         H: traits::Handler<State::ServerMethod>,
         T,
@@ -222,14 +288,25 @@ where
         receipt: TransitionReceipt<T, state::role::Server, Connection>,
         wrapper: state::Wrapper<NewState>,
         handler: StateHandler<state::role::Server, State::ServerMethod, Connection, H>,
-    ) -> MachineCursor<NewState, Connection, state::role::Server> {
+    ) -> Result<
+        MachineCursor<NewState, Connection, state::role::Server>,
+        CallerError<<Connection as crate::Caller>::Error>,
+    > {
         // we take in handler to ensure that we stop handling requests
         // from the old state.
         let _ = handler;
-        MachineCursor {
+
+        let conn = receipt.into_connection();
+
+        conn.notify::<requester_transitioned::Method, requester_transitioned::Notification>(
+            requester_transitioned::Notification,
+        )
+        .await?;
+
+        Ok(MachineCursor {
             state_wrapper: wrapper,
-            conn: receipt.into_connection(),
+            conn,
             _role: state::role::Server,
-        }
+        })
     }
 }

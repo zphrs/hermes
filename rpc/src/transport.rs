@@ -28,6 +28,8 @@ pub enum CallerError<T> {
 }
 
 use std::{fmt::Debug, io::ErrorKind};
+
+use crate::traits::method;
 #[derive(Debug, thiserror::Error)]
 pub enum HandleOneRequestError<R, E> {
     #[error("replier: {0}")]
@@ -85,6 +87,32 @@ pub trait Client: BiStream {
                 Err(e) => return Err(e.into()),
             };
             Ok(out.into_inner())
+        }
+    }
+
+    fn handle_one_notification<
+        'a,
+        Method: crate::Method<Res = method::not_applicable::NotApplicable>,
+    >(
+        &self,
+        stream: &'a mut (Self::SendStream, Self::RecvStream),
+    ) -> impl Future<Output = Result<Method::Req, minicbor_io::Error>> + 'a
+    where
+        Method::Req: crate::RpcMessage,
+    {
+        async move {
+            let (_write, read) = stream;
+            let mut receiver = minicbor_io::AsyncReader::new(read);
+
+            receiver.set_max_len(Method::Req::max_len() as u32);
+
+            let Some(root) = (match receiver.read::<Method::Req>().await {
+                Ok(v) => v,
+                Err(e) => return Err(e),
+            }) else {
+                return Err(minicbor_io::Error::Io(ErrorKind::ConnectionAborted.into()));
+            };
+            Ok(root)
         }
     }
 
