@@ -5,9 +5,11 @@ pub mod in_memory_transport;
 pub use in_memory_transport::MemoryTransport;
 mod replier;
 
+pub use caller::ext::{PendingQuery, PendingQueryOwned};
+
 pub use conn::Connection;
 
-pub use caller::Caller;
+pub use caller::{Caller, CallerExt};
 
 use maxlen::MaxLen;
 use minicbor_io::AsyncWriter;
@@ -25,6 +27,8 @@ pub enum CallerError<T> {
     Closed,
     #[error("misc. minicbor_io error: {0}")]
     Minicbor(minicbor_io::Error),
+    #[error("call aborted")]
+    Aborted,
 }
 
 use std::{fmt::Debug, io::ErrorKind};

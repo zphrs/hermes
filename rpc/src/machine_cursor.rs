@@ -17,10 +17,11 @@ use sender::Sender;
 use crate::{
     CallerError, Method,
     machine_cursor::{
-        sender::TransitionReceipt,
+        sender::{RequestTransition, TransitionReceipt},
         state_handler::{PendingTransitionReceipt, StateHandler},
     },
     traits::{self, state},
+    transport::CallerExt,
 };
 #[expect(
     private_bounds,
@@ -36,7 +37,7 @@ pub struct MachineCursor<
     _role: Role,
 }
 
-pub(super) mod requester_transitioned {
+mod requester_transitioned {
     use maxlen::MaxLen;
 
     use crate::traits::method::{can_transition, not_applicable::NotApplicable};
@@ -126,7 +127,7 @@ where
     }
 }
 
-impl<State: crate::traits::State, Connection: crate::transport::Connection + Clone>
+impl<State: crate::traits::State, Connection: crate::transport::Connection + Clone + CallerExt>
     MachineCursor<State, Connection, state::role::Client>
 where
     State::ClientMethod: Method,
@@ -136,11 +137,11 @@ where
         self,
         handler: Handler,
     ) -> (
-        StateHandler<state::role::Client, State::ClientMethod, Connection, Handler>,
+        StateHandler<State, state::role::Client, State::ClientMethod, Connection, Handler>,
         Sender<state::role::Client, State::ServerMethod, Connection>,
     ) {
         let handler = StateHandler::new(
-            &self.state_wrapper,
+            state::Wrapper::new(),
             state::role::Client,
             handler,
             self.conn.clone(),
@@ -162,6 +163,7 @@ where
         delayed_transition_receipt: PendingTransitionReceipt<
             'a,
             Connection::SendStream,
+            State,
             State::ClientMethod,
             state::role::Client,
             Connection,
@@ -195,7 +197,7 @@ where
     >(
         receipt: TransitionReceipt<T, state::role::Client, Connection>,
         wrapper: state::Wrapper<NewState>,
-        handler: StateHandler<state::role::Client, State::ClientMethod, Connection, H>,
+        handler: StateHandler<State, state::role::Client, State::ClientMethod, Connection, H>,
     ) -> Result<
         MachineCursor<NewState, Connection, state::role::Client>,
         CallerError<<Connection as crate::Caller>::Error>,
@@ -220,7 +222,7 @@ where
     }
 }
 
-impl<State: crate::traits::State, Connection: crate::transport::Connection + Clone>
+impl<State: crate::traits::State, Connection: crate::transport::Connection + Clone + CallerExt>
     MachineCursor<State, Connection, state::role::Server>
 where
     State::ClientMethod: Method,
@@ -230,11 +232,11 @@ where
         self,
         handler: Handler,
     ) -> (
-        StateHandler<state::role::Server, State::ServerMethod, Connection, Handler>,
+        StateHandler<State, state::role::Server, State::ServerMethod, Connection, Handler>,
         Sender<state::role::Server, State::ClientMethod, Connection>,
     ) {
         let handler = StateHandler::new(
-            &self.state_wrapper,
+            state::Wrapper::new(),
             state::role::Server,
             handler,
             self.conn.clone(),
@@ -254,6 +256,7 @@ where
         delayed_transition_receipt: PendingTransitionReceipt<
             'a,
             Connection::SendStream,
+            State,
             State::ServerMethod,
             state::role::Server,
             Connection,
@@ -287,7 +290,7 @@ where
     >(
         receipt: TransitionReceipt<T, state::role::Server, Connection>,
         wrapper: state::Wrapper<NewState>,
-        handler: StateHandler<state::role::Server, State::ServerMethod, Connection, H>,
+        handler: StateHandler<State, state::role::Server, State::ServerMethod, Connection, H>,
     ) -> Result<
         MachineCursor<NewState, Connection, state::role::Server>,
         CallerError<<Connection as crate::Caller>::Error>,

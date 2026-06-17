@@ -2,7 +2,11 @@ mod concurrent_request_handler;
 
 use std::{convert::Infallible, io::ErrorKind, pin::Pin, task::Poll};
 
-use crate::{RpcMessage, transport::ReplyHelper};
+use crate::{
+    RpcMessage,
+    machine_cursor::{self, SplitReceipt},
+    transport::ReplyHelper,
+};
 
 use futures::{FutureExt as _, StreamExt as _, select, stream::FuturesUnordered};
 use maxlen::MaxLen;
@@ -24,13 +28,15 @@ use crate::{
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-pub struct StateHandler<Role, RootMethod, Client, H>
+pub struct StateHandler<State, Role, RootMethod, Client, H>
 where
+    State: traits::State,
     Role: state::Role,
     Client: crate::transport::Client,
     RootMethod: crate::Method,
     H: traits::Handler<RootMethod>,
 {
+    _state: traits::state::Wrapper<State>,
     handler: H,
     _root_method: method::Wrapper<RootMethod>,
     role: Role,
@@ -194,10 +200,54 @@ impl<Method: crate::Method, Sender> ReplyHelper<Method> for DelayedReplier<Sende
 pub struct PendingTransitionReceipt<
     'a,
     Sender,
+    State: traits::State,
     OldMethod: traits::Method,
     Role: traits::state::Role,
     Client: crate::transport::Client,
->(DelayedReceipt<Sender, OldMethod>, Role, &'a mut Client);
+>(
+    DelayedReceipt<Sender, OldMethod>,
+    Role,
+    &'a mut Client,
+    traits::state::Wrapper<State>,
+);
+
+#[expect(
+    private_bounds,
+    reason = "role trait is private to force role to be either Server or Client"
+)]
+impl<
+    'a,
+    Sender: Unpin + futures::AsyncWrite,
+    State: traits::State,
+    OldMethod: traits::Method,
+    Role: traits::state::Role,
+    Connection: crate::transport::Connection + PartialEq + std::fmt::Debug,
+> PendingTransitionReceipt<'a, Sender, State, OldMethod, Role, Connection>
+{
+    /// requires passing in the [`Sender`] linked to the [`StateHandler`] that
+    /// returned the [`DelayedReceipt`] to ensure that a transition is only
+    /// approved after all pending requests for the previous state was
+    /// completed. Sends off the transition confirmation. Use
+    /// [`MachineCursor::from_split_receipt`] to construct a new cursor using
+    /// the returned [`SplitReceipt`].
+    pub async fn split(
+        self,
+        sender: machine_cursor::sender::Sender<Role, State::ClientMethod, Connection>,
+    ) -> Result<(OldMethod::Res, SplitReceipt<Connection, Role>), std::io::Error>
+    where
+        Connection::SendStream: futures::AsyncWrite + Unpin + 'static,
+        State::ClientMethod: Method,
+        State::ServerMethod: Method + 'static,
+    {
+        let (delayed_receipt, _role, handler_conn) = self.into_parts();
+        let (role, sender_conn) = sender.into_parts();
+        assert_eq!(&*handler_conn, &sender_conn);
+        let (res, actually_send) = delayed_receipt.finalize();
+        actually_send.await?;
+        Ok((res, SplitReceipt(sender_conn, role)))
+    }
+}
+
 #[expect(
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
@@ -205,10 +255,11 @@ pub struct PendingTransitionReceipt<
 impl<
     'a,
     Sender,
+    State: traits::State,
     OldMethod: traits::Method,
     Role: traits::state::Role,
     Client: crate::transport::Client,
-> PendingTransitionReceipt<'a, Sender, OldMethod, Role, Client>
+> PendingTransitionReceipt<'a, Sender, State, OldMethod, Role, Client>
 {
     pub(crate) fn into_parts(self) -> (DelayedReceipt<Sender, OldMethod>, Role, &'a mut Client) {
         (self.0, self.1, self.2)
@@ -219,21 +270,23 @@ impl<
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-impl<Role, RootMethod, Client, H> StateHandler<Role, RootMethod, Client, H>
+impl<State, Role, RootMethod, Client, H> StateHandler<State, Role, RootMethod, Client, H>
 where
+    State: traits::State,
     Role: state::Role,
     Client: crate::transport::Client,
     RootMethod: crate::Method,
     H: traits::Handler<RootMethod>,
 {
-    pub fn new(
-        state_wrapper: &impl ToHandle<RootMethod, Role, H>,
+    pub fn new<Wrapper: ToHandle<RootMethod, Role, H> + Into<traits::state::Wrapper<State>>>(
+        state_wrapper: Wrapper,
         role: Role,
         handler: H,
         conn: Client,
     ) -> Self {
         let (root_method, handler) = state_wrapper.to_handle(&role, handler).into_parts();
         Self {
+            _state: state_wrapper.into(),
             handler,
             _root_method: root_method,
             role: role,
@@ -244,13 +297,14 @@ where
     pub async fn handle_transition_request(
         &mut self,
     ) -> Result<
-        PendingTransitionReceipt<'_, Client::SendStream, RootMethod, Role, Client>,
+        PendingTransitionReceipt<'_, Client::SendStream, State, RootMethod, Role, Client>,
         TransitionRequestError<Client::Error, H::Error>,
     >
     where
         RootMethod::Req: crate::RpcMessage,
     {
         let Self {
+            _state,
             handler,
             _root_method,
             role,
@@ -281,7 +335,12 @@ where
             Err(e) => return Err(e)?,
         };
 
-        return Ok(PendingTransitionReceipt(out, *role, client));
+        return Ok(PendingTransitionReceipt(
+            out,
+            *role,
+            client,
+            state::Wrapper::new(),
+        ));
     }
 
     /// handles requests in parallel until a method called is not a loopback.
@@ -289,7 +348,7 @@ where
         &'_ mut self,
         loopback_handler: LoopbackHandler,
     ) -> Result<
-        PendingTransitionReceipt<'_, Client::SendStream, RootMethod, Role, Client>,
+        PendingTransitionReceipt<'_, Client::SendStream, State, RootMethod, Role, Client>,
         MultipleRequestsError<Client::Error, LoopbackHandler::Error, H::Error>,
     >
     where
@@ -301,6 +360,7 @@ where
         <RootMethod as Method>::Res: From<<LoopbackMethod as Method>::Res>,
     {
         let Self {
+            _state,
             handler,
             _root_method,
             role,
@@ -377,6 +437,7 @@ where
             handler.handle(replier, root).await?,
             role.clone(),
             client,
+            state::Wrapper::new(),
         ));
     }
 }

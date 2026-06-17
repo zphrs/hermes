@@ -7,7 +7,7 @@ use crate::{
     RpcError, Transport,
     in_memory_transport::{self, MemoryTransport},
     traits::method::can_transition::False,
-    transport::{self, Caller, Client, Incoming},
+    transport::{self, Caller, CallerExt as _, Client, Incoming},
 };
 
 #[derive(
