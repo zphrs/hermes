@@ -11,7 +11,8 @@ use tracing::{debug, instrument, warn};
 
 use crate::{
     api::{earth_root, find_nodes},
-    entrypoint::as_earth,
+    client::cache::Sender,
+    entrypoint::{Entrypoint, as_earth},
     get_system_time::get_system_time,
     quinn_transport,
 };
@@ -21,17 +22,14 @@ pub struct SkyClient {
 }
 
 struct Handler {
-    cache: RwLock<cache::Cache<earth_root::Method, as_earth::Method>>,
+    cache: RwLock<cache::Cache<earth_root::State, Entrypoint, as_earth::Method>>,
 }
 
 impl Handler {
     async fn get_sky_root<'a>(
         &self,
         remote: &'a SkyNode,
-    ) -> Result<
-        std::sync::Arc<Wrapper<earth_root::Method, quinn_transport::Connection>>,
-        cache::ConnectError<'a>,
-    > {
+    ) -> Result<Sender<earth_root::State>, cache::ConnectError<'a>> {
         {
             let mut this = self.cache.read().await;
             let mut handle_req = |v| match v {
@@ -53,8 +51,6 @@ impl Handler {
         .await
     }
 }
-
-use rpc::client_conn::Wrapper;
 
 use kademlia::traits::NodeStatus;
 impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
@@ -87,7 +83,7 @@ impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
         };
 
         let reached_node = sky_root
-            .query_loopback::<shared_schema::ping::Method>(shared_schema::ping::Request)
+            .request_loopback::<shared_schema::ping::Method>(shared_schema::ping::Request)
             .await
             .is_ok();
         if reached_node {
@@ -114,7 +110,7 @@ impl kademlia::RequestHandler<SkyOrEarth, 32> for Handler {
         };
 
         let Ok(v) = sky_root
-            .query_loopback::<find_nodes::Method>(find_nodes::Request {
+            .request_loopback::<find_nodes::Method>(find_nodes::Request {
                 sky_id: unsafe { SkyId::from_kademlia_id_unchecked(address.clone()) },
             })
             .await

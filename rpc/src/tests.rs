@@ -4,10 +4,10 @@ use maxlen::MaxLen;
 use tokio::task::JoinSet;
 
 use crate::{
-    RpcError, Transport,
+    ImmediateReplier, RpcError, Transport,
     in_memory_transport::{self, MemoryTransport},
     traits::method::can_transition::False,
-    transport::{self, Caller, CallerExt as _, Client, Incoming},
+    transport::{self, CallerExt as _, Client, Incoming},
 };
 
 #[derive(
@@ -70,7 +70,7 @@ pub mod ping {
             &mut self,
             replier: Replier,
             _value: <Self as crate::Method>::Req,
-        ) -> Result<Replier::Receipt<Self>, crate::traits::HandlerError<Replier::Error, Self::Error>>
+        ) -> Result<Replier::Receipt<Self>, crate::traits::HandleError<Replier::Error, Self::Error>>
         {
             replier.reply(Response).await
         }
@@ -115,7 +115,7 @@ pub mod other_ping {
             &mut self,
             replier: Replier,
             _value: <Self as crate::Method>::Req,
-        ) -> Result<Replier::Receipt<Self>, crate::traits::HandlerError<Replier::Error, Self::Error>>
+        ) -> Result<Replier::Receipt<Self>, crate::traits::HandleError<Replier::Error, Self::Error>>
         {
             replier.reply(Response).await
         }
@@ -144,7 +144,7 @@ impl crate::Handler for RootHandler {
         &mut self,
         replier: Replier,
         value: <Self as crate::Method>::Req,
-    ) -> Result<Replier::Receipt<Self>, crate::traits::HandlerError<Replier::Error, Self::Error>>
+    ) -> Result<Replier::Receipt<Self>, crate::traits::HandleError<Replier::Error, Self::Error>>
     {
         match value {
             Root::Ping(request) => Ok(replier
@@ -169,6 +169,14 @@ async fn test() {
         let incoming = tp.accept().await.unwrap();
         let conn = incoming.accept().await.unwrap();
         let mut stream = conn.accept_stream().await.unwrap();
+        // let (write, mut read) = stream;
+        // let replier = ImmediateReplier::from(write);
+        // let mut root_handler = RootHandler;
+        // let fut = conn
+        //     .handle_one_request_with_handler::<ImmediateReplier<in_memory_transport::SendStream, _>, _, _>(
+        //         (replier, &mut read), &mut root_handler,
+        //     );
+        // async move { fut.await.map(|v| v.into_inner()) }.await;
         let _ = conn.handle_one_request(&mut stream, &mut RootHandler).await;
     });
     // client

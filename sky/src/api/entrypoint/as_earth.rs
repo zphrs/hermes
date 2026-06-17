@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use maxlen::MaxLen;
-use rpc::MethodWrapper;
+use rpc::traits::{method::can_transition, state};
 use shared_schema::EarthNode;
 
 pub type Request = EarthNode;
@@ -9,7 +9,7 @@ pub type Request = EarthNode;
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Response {
     #[n(0)]
-    Ok(#[cbor(skip)] MethodWrapper<crate::api::earth_root::Method>),
+    Ok(#[cbor(skip)] state::Wrapper<crate::api::earth_root::State>),
 }
 
 #[derive(Debug)]
@@ -26,15 +26,23 @@ impl rpc::Method for Method {
 
     type Res = Response;
 
-    type Error = Infallible;
+    type CanTransition = can_transition::True;
 }
 
 impl rpc::Handler for Method {
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+    type Error = Infallible;
+
+    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
         &mut self,
-        replier: rpc::ImmediateReplier<'_, T, Self>,
-        _value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>> {
-        replier.reply(Response::Ok(MethodWrapper::new())).await
+        replier: Replier,
+        value: <Self as rpc::Method>::Req,
+    ) -> Result<
+        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
+        rpc::traits::HandleError<
+            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
+            <Self as rpc::Handler<Self>>::Error,
+        >,
+    > {
+        replier.reply(Response::Ok(state::Wrapper::new())).await
     }
 }

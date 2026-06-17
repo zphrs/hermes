@@ -11,6 +11,7 @@ use std::{
 
 use max_sized_vec::MaxSizedVec;
 use maxlen::MaxLen;
+use rpc::traits::method::can_transition;
 use shared_schema::{EarthNode, earth_node::EarthId};
 use tokio::time::Instant;
 
@@ -84,50 +85,59 @@ impl Method {
 impl rpc::Method for Method {
     type Req = Request;
     type Res = Response;
-
-    type Error = Infallible;
+    type CanTransition = can_transition::False;
 }
 
 impl rpc::Handler for Method {
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+    type Error = Infallible;
+
+    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
         &mut self,
-        replier: rpc::ImmediateReplier<'_, T, Self>,
-        value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>>
-    {
+        replier: Replier,
+        value: <Self as rpc::Method>::Req,
+    ) -> Result<
+        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
+        rpc::traits::HandleError<
+            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
+            <Self as rpc::Handler<Self>>::Error,
+        >,
+    > {
         Ok(match value {
-            Request::Join(candidates) => replier
-                .change_method(&candidates)
-                .reply_with(
-                    &mut join::Method {
-                        remote: &self.remote,
-                        map: &self.online_nodes,
-                    },
-                    candidates,
-                )
-                .await?
-                .map(Response::Join),
-            Request::Renew(join_receipt) => replier
-                .change_method(&join_receipt)
-                .reply_with(
-                    &mut renew::Method {
-                        remote: &self.remote,
-                        map: &self.online_nodes,
-                    },
-                    join_receipt,
-                )
-                .await?
-                .map(Response::Renew),
-            Request::Nearby(earth_id) => replier
-                .change_method(&earth_id)
-                .reply_with(
-                    &mut nearby::Method {
-                        map: &self.online_nodes,
-                    },
-                    earth_id,
-                )
-                .await?
-                .map(Response::Nearby),
+            Request::Join(candidates) => {
+                replier
+                    .reply_with(
+                        &mut join::Method {
+                            remote: &self.remote,
+                            map: &self.online_nodes,
+                        },
+                        candidates,
+                        Response::Join,
+                    )
+                    .await?
+            }
+            Request::Renew(join_receipt) => {
+                replier
+                    .reply_with(
+                        &mut renew::Method {
+                            remote: &self.remote,
+                            map: &self.online_nodes,
+                        },
+                        join_receipt,
+                        Response::Renew,
+                    )
+                    .await?
+            }
+            Request::Nearby(earth_id) => {
+                replier
+                    .reply_with(
+                        &mut nearby::Method {
+                            map: &self.online_nodes,
+                        },
+                        earth_id,
+                        Response::Nearby,
+                    )
+                    .await?
+            }
         })
     }
 }

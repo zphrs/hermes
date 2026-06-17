@@ -176,9 +176,6 @@ where
     where
         RootMethod::Req: crate::RpcMessage + From<M::Req>,
         M::Res: crate::RpcMessage,
-        <RootMethod as method::Method>::Req: 'static,
-        Caller: 'static,
-        M: 'static,
     {
         let Self { role, caller, .. } = self;
         let out = RequestTransition::<_, M, _, _>::new(req, role, caller);

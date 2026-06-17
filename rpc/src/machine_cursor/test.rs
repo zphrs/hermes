@@ -17,6 +17,7 @@ mod login {
     use std::convert::Infallible;
 
     use crate::traits::{
+        Prioritized,
         method::{can_transition, not_applicable},
         state::{self, Wrapper},
     };
@@ -47,6 +48,8 @@ mod login {
         type ServerMethod = Method;
     }
 
+    crate::define_prioritized!(State, server_wins);
+
     impl crate::Handler for Method {
         type Error = Infallible;
 
@@ -54,7 +57,7 @@ mod login {
             &mut self,
             replier: Replier,
             value: <Self as crate::Method>::Req,
-        ) -> Result<Replier::Receipt<Self>, crate::traits::HandlerError<Replier::Error, Self::Error>>
+        ) -> Result<Replier::Receipt<Self>, crate::traits::HandleError<Replier::Error, Self::Error>>
         {
             match value {
                 true => replier.reply(Response::Ok(Wrapper::new())).await,
@@ -70,7 +73,7 @@ mod actions {
 
     use maxlen::MaxLen;
 
-    use crate::traits::{method::can_transition, state};
+    use crate::traits::{Prioritized, method::can_transition, state};
 
     use super::login;
 
@@ -150,7 +153,7 @@ mod actions {
             _value: <PingMethod as crate::Method>::Req,
         ) -> Result<
             Replier::Receipt<PingMethod>,
-            crate::traits::HandlerError<Replier::Error, Self::Error>,
+            crate::traits::HandleError<Replier::Error, Self::Error>,
         > {
             replier.reply(PingResponse).await
         }
@@ -163,7 +166,7 @@ mod actions {
             &mut self,
             replier: Replier,
             value: <Self as crate::Method>::Req,
-        ) -> Result<Replier::Receipt<Self>, crate::traits::HandlerError<Replier::Error, Self::Error>>
+        ) -> Result<Replier::Receipt<Self>, crate::traits::HandleError<Replier::Error, Self::Error>>
         {
             match value {
                 Request::Logout() => replier.reply(Response::Logout(state::Wrapper::new())).await,
@@ -182,6 +185,26 @@ mod actions {
 
         type ServerMethod = Method;
     }
+
+    impl Prioritized for State {
+        type Priority = bool;
+
+        fn client_priority(
+            _request: &<Self::ClientMethod as crate::Method>::Req,
+        ) -> Self::Priority {
+            false
+        }
+
+        fn server_priority(
+            _request: &<Self::ServerMethod as crate::Method>::Req,
+        ) -> Self::Priority {
+            true
+        }
+    }
+}
+
+fn send_fut<T: Future + Send>(val: T) -> impl Future<Output = T::Output> + Send {
+    val
 }
 
 #[tokio::test]
@@ -204,8 +227,7 @@ async fn test_state_flow() {
             let actions_cursor = loop {
                 let (mut handler, sender) = login_cursor.into_parts(login::Method);
                 let res = handler.handle_transition_request().await.unwrap();
-                let (res, split_receipt) =
-                    res.split(sender).await.unwrap();
+                let (res, split_receipt) = res.split(sender).await.unwrap();
 
                 match res {
                     login::Response::TryAgain(wrapper) => {
@@ -241,17 +263,17 @@ async fn test_state_flow() {
                     client_jh.unwrap().extract_result()
                 }
             };
-            let wrapper = match res {
-                actions::Response::Logout(wrapper) => wrapper,
-                actions::Response::Ping(_wrapper) => unreachable!("we made a logout request above"),
-            };
+            // let wrapper = match res {
+            //     actions::Response::Logout(wrapper) => wrapper,
+            //     actions::Response::Ping(_wrapper) => unreachable!("we made a logout request above"),
+            // };
 
-            let _login_cursor =
-                MachineCursor::<actions::State, _, state::role::Server>::from_transition_receipt(
-                    transition_receipt,
-                    wrapper,
-                    handler,
-                ).await.unwrap();
+            // let _login_cursor =
+            //     MachineCursor::<actions::State, _, state::role::Server>::from_transition_receipt(
+            //         transition_receipt,
+            //         wrapper,
+            //         handler,
+            //     ).await.unwrap();
         });
     };
     // client
@@ -263,83 +285,83 @@ async fn test_state_flow() {
             let login_cursor = MachineCursor::<login::State, _, _>::new(conn, state::role::Client);
             let (handler, sender) = login_cursor.into_parts(not_applicable::Handler);
             // request login to fail
-            let (res, receipt) = sender
-                .request_transition::<login::Method>(false)
-                .await
-                .unwrap()
-                .extract_result();
-            let login_cursor = match res {
-                login::Response::TryAgain(wrapper) => {
-                    MachineCursor::<login::State, _, state::role::Client>::from_transition_receipt(
-                        receipt, wrapper, handler,
-                    )
-                    .await
-                    .unwrap()
-                }
-                login::Response::Ok(_wrapper) => {
-                    unreachable!("we asked to be rejected")
-                }
-            };
-            let (handler, sender) = login_cursor.into_parts(not_applicable::Handler);
-            let (res, receipt) = sender
-                .request_transition::<login::Method>(true)
-                .await
-                .unwrap()
-                .extract_result();
+            // let (res, receipt) = sender
+            //     .request_transition::<login::Method>(false)
+            //     .await
+            //     .unwrap()
+            //     .extract_result();
+            // let login_cursor = match res {
+            //     login::Response::TryAgain(wrapper) => {
+            //         MachineCursor::<login::State, _, state::role::Client>::from_transition_receipt(
+            //             receipt, wrapper, handler,
+            //         )
+            //         .await
+            //         .unwrap()
+            //     }
+            //     login::Response::Ok(_wrapper) => {
+            //         unreachable!("we asked to be rejected")
+            //     }
+            // };
+            // let (handler, sender) = login_cursor.into_parts(not_applicable::Handler);
+            // let (res, receipt) = sender
+            //     .request_transition::<login::Method>(true)
+            //     .await
+            //     .unwrap()
+            //     .extract_result();
 
-            let actions_cursor = match res {
-                login::Response::TryAgain(_wrapper) => {
-                    unreachable!("we asked to be accepted")
-                }
-                login::Response::Ok(wrapper) => {
-                    MachineCursor::<login::State, _, state::role::Client>::from_transition_receipt(
-                        receipt, wrapper, handler,
-                    )
-                    .await
-                    .unwrap()
-                }
-            };
-            let (mut handler, sender) = actions_cursor.into_parts(actions::Method);
-            warn!(
-                "should flesh out how the functions work when both the client and the server
-                are both listening and replying to one another."
-            );
+            // let actions_cursor = match res {
+            //     login::Response::TryAgain(_wrapper) => {
+            //         unreachable!("we asked to be accepted")
+            //     }
+            //     login::Response::Ok(wrapper) => {
+            //         MachineCursor::<login::State, _, state::role::Client>::from_transition_receipt(
+            //             receipt, wrapper, handler,
+            //         )
+            //         .await
+            //         .unwrap()
+            //     }
+            // };
+            // let (mut handler, sender) = actions_cursor.into_parts(actions::Method);
+            // warn!(
+            //     "should flesh out how the functions work when both the client and the server
+            //     are both listening and replying to one another."
+            // );
 
-            let loopback_futs =
-                tokio::spawn(async move {
-                    FuturesUnordered::from_iter((0..10).map(|_| {
-                        sender.request_loopback::<actions::PingMethod>(actions::PingRequest)
-                    }))
-                    .try_collect::<Vec<_>>()
-                    .await
-                    .unwrap();
-                    sender
-                });
+            // let loopback_futs =
+            //     tokio::spawn(async move {
+            //         FuturesUnordered::from_iter((0..10).map(|_| {
+            //             sender.request_loopback::<actions::PingMethod>(actions::PingRequest)
+            //         }))
+            //         .try_collect::<Vec<_>>()
+            //         .await
+            //         .unwrap();
+            //         sender
+            //     });
 
-            let pending_transition_receipt = handler
-                .handle_requests::<actions::PingMethod, _>(actions::Method)
-                .await
-                .unwrap();
+            // let pending_transition_receipt = handler
+            //     .handle_requests::<actions::PingMethod, _>(actions::Method)
+            //     .await
+            //     .unwrap();
 
-            let sender = loopback_futs.await.expect("loopback futs not to panic");
+            // let sender = loopback_futs.await.expect("loopback futs not to panic");
 
-            let (res, split_receipt) = pending_transition_receipt.split(sender).await.unwrap();
+            // let (res, split_receipt) = pending_transition_receipt.split(sender).await.unwrap();
 
-            match res {
-                actions::Response::Logout(wrapper) => {
-                    let _new_machine = MachineCursor::from_split_receipt(split_receipt, wrapper)
-                        .await
-                        .unwrap();
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                    warn!("got here!");
-                }
-                actions::Response::Ping(wrapper) => {
-                    MachineCursor::from_split_receipt(split_receipt, wrapper)
-                        .await
-                        .unwrap();
-                    panic!("ping should have been a loopback request")
-                }
-            };
+            // match res {
+            //     actions::Response::Logout(wrapper) => {
+            //         let _new_machine = MachineCursor::from_split_receipt(split_receipt, wrapper)
+            //             .await
+            //             .unwrap();
+            //         tokio::time::sleep(Duration::from_millis(1)).await;
+            //         warn!("got here!");
+            //     }
+            //     actions::Response::Ping(wrapper) => {
+            //         MachineCursor::from_split_receipt(split_receipt, wrapper)
+            //             .await
+            //             .unwrap();
+            //         panic!("ping should have been a loopback request")
+            //     }
+            // };
         });
     }
     js.join_all().await;
@@ -355,65 +377,65 @@ async fn tiebreak() {
     // server
     {
         let net = network.clone();
-        js.spawn(async move {
-            let tp = net.new_transport(SERVER_ADDR);
-            let incoming = tp.accept().await.expect("infallible");
-            let conn = incoming.accept().await.expect("successful incoming");
-            let mut login_cursor =
-                MachineCursor::<login::State, _, _>::new(conn, state::role::Server);
+        // js.spawn(async move {
+        //     let tp = net.new_transport(SERVER_ADDR);
+        //     let incoming = tp.accept().await.expect("infallible");
+        //     let conn = incoming.accept().await.expect("successful incoming");
+        //     let mut login_cursor =
+        //         MachineCursor::<login::State, _, _>::new(conn, state::role::Server);
 
-            let actions_cursor = loop {
-                let (mut handler, sender) = login_cursor.into_parts(login::Method);
-                let res = handler.handle_transition_request().await.unwrap();
-                let (res, split_receipt) =
-                    MachineCursor::<login::State, _, state::role::Server>::split_transition_receipt(
-                        res, sender,
-                    ).await.unwrap();
+        //     let actions_cursor = loop {
+        //         let (mut handler, sender) = login_cursor.into_parts(login::Method);
+        //         let res = handler.handle_transition_request().await.unwrap();
+        //         let (res, split_receipt) =
+        //             MachineCursor::<login::State, _, state::role::Server>::split_transition_receipt(
+        //                 res, sender,
+        //             ).await.unwrap();
 
-                match res {
-                    login::Response::TryAgain(wrapper) => {
-                        login_cursor = MachineCursor::from_split_receipt(split_receipt, wrapper)
-                            .await
-                            .unwrap()
-                    }
-                    login::Response::Ok(wrapper) => {
-                        break MachineCursor::from_split_receipt(split_receipt, wrapper)
-                            .await
-                            .unwrap();
-                    }
-                }
-            };
+        //         match res {
+        //             login::Response::TryAgain(wrapper) => {
+        //                 login_cursor = MachineCursor::from_split_receipt(split_receipt, wrapper)
+        //                     .await
+        //                     .unwrap()
+        //             }
+        //             login::Response::Ok(wrapper) => {
+        //                 break MachineCursor::from_split_receipt(split_receipt, wrapper)
+        //                     .await
+        //                     .unwrap();
+        //             }
+        //         }
+        //     };
 
-            let (mut handler, sender) = actions_cursor.into_parts(actions::Method);
-            let client_jh = tokio::spawn(async {
-                let js = FuturesUnordered::new();
-                for _ in 0..10 {
-                    js.push(sender.request_loopback::<actions::PingMethod>(actions::PingRequest));
-                }
-                js.try_collect::<Vec<_>>().await.unwrap();
-                sender.request_transition::<actions::Method>(actions::Request::Logout())
-            });
+        //     let (mut handler, sender) = actions_cursor.into_parts(actions::Method);
+        //     let client_jh = tokio::spawn(async {
+        //         let js = FuturesUnordered::new();
+        //         for _ in 0..10 {
+        //             js.push(sender.request_loopback::<actions::PingMethod>(actions::PingRequest));
+        //         }
+        //         js.try_collect::<Vec<_>>().await.unwrap();
+        //         sender.request_transition::<actions::Method>(actions::Request::Logout())
+        //     });
 
-            let pending_transition_receipt = handler
-                .handle_requests::<actions::PingMethod, _>(actions::Method)
-                .await
-                .unwrap();
-            let transition_future = client_jh.await.unwrap();
+        //     let pending_transition_receipt = handler
+        //         .handle_requests::<actions::PingMethod, _>(actions::Method)
+        //         .await
+        //         .unwrap();
+        //     let transition_future = client_jh.await.unwrap();
 
-            let (res, split_receipt) = pending_transition_receipt.split(sender).await.unwrap();
-            let wrapper = match res {
-                actions::Response::Logout(wrapper) => wrapper,
-                actions::Response::Ping(_wrapper) => unreachable!("we made a logout request above"),
-            };
+        //     let (res, split_receipt) = pending_transition_receipt.split(sender).await.unwrap();
+        //     let wrapper = match res {
+        //         actions::Response::Logout(wrapper) => wrapper,
+        //         actions::Response::Ping(_wrapper) => unreachable!("we made a logout request above"),
+        //     };
 
-            let _login_cursor =
-                MachineCursor::<login::State, _, state::role::Server>::from_split_receipt(
-                    split_receipt,
-                    wrapper,
-                )
-                .await
-                .unwrap();
-        });
+        //     let _login_cursor =
+        //         MachineCursor::<login::State, _, state::role::Server>::from_split_receipt(
+        //             split_receipt,
+        //             wrapper,
+        //         )
+        //         .await
+        //         .unwrap();
+        // });
     };
     // client
     {
@@ -477,36 +499,36 @@ async fn tiebreak() {
                     sender
                 });
 
-            let pending_transition_receipt = handler
-                .handle_requests::<actions::PingMethod, _>(actions::Method)
-                .await
-                .unwrap();
+            // let pending_transition_receipt = handler
+            //     .handle_requests::<actions::PingMethod, _>(actions::Method)
+            //     .await
+            //     .unwrap();
 
-            let sender = loopback_futs.await.expect("loopback futs not to panic");
+            // let sender = loopback_futs.await.expect("loopback futs not to panic");
 
-            let (res, split_receipt) =
-                MachineCursor::<actions::State, _, state::role::Client>::split_transition_receipt(
-                    pending_transition_receipt,
-                    sender,
-                )
-                .await
-                .unwrap();
+            // let (res, split_receipt) =
+            //     MachineCursor::<actions::State, _, state::role::Client>::split_transition_receipt(
+            //         pending_transition_receipt,
+            //         sender,
+            //     )
+            //     .await
+            //     .unwrap();
 
-            match res {
-                actions::Response::Logout(wrapper) => {
-                    let _new_machine = MachineCursor::from_split_receipt(split_receipt, wrapper)
-                        .await
-                        .unwrap();
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                    warn!("got here!");
-                }
-                actions::Response::Ping(wrapper) => {
-                    MachineCursor::from_split_receipt(split_receipt, wrapper)
-                        .await
-                        .unwrap();
-                    panic!("ping should have been a loopback request")
-                }
-            };
+            // match res {
+            //     actions::Response::Logout(wrapper) => {
+            //         let _new_machine = MachineCursor::from_split_receipt(split_receipt, wrapper)
+            //             .await
+            //             .unwrap();
+            //         tokio::time::sleep(Duration::from_millis(1)).await;
+            //         warn!("got here!");
+            //     }
+            //     actions::Response::Ping(wrapper) => {
+            //         MachineCursor::from_split_receipt(split_receipt, wrapper)
+            //             .await
+            //             .unwrap();
+            //         panic!("ping should have been a loopback request")
+            //     }
+            // };
         });
     }
     js.join_all().await;

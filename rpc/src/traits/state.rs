@@ -1,5 +1,7 @@
+pub mod priority;
 pub mod role;
 
+pub use priority::{Prioritized, Priority};
 pub(crate) use role::Role;
 
 /// It's necessary to divide between what requests the client and the server can
@@ -9,6 +11,11 @@ pub trait State {
     type ServerMethod: crate::Method;
 }
 
+pub type ServerReq<State> = <<State as self::State>::ServerMethod as crate::Method>::Req;
+pub type ServerRes<State> = <<State as self::State>::ServerMethod as crate::Method>::Res;
+pub type ClientReq<State> = <<State as self::State>::ClientMethod as crate::Method>::Req;
+pub type ClientRes<State> = <<State as self::State>::ClientMethod as crate::Method>::Res;
+
 use std::marker::PhantomData;
 
 use maxlen::MaxLen;
@@ -17,6 +24,12 @@ use crate::traits::{self, method};
 
 pub struct Wrapper<State: crate::traits::State> {
     _marker: PhantomData<State>,
+}
+
+impl<State: crate::traits::State> std::fmt::Debug for Wrapper<State> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("state::Wrapper").finish()
+    }
 }
 
 #[expect(

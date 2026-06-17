@@ -1,7 +1,7 @@
 use crate::transport::ReplyHelper;
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error<Replier, Handler> {
+pub enum HandleError<Replier, Handler> {
     #[error("Replier: {0}")]
     Replier(Replier),
     #[error("Handler: {0}")]
@@ -15,5 +15,10 @@ pub trait Handler<Method: crate::Method = Self> {
         &mut self,
         replier: Replier,
         value: Method::Req,
-    ) -> impl Future<Output = Result<Replier::Receipt<Method>, Error<Replier::Error, Self::Error>>>;
+    ) -> impl Future<
+        Output = Result<
+            <Replier as ReplyHelper<Method>>::Receipt<Method>,
+            HandleError<<Replier as ReplyHelper<Method>>::Error, <Self as Handler<Method>>::Error>,
+        >,
+    >;
 }

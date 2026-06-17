@@ -35,13 +35,31 @@ impl<M: crate::Method> ReplyReceipt<M> {
     }
 }
 
-pub struct ImmediateReplier<'a, T: AsyncWrite, Method: ?Sized> {
-    client: &'a mut minicbor_io::AsyncWriter<T>,
+pub struct ImmediateReplier<T, Method: ?Sized>
+where
+    T: AsyncWrite,
+{
+    client: minicbor_io::AsyncWriter<T>,
     _marker: PhantomData<Method>,
 }
 
-impl<'a, T: AsyncWrite, Method: crate::Method> ImmediateReplier<'a, T, Method> {
-    pub(crate) fn new(client: &'a mut minicbor_io::AsyncWriter<T>) -> Self {
+impl<T, Method: ?Sized> From<T> for ImmediateReplier<T, Method>
+where
+    T: AsyncWrite,
+{
+    fn from(client: T) -> Self {
+        Self {
+            client: minicbor_io::AsyncWriter::new(client),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T, Method: crate::Method> ImmediateReplier<T, Method>
+where
+    T: AsyncWrite,
+{
+    pub(crate) fn new(client: minicbor_io::AsyncWriter<T>) -> Self {
         Self {
             client,
             _marker: Default::default(),
@@ -51,19 +69,19 @@ impl<'a, T: AsyncWrite, Method: crate::Method> ImmediateReplier<'a, T, Method> {
     fn change_method<NewMethod: crate::Method>(
         self,
         _req: &NewMethod::Req,
-    ) -> ImmediateReplier<'a, T, NewMethod> {
+    ) -> ImmediateReplier<T, NewMethod> {
         ImmediateReplier::new(self.client)
     }
 }
 
-pub trait ReplyHelper<Method: crate::Method> {
+pub trait ReplyHelper<Method: crate::Method>: Sized {
     type Error;
     type Receipt<M: crate::Method>;
     fn reply<Error>(
         self,
         res: Method::Res,
     ) -> impl Future<
-        Output = Result<Self::Receipt<Method>, crate::traits::HandlerError<Self::Error, Error>>,
+        Output = Result<Self::Receipt<Method>, crate::traits::HandleError<Self::Error, Error>>,
     >
     where
         Method::Res: RpcMessage;
@@ -76,32 +94,33 @@ pub trait ReplyHelper<Method: crate::Method> {
     ) -> impl Future<
         Output = Result<
             Self::Receipt<Method>,
-            crate::traits::HandlerError<Self::Error, Handler::Error>,
+            crate::traits::HandleError<Self::Error, Handler::Error>,
         >,
     >;
 }
 
-impl<'a, T: AsyncWrite + Unpin, Method: crate::Method> ReplyHelper<Method>
-    for ImmediateReplier<'a, T, Method>
+impl<T, Method: crate::Method> ReplyHelper<Method> for ImmediateReplier<T, Method>
+where
+    T: AsyncWrite + Unpin,
 {
     type Error = minicbor_io::Error;
     type Receipt<M: crate::Method> = ReplyReceipt<M>;
 
     fn reply<Error>(
-        self,
+        mut self,
         res: Method::Res,
     ) -> impl Future<
-        Output = Result<Self::Receipt<Method>, crate::traits::HandlerError<Self::Error, Error>>,
+        Output = Result<Self::Receipt<Method>, crate::traits::HandleError<Self::Error, Error>>,
     >
     where
         Method::Res: RpcMessage,
     {
-        async {
+        async move {
             assert!(res.cbor_len(&mut ()) <= Method::Res::max_len());
             let written = self.client.write(&res).await;
             written
                 .map(move |_| ReplyReceipt::new(res))
-                .map_err(crate::traits::HandlerError::Replier)
+                .map_err(crate::traits::HandleError::Replier)
         }
     }
 
@@ -110,7 +129,7 @@ impl<'a, T: AsyncWrite + Unpin, Method: crate::Method> ReplyHelper<Method>
         handler: &mut Handler,
         req: NewMethod::Req,
         convert: impl FnOnce(NewMethod::Res) -> Method::Res,
-    ) -> Result<Self::Receipt<Method>, crate::traits::HandlerError<Self::Error, Handler::Error>>
+    ) -> Result<Self::Receipt<Method>, crate::traits::HandleError<Self::Error, Handler::Error>>
     {
         Ok(handler
             .handle(self.change_method(&req), req)

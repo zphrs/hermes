@@ -1,16 +1,15 @@
 use std::{convert::Infallible, time::Duration};
 
-use rpc::{HandleOneRequestError, Transport as _};
+use rpc::{HandleOneRequestError, MachineCursor, Transport as _, state::role};
 use shared_schema::SkyNode;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{Instrument as _, info, info_span, instrument::WithSubscriber as _, trace};
 
 use crate::{
     api::{earth_root::register::OnlineNodes, find_nodes::KadRpcManager},
-    entrypoint::{as_earth, as_sky},
+    entrypoint::{Entrypoint, as_earth, as_sky},
     quinn_transport,
 };
-use rpc::server_conn::Wrapper;
 
 #[derive(Clone)]
 pub struct SkyServer {
@@ -23,7 +22,7 @@ impl SkyServer {
     pub async fn new() -> Result<Self, HandleOneRequestError<quinn_transport::Error, Infallible>> {
         let tp = quinn_transport::Transport::self_signed_server()
             .await
-            .map_err(HandleOneRequestError::Transport)?;
+            .map_err(HandleOneRequestError::Replier)?;
         let pub_addr = tp.inner().local_addr().unwrap();
         let manager = KadRpcManager::new(tp.clone(), pub_addr.ip().into());
 
@@ -68,19 +67,18 @@ impl SkyServer {
         );
     }
 
-    pub fn run(&self) -> JoinHandle<Result<(), HandleOneRequestError<quinn_transport::Error, Infallible>>> {
+    pub fn run(&self) -> JoinHandle<Result<(), anyhow::Error>> {
         self.run_refresh_loop();
 
         let (manager, tp, online_nodes) = self.clone().into_parts();
 
         let jh = tokio::task::spawn(
             async move {
-                let mut js: JoinSet<Result<(), HandleOneRequestError<quinn_transport::Error, Infallible>>> =
-                    JoinSet::new();
+                let mut js: JoinSet<Result<(), anyhow::Error>> = JoinSet::new();
                 loop {
                     trace!("awaiting client");
                     let incoming_client: quinn_transport::Incoming =
-                        tp.accept().await.map_err(HandleOneRequestError::Transport)?;
+                        tp.accept().await.map_err(HandleOneRequestError::Replier)?;
                     let manager = manager.clone();
                     let online_nodes = online_nodes.clone();
                     let span = info_span!("handling request",
@@ -96,29 +94,45 @@ impl SkyServer {
                                 Ok(v) => v,
                                 Err(e) => {
                                     info!("timing out...");
-                                    Err(e).map_err(HandleOneRequestError::Transport)?
+                                    Err(e).map_err(HandleOneRequestError::Replier)?
                                 }
                             };
                             let handler = crate::api::entrypoint::Method::new(
                                 conn.inner().remote_address().ip(),
                             );
-                            let mut login = Wrapper::new(handler, conn);
+                            let mut login =
+                                MachineCursor::<Entrypoint, _, _>::new(conn, role::Server);
+                            let (handler, sender) = login.into_parts(handler);
                             loop {
-                                let (res, parts) =
-                                    login.handle_state_transition().await?.extract_res();
+                                let (res, split_receipt) = handler
+                                    .handle_transition_request()
+                                    .await?
+                                    .split(sender)
+                                    .await?;
                                 use crate::entrypoint::Response::*;
                                 match res {
                                     Sky(as_sky::Response::Ok(actions), sky_node) => {
                                         let handler =
                                             crate::api::sky_root::Method::new(&manager, sky_node);
-                                        let logged_in =
-                                            Wrapper::from(parts.method_change(actions, handler));
+                                        let logged_in = MachineCursor::from_split_receipt(
+                                            split_receipt,
+                                            actions,
+                                        )
+                                        .await?;
+                                        let (handler, sender) = logged_in.into_parts(handler);
+
+                                        handler.handle_requests(handler);
+
                                         logged_in.handle_loopback().await?;
                                         return Ok(());
                                     }
                                     Sky(as_sky::Response::Invalid(loopback), _sky_node) => {
                                         // restore login from the parts
-                                        login = Wrapper::from(parts.method_restore(loopback));
+                                        login = MachineCursor::from_split_receipt(
+                                            split_receipt,
+                                            loopback,
+                                        )
+                                        .await?;
                                     }
                                     Earth(as_earth::Response::Ok(actions), earth_node) => {
                                         let handler = crate::api::earth_root::Method::new(
@@ -139,9 +153,11 @@ impl SkyServer {
                     while let Some(result) = js.try_join_next() {
                         if let Err(e) = result.unwrap() {
                             match e {
-                                HandleOneRequestError::Transport(quinn_transport::Error::Connection(
-                                    quinn::ConnectionError::TimedOut,
-                                )) => {
+                                HandleOneRequestError::Transport(
+                                    quinn_transport::Error::Connection(
+                                        quinn::ConnectionError::TimedOut,
+                                    ),
+                                ) => {
                                     tracing::warn!("timed out!");
                                 }
                                 e => {

@@ -66,13 +66,16 @@ pub mod not_applicable {
     impl crate::Handler<Method> for Handler {
         type Error = Infallible;
 
-        async fn handle<Replier: crate::transport::ReplyHelper<NotApplicable>>(
+        async fn handle<Replier: crate::transport::ReplyHelper<Method>>(
             &mut self,
-            _replier: Replier,
-            _value: <Method as crate::Method>::Req,
+            replier: Replier,
+            value: <Method as super::Method>::Req,
         ) -> Result<
-            Replier::Receipt<NotApplicable>,
-            crate::traits::HandlerError<Replier::Error, Self::Error>,
+            <Replier as crate::transport::ReplyHelper<Method>>::Receipt<Method>,
+            crate::traits::HandleError<
+                <Replier as crate::transport::ReplyHelper<Method>>::Error,
+                <Self as crate::Handler<Method>>::Error,
+            >,
         > {
             unimplemented!("no point in implementing since the request can't be constructed")
         }

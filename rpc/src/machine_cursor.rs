@@ -12,15 +12,18 @@ mod state_handler;
 #[cfg(test)]
 mod test;
 
-use sender::Sender;
+pub use sender::Sender;
+pub use state_handler::StateHandler;
+
+pub use state_handler::TransitionRequestError;
 
 use crate::{
     CallerError, Method,
     machine_cursor::{
         sender::{RequestTransition, TransitionReceipt},
-        state_handler::{PendingTransitionReceipt, StateHandler},
+        state_handler::PendingTransitionReceipt,
     },
-    traits::{self, state},
+    traits::{self, Prioritized, state},
     transport::CallerExt,
 };
 #[expect(
@@ -78,6 +81,10 @@ impl<State: crate::traits::State, Connection: crate::transport::Connection, Role
             _role: role,
         }
     }
+
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
     /// Waits for an acknowledgement from the sender that the view change
     /// went through on the other end before returning a new MachineCursor.
     pub async fn from_split_receipt(
@@ -105,6 +112,23 @@ impl<State: crate::traits::State, Connection: crate::transport::Connection, Role
         let out = Self::new(conn, role);
         Ok(out)
     }
+
+    pub async fn tiebreak<OldMethod: traits::method::Method, Sender>(
+        pending_transition_receipt: PendingTransitionReceipt<
+            '_,
+            State,
+            OldMethod,
+            Role,
+            Connection,
+            State::Priority,
+            Connection::SendStream,
+        >,
+        transition_request: RequestTransition<OldMethod::Req, OldMethod, Role, Connection>,
+    ) where
+        State: Prioritized,
+    {
+        todo!()
+    }
 }
 
 #[expect(
@@ -115,17 +139,6 @@ pub struct SplitReceipt<Connection: crate::transport::Connection, Role: state::r
     Connection,
     Role,
 );
-
-impl<State: crate::traits::State, Connection: crate::transport::Connection + Clone>
-    MachineCursor<State, Connection, state::role::Client>
-where
-    State::ServerMethod: Method,
-{
-    pub fn into_sender(self) -> Sender<state::role::Client, State::ServerMethod, Connection> {
-        let sender = Sender::new(&self.state_wrapper, state::role::Client, self.conn.clone());
-        sender
-    }
-}
 
 impl<State: crate::traits::State, Connection: crate::transport::Connection + Clone + CallerExt>
     MachineCursor<State, Connection, state::role::Client>
@@ -162,11 +175,12 @@ where
     pub async fn split_transition_receipt<'a>(
         delayed_transition_receipt: PendingTransitionReceipt<
             'a,
-            Connection::SendStream,
             State,
             State::ClientMethod,
             state::role::Client,
             Connection,
+            State::Priority,
+            Connection::SendStream,
         >,
         sender: Sender<state::role::Client, State::ServerMethod, Connection>,
     ) -> Result<
@@ -177,15 +191,17 @@ where
         std::io::Error,
     >
     where
-        Connection::SendStream: futures::AsyncWrite + Unpin + 'static,
-        State::ClientMethod: Method + 'static,
+        Connection::SendStream: futures::AsyncWrite + Unpin,
+        State::ClientMethod: Method,
         State::ServerMethod: Method,
+        State: Prioritized,
         Connection: PartialEq + std::fmt::Debug,
     {
-        let (delayed_receipt, _role, handler_conn) = delayed_transition_receipt.into_parts();
+        let (delayed_receipt, _role, handler_conn, to_send) =
+            delayed_transition_receipt.into_parts();
         let (role, sender_conn) = sender.into_parts();
         assert_eq!(&*handler_conn, &sender_conn);
-        let (res, actually_send) = delayed_receipt.finalize();
+        let (res, actually_send) = delayed_receipt.finalize(to_send);
         actually_send.await?;
         Ok((res, SplitReceipt(sender_conn, role)))
     }
@@ -255,11 +271,12 @@ where
     pub async fn split_transition_receipt<'a>(
         delayed_transition_receipt: PendingTransitionReceipt<
             'a,
-            Connection::SendStream,
             State,
             State::ServerMethod,
             state::role::Server,
             Connection,
+            State::Priority,
+            Connection::SendStream,
         >,
         sender: Sender<state::role::Server, State::ClientMethod, Connection>,
     ) -> Result<
@@ -270,15 +287,17 @@ where
         std::io::Error,
     >
     where
-        Connection::SendStream: futures::AsyncWrite + Unpin + 'static,
+        Connection::SendStream: futures::AsyncWrite + Unpin,
         State::ClientMethod: Method,
-        State::ServerMethod: Method + 'static,
+        State::ServerMethod: Method,
+        State: Prioritized,
         Connection: PartialEq + std::fmt::Debug,
     {
-        let (delayed_receipt, _role, handler_conn) = delayed_transition_receipt.into_parts();
+        let (delayed_receipt, _role, handler_conn, send_stream) =
+            delayed_transition_receipt.into_parts();
         let (role, sender_conn) = sender.into_parts();
         assert_eq!(&*handler_conn, &sender_conn);
-        let (res, actually_send) = delayed_receipt.finalize();
+        let (res, actually_send) = delayed_receipt.finalize(send_stream);
         actually_send.await?;
         Ok((res, SplitReceipt(sender_conn, role)))
     }

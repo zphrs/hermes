@@ -1,10 +1,10 @@
 use std::{convert::Infallible, net::IpAddr};
 
 use maxlen::MaxLen;
-use rpc::MethodWrapper;
+use rpc::traits::{method::can_transition, state};
 use shared_schema::SkyNode;
 
-type LoopbackWrapper = MethodWrapper<super::Method>;
+type LoopbackWrapper = state::Wrapper<super::EntrypointState>;
 
 /// Use new to construct this Request. No need to specify a SkyNode since one
 /// will be constructed on the server based on the IP address of the sender.
@@ -29,7 +29,7 @@ impl Request {
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Response {
     #[n(0)]
-    Ok(#[cbor(skip)] MethodWrapper<crate::api::sky_root::Method>),
+    Ok(#[cbor(skip)] state::Wrapper<crate::api::sky_root::State>),
     #[n(1)]
     Invalid(#[cbor(skip)] LoopbackWrapper),
 }
@@ -42,15 +42,23 @@ impl rpc::Method for Method {
 
     type Res = Response;
 
-    type Error = Infallible;
+    type CanTransition = can_transition::True;
 }
 
 impl rpc::Handler for Method {
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+    type Error = Infallible;
+
+    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
         &mut self,
-        replier: rpc::ImmediateReplier<'_, T, Self>,
-        value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>> {
+        replier: Replier,
+        value: <Self as rpc::Method>::Req,
+    ) -> Result<
+        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
+        rpc::traits::HandleError<
+            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
+            <Self as rpc::Handler<Self>>::Error,
+        >,
+    > {
         match value.0 {
             Some(_) => replier.reply(Response::Ok(Default::default())).await,
             None => replier.reply(Response::Invalid(Default::default())).await,

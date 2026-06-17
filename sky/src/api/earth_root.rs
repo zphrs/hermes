@@ -2,10 +2,13 @@ pub mod register;
 
 use std::convert::Infallible;
 
-type LoopbackMethod = MethodWrapper<Method>;
+type LoopbackState = state::Wrapper<State>;
 
 use maxlen::MaxLen;
-use rpc::MethodWrapper;
+use rpc::traits::{
+    method::{can_transition, not_applicable::NotApplicable},
+    state,
+};
 use shared_schema::EarthNode;
 
 use crate::api::{
@@ -35,17 +38,17 @@ impl From<shared_schema::ping::Request> for Request {
 }
 
 pub enum Response {
-    Ping(LoopbackMethod),
-    FindNodes(find_nodes::Response, LoopbackMethod),
+    Ping(LoopbackState),
+    FindNodes(find_nodes::Response, LoopbackState),
     Register(register::Response),
 }
 
-impl From<Response> for LoopbackMethod {
+impl From<Response> for LoopbackState {
     fn from(value: Response) -> Self {
         match value {
             Response::Ping(method_wrapper) => method_wrapper,
             Response::FindNodes(_find_nodes_response, method_wrapper) => method_wrapper,
-            Response::Register(_response) => LoopbackMethod::new(),
+            Response::Register(_response) => LoopbackState::new(),
         }
     }
 }
@@ -71,37 +74,56 @@ impl Method {
     }
 }
 
+pub struct State;
+
+impl rpc::traits::State for State {
+    type ClientMethod = NotApplicable;
+
+    type ServerMethod = Method;
+}
+
 impl rpc::Method for Method {
     type Req = Request;
 
     type Res = Response;
 
-    type Error = Infallible;
+    type CanTransition = can_transition::False;
 }
 
 impl rpc::Handler for Method {
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+    type Error = Infallible;
+
+    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
         &mut self,
-        replier: rpc::ImmediateReplier<'_, T, Self>,
-        value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>>
-    {
+        replier: Replier,
+        value: <Self as rpc::Method>::Req,
+    ) -> Result<
+        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
+        rpc::traits::HandleError<
+            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
+            <Self as rpc::Handler<Self>>::Error,
+        >,
+    > {
         Ok(match value {
-            Request::Ping(request) => replier
-                .change_method(&request)
-                .reply_with(&mut shared_schema::ping::Method, request)
-                .await?
-                .map(|_res| Response::Ping(Default::default())),
-            Request::FindNodes(find_nodes_request) => replier
-                .change_method(&find_nodes_request)
-                .reply_with(&mut self.find_nodes, find_nodes_request)
-                .await?
-                .map(|r| Response::FindNodes(r, LoopbackMethod::default())),
-            Request::Register(request) => replier
-                .change_method(&request)
-                .reply_with(&mut self.register, request)
-                .await?
-                .map(Response::Register),
+            Request::Ping(request) => {
+                replier
+                    .reply_with(&mut shared_schema::ping::Method, request, |_res| {
+                        Response::Ping(Default::default())
+                    })
+                    .await?
+            }
+            Request::FindNodes(find_nodes_request) => {
+                replier
+                    .reply_with(&mut self.find_nodes, find_nodes_request, |r| {
+                        Response::FindNodes(r, LoopbackState::default())
+                    })
+                    .await?
+            }
+            Request::Register(request) => {
+                replier
+                    .reply_with(&mut self.register, request, Response::Register)
+                    .await?
+            }
         })
     }
 }

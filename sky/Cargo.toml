@@ -35,6 +35,7 @@ tracing-subscriber = {version = "0.3.23", features = ["tokio-time"] }
 arrayvec = "0.7.6"
 max-sized-vec = { version = "0.1.0", path = "../max-sized-vec" }
 quinn-udp = "0.6.1"
+anyhow = "1.0.103"
 
 [build-dependencies]
 capnpc = "0.21"

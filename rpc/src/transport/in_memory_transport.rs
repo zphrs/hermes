@@ -3,7 +3,6 @@ use std::{
     convert::Infallible,
     future::Future,
     hash::Hash,
-    marker::PhantomData,
     pin::pin,
     sync::{Arc, Mutex},
     task::{Poll, ready},
@@ -146,15 +145,50 @@ impl<Address> crate::transport::BiStream for Connection<Address> {
 
 impl<Address> crate::transport::Client for Connection<Address> {
     type Error = std::io::Error;
+    type AcceptStreamFut = AcceptStreamFut;
 
-    async fn accept_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
-        let stream_rx = self.stream_rx.lock().await;
-        let mut guard = stream_rx;
-        let res = guard
-            .recv()
-            .await
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))?;
-        Ok(res)
+    fn accept_stream(&self) -> AcceptStreamFut {
+        AcceptStreamFut {
+            state: AcceptStreamFutState::Locking(self.stream_rx.clone()),
+        }
+    }
+}
+
+pub struct AcceptStreamFut {
+    state: AcceptStreamFutState,
+}
+
+enum AcceptStreamFutState {
+    Receiving(tokio::sync::OwnedMutexGuard<StreamChannelRx>),
+    Locking(Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<(SendStream, RecvStream)>>>),
+    Done,
+}
+
+impl Future for AcceptStreamFut {
+    type Output = Result<(SendStream, RecvStream), std::io::Error>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Self::Output> {
+        loop {
+            match &mut self.state {
+                AcceptStreamFutState::Locking(val) => {
+                    let guard = ready!(pin!(val.clone().lock_owned()).poll_unpin(cx));
+                    self.state = AcceptStreamFutState::Receiving(guard);
+                }
+                AcceptStreamFutState::Receiving(guard) => {
+                    let result = ready!(guard.poll_recv(cx));
+                    self.state = AcceptStreamFutState::Done;
+                    return Poll::Ready(result.ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed")
+                    }));
+                }
+                AcceptStreamFutState::Done => {
+                    unreachable!("AcceptStreamFut polled after completion")
+                }
+            }
+        }
     }
 }
 

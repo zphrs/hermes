@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 
 use maxlen::MaxLen;
+use rpc::traits::method::can_transition;
 use shared_schema::EarthNode;
 use tokio::time::Instant;
 
@@ -27,15 +28,23 @@ impl rpc::Method for Method<'_> {
 
     type Res = Response;
 
-    type Error = Infallible;
+    type CanTransition = can_transition::False;
 }
 
 impl rpc::Handler for Method<'_> {
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+    type Error = Infallible;
+
+    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
         &mut self,
-        replier: rpc::ImmediateReplier<'_, T, Self>,
-        _value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>> {
+        replier: Replier,
+        value: <Self as rpc::Method>::Req,
+    ) -> Result<
+        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
+        rpc::traits::HandleError<
+            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
+            <Self as rpc::Handler<Self>>::Error,
+        >,
+    > {
         let output = {
             let mut btree_map = self.map.write();
             if let Some(exists) = btree_map.get_mut(self.remote.earth_id()) {

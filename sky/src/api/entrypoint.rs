@@ -4,10 +4,21 @@ pub mod as_sky;
 use std::{convert::Infallible, net::IpAddr};
 
 use maxlen::MaxLen;
-use rpc::MethodWrapper;
+use rpc::{
+    state::priority::ServerWins,
+    traits::method::{can_transition, not_applicable::NotApplicable},
+};
 use shared_schema::{EarthNode, SkyNode};
 
-pub type Entrypoint = MethodWrapper<Method>;
+pub struct EntrypointState;
+
+pub type Entrypoint = ServerWins<EntrypointState>;
+
+impl rpc::traits::State for EntrypointState {
+    type ClientMethod = NotApplicable;
+
+    type ServerMethod = Method;
+}
 
 #[derive(Debug, Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Request {
@@ -49,31 +60,39 @@ impl rpc::Method for Method {
 
     type Res = Response;
 
-    type Error = Infallible;
+    type CanTransition = can_transition::True;
 }
 
 impl rpc::Handler for Method {
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+    type Error = Infallible;
+
+    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
         &mut self,
-        replier: rpc::ImmediateReplier<'_, T, Self>,
-        value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>>
-    {
+        replier: Replier,
+        value: <Self as rpc::Method>::Req,
+    ) -> Result<
+        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
+        rpc::traits::HandleError<
+            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
+            <Self as rpc::Handler<Self>>::Error,
+        >,
+    > {
         Ok(match value {
             Request::Sky(mut request) => {
                 request.set_sky_node(self.peer_ip);
-                as_sky::Method
-                    .handle(replier.change_method(&request), request)
+                replier
+                    .reply_with(&mut as_sky::Method, request, |v| {
+                        Response::Sky(v, SkyNode::from(self.peer_ip))
+                    })
                     .await?
-                    .map(|v| Response::Sky(v, SkyNode::from(self.peer_ip)))
             }
             Request::Earth(earth_node) => {
                 let mut handler = as_earth::Method::new();
                 replier
-                    .change_method(&earth_node)
-                    .reply_with(&mut handler, earth_node.clone())
+                    .reply_with(&mut handler, earth_node.clone(), |v| {
+                        Response::Earth(v, earth_node)
+                    })
                     .await?
-                    .map(|v| Response::Earth(v, earth_node))
             }
         })
     }

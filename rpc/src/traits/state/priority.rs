@@ -15,7 +15,7 @@
 //! |-L(B)--------->| # client says it's no longer handling requests for state A
 //! |               |
 //! |-T(C)-         | # client requests transition from B to C
-//! |<-----\---T(A)-| # server requests transition from B to A
+//! |<-----\---T(A)-| # server requests transition from B->A
 //! |       ------->|
 //! |               | # choose(C.priority(), A.priority()) == Server (A wins)
 //! |-Ack(T(A))---->| # Server discards the T(C) request, client acks T(A)
@@ -63,8 +63,6 @@ pub trait Priority<State: crate::traits::State>: Sized {
 /// Used to get the [`Priority`] of either a client request or a server request
 /// to be stored during the querying or processing of the request.
 ///
-///
-///
 /// To avoid undefined behavior where the Client and the Server end up
 /// out-of-sync with one another, any implementation MUST have both the mapping
 /// from a client or a server request to the associated
@@ -93,6 +91,8 @@ impl<S: crate::traits::State, T: PartialOrd> Priority<S> for T {
     }
 }
 
+/// Priority type that compares by cloning the request values and comparing them.
+/// Used by the `from_cloned_requests` strategy.
 pub enum SelfPriority<S: State> {
     Client(<S::ClientMethod as crate::Method>::Req),
     Server(<S::ServerMethod as crate::Method>::Req),
@@ -115,19 +115,75 @@ where
     }
 }
 
-impl<T: State> Prioritized for T
-where
-    <Self::ClientMethod as crate::Method>::Req:
-        Clone + PartialOrd<<Self::ServerMethod as crate::Method>::Req>,
-    <Self::ServerMethod as crate::Method>::Req: Clone,
-{
-    type Priority = SelfPriority<Self>;
+// ===== Macro-generated Prioritized implementations =====
 
-    fn client_priority(request: &<Self::ClientMethod as crate::Method>::Req) -> Self::Priority {
-        SelfPriority::Client(request.clone())
-    }
+/// Generates a `Prioritized` implementation for a state type.
+///
+/// # Strategies
+///
+/// - `server_wins` — the server always wins tiebreaks. `Priority = bool`,
+///   client gets `false`, server gets `true`.
+/// - `from_cloned_requests` — clones both request values and compares them
+///   (`Clone + PartialOrd` required). Uses `SelfPriority<StateType>` as the
+///   priority type.
+///
+/// # Example
+///
+/// ```ignore
+/// pub struct MyState;
+/// impl State for MyState {
+///     type ClientMethod = MyClientMethod;
+///     type ServerMethod = MyServerMethod;
+/// }
+///
+/// // Server always wins (default tiebreak behavior)
+/// define_prioritized!(MyState, server_wins);
+///
+/// // Or: compare cloned request values
+/// define_prioritized!(MyState, from_cloned_requests);
+/// ```
+#[macro_export]
+macro_rules! define_prioritized {
+    // ── server_wins strategy ──
+    ($StateType:ty, server_wins) => {
+        impl $crate::traits::Prioritized for $StateType {
+            type Priority = bool;
 
-    fn server_priority(request: &<Self::ServerMethod as crate::Method>::Req) -> Self::Priority {
-        SelfPriority::Server(request.clone())
-    }
+            fn client_priority(
+                _request: &<Self::ClientMethod as $crate::Method>::Req,
+            ) -> Self::Priority {
+                false
+            }
+
+            fn server_priority(
+                _request: &<Self::ServerMethod as $crate::Method>::Req,
+            ) -> Self::Priority {
+                true
+            }
+        }
+    };
+
+    // ── from_cloned_requests strategy ──
+    ($StateType:ty, from_cloned_requests) => {
+        impl $crate::traits::Prioritized for $StateType
+        where
+            <Self::ClientMethod as $crate::Method>::Req:
+                Clone + PartialOrd<<Self::ServerMethod as $crate::Method>::Req>,
+            <Self::ServerMethod as $crate::Method>::Req: Clone,
+        {
+            type Priority = $crate::traits::state::priority::SelfPriority<Self>;
+
+            fn client_priority(
+                request: &<Self::ClientMethod as $crate::Method>::Req,
+            ) -> Self::Priority {
+                $crate::traits::state::priority::SelfPriority::Client(request.clone())
+            }
+
+            fn server_priority(
+                request: &<Self::ServerMethod as $crate::Method>::Req,
+            ) -> Self::Priority {
+                $crate::traits::state::priority::SelfPriority::Server(request.clone())
+            }
+        }
+    };
 }

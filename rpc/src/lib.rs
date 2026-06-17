@@ -1,12 +1,12 @@
 use std::fmt::Debug;
 
-mod machine_cursor;
+pub mod machine_cursor;
 #[cfg(test)]
 mod tests;
 pub mod traits;
 pub mod transport;
 pub use machine_cursor::MachineCursor;
-pub use traits::{Handler, Method, RpcMessage};
+pub use traits::{Handler, Method, RpcMessage, State, state};
 
 pub use transport::{MemoryTransport, in_memory_transport};
 

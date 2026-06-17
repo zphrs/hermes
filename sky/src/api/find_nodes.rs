@@ -2,6 +2,7 @@ mod kad_handler;
 mod kad_manager;
 use kad_handler::KadHandler;
 pub use kad_manager::KadRpcManager;
+use rpc::traits::method::{can_transition, not_applicable::NotApplicable};
 
 use std::convert::Infallible;
 
@@ -46,6 +47,14 @@ impl From<Response> for Vec<SkyNode> {
     }
 }
 
+pub struct State;
+
+impl rpc::traits::State for State {
+    type ClientMethod = NotApplicable;
+
+    type ServerMethod = Method;
+}
+
 #[derive(Clone)]
 pub struct Method {
     rpc_manager: kademlia::RpcManager<SkyNode, KadHandler, 32, 20>,
@@ -66,16 +75,24 @@ impl rpc::Method for Method {
 
     type Res = Response;
 
-    type Error = Infallible;
+    type CanTransition = can_transition::False;
 }
 
 impl rpc::Handler for Method {
+    type Error = Infallible;
+
     #[tracing::instrument(skip(self, replier))]
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
         &mut self,
-        replier: rpc::ImmediateReplier<'_, T, Self>,
-        value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>> {
+        replier: Replier,
+        value: <Self as rpc::Method>::Req,
+    ) -> Result<
+        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
+        rpc::traits::HandleError<
+            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
+            <Self as rpc::Handler<Self>>::Error,
+        >,
+    > {
         let sky_id: kademlia::Id<32> = value.sky_id.into();
         let out = self
             .rpc_manager

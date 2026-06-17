@@ -4,6 +4,7 @@ mod skip_server_verification;
 
 #[cfg(test)]
 use dens::sim::RNG;
+use futures_util::FutureExt as _;
 use quinn::EndpointStats;
 
 use skip_server_verification::SkipServerVerification;
@@ -17,7 +18,9 @@ use tracing::instrument;
 
 use std::{
     net::{Ipv4Addr, SocketAddr},
+    pin::{Pin, pin},
     sync::Arc,
+    task::{Poll, ready},
     time::Duration,
     u64, usize,
 };
@@ -338,9 +341,15 @@ impl rpc::transport::Close for Transport {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Connection {
     conn: quinn::Connection,
+}
+
+impl PartialEq for Connection {
+    fn eq(&self, other: &Self) -> bool {
+        self.conn.stable_id() == other.conn.stable_id()
+    }
 }
 
 impl rpc::transport::Close for Connection {
@@ -361,12 +370,72 @@ impl BiStream for Connection {
     type SendStream = quinn::SendStream;
 }
 
+pub struct OpenStream {
+    state: OpenStreamState,
+}
+
+enum OpenStreamState {
+    Done,
+    OpenBi(quinn::Connection),
+}
+
+impl Future for OpenStream {
+    type Output = Result<
+        (
+            <Connection as BiStream>::SendStream,
+            <Connection as BiStream>::RecvStream,
+        ),
+        Error,
+    >;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let res = match &mut self.state {
+            OpenStreamState::OpenBi(open_bi) => ready!(pin!(open_bi.accept_bi()).poll_unpin(cx)),
+            OpenStreamState::Done => panic!(),
+        };
+
+        self.state = OpenStreamState::Done;
+
+        Poll::Ready(res.map_err(Error::from))
+    }
+}
+
 impl rpc::transport::Caller for Connection {
     type Error = Error;
 
-    async fn open_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
-        self.conn.open_bi().await.map_err(Self::Error::from)
+    fn open_stream(&self) -> OpenStream {
+        let bi = self.conn.clone();
+        OpenStream {
+            state: OpenStreamState::OpenBi(bi),
+        }
     }
+
+    type OpenStreamFut = OpenStream;
+}
+
+pub struct AcceptStream {
+    state: AcceptStreamState,
+}
+
+impl Future for AcceptStream {
+    type Output = Result<(quinn::SendStream, quinn::RecvStream), Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        let Self { state } = &mut *self;
+        let res = match state {
+            AcceptStreamState::AcceptBi(connection) => {
+                ready!(pin!(connection.accept_bi()).poll_unpin(cx))
+            }
+        };
+        Poll::Ready(Ok(res?))
+    }
+}
+
+pub enum AcceptStreamState {
+    AcceptBi(quinn::Connection),
 }
 
 impl Connection {
@@ -378,9 +447,13 @@ impl Connection {
 impl rpc::transport::Client for Connection {
     type Error = Error;
 
-    async fn accept_stream(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
-        Ok(self.conn.accept_bi().await?)
+    fn accept_stream(&self) -> AcceptStream {
+        AcceptStream {
+            state: AcceptStreamState::AcceptBi(self.conn.clone()),
+        }
     }
+
+    type AcceptStreamFut = AcceptStream;
 }
 
 #[cfg(test)]
@@ -390,7 +463,8 @@ mod tests {
     use expect_test::expect;
     use rpc::{
         Transport as _,
-        transport::{Caller, Client, Close, Incoming},
+        traits::method::can_transition,
+        transport::{CallerExt as _, Client, Close, Incoming},
     };
     use std::convert::Infallible;
 
@@ -411,25 +485,30 @@ mod tests {
 
         type Res = ();
 
-        type Error = Infallible;
+        type CanTransition = can_transition::False;
     }
 
     impl rpc::Handler for PingHandler {
-        async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+        type Error = Infallible;
+
+        async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
             &mut self,
-            replier: rpc::ImmediateReplier<'_, T, Self>,
-            value: Self::Req,
+            replier: Replier,
+            value: <Self as rpc::Method>::Req,
         ) -> Result<
-            rpc::ReplyReceipt<Self::Res>,
-            rpc::HandleOneRequestError<TransportError, Self::Error>,
+            <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
+            rpc::traits::HandleError<
+                <Replier as rpc::transport::ReplyHelper<Self>>::Error,
+                <Self as rpc::Handler<Self>>::Error,
+            >,
         > {
             trace!("Handling client");
 
-            let res = ping::Method
-                .handle(replier.change_method(&value), value)
+            let res = replier
+                .reply_with(&mut ping::Method, value, |_v| ())
                 .await?;
             trace!("finished handling client");
-            Ok(res.clear())
+            Ok(res)
         }
     }
 

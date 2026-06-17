@@ -2,6 +2,7 @@ use std::convert::Infallible;
 
 use arrayvec::ArrayVec;
 use max_sized_vec::MaxSizedVec;
+use rpc::traits::method::can_transition;
 use shared_schema::{EarthNode, earth_node::EarthId};
 
 use crate::api::earth_root::register::Candidates;
@@ -20,7 +21,7 @@ impl<'a> rpc::Method for Method<'a> {
 
     type Res = Response;
 
-    type Error = Infallible;
+    type CanTransition = can_transition::False;
 }
 
 impl<'a> Method<'a> {
@@ -73,11 +74,19 @@ impl<'a> Method<'a> {
 }
 
 impl rpc::Handler for Method<'_> {
-    async fn handle<T: futures_io::AsyncWrite + Unpin + Send + Sync, TransportError>(
+    type Error = Infallible;
+
+    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
         &mut self,
-        replier: rpc::ImmediateReplier<'_, T, Self>,
-        value: Self::Req,
-    ) -> Result<rpc::ReplyReceipt<Self::Res>, rpc::HandleOneRequestError<TransportError, Self::Error>> {
+        replier: Replier,
+        value: <Self as rpc::Method>::Req,
+    ) -> Result<
+        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
+        rpc::traits::HandleError<
+            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
+            <Self as rpc::Handler<Self>>::Error,
+        >,
+    > {
         replier.reply(self.call_inner(value)).await
     }
 }
