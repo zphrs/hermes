@@ -47,7 +47,20 @@ pub mod not_applicable {
     /// Type for a method whose requests and responses are impossible to construct;
     /// used to specify no method at all for a one-sided
     /// [`State`](crate::traits::State).
+    #[derive(Clone)]
     pub enum NotApplicable {}
+
+    impl PartialEq for NotApplicable {
+        fn eq(&self, other: &Self) -> bool {
+            false
+        }
+    }
+
+    impl PartialOrd for NotApplicable {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            None
+        }
+    }
 
     type Request = NotApplicable;
     type Response = NotApplicable;

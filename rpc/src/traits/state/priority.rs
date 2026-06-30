@@ -23,7 +23,7 @@
 //! |               |
 //! ```
 
-use crate::traits::State;
+use crate::traits::{State, method::not_applicable::NotApplicable};
 
 mod r#enum {
     pub enum Priority {
@@ -115,75 +115,187 @@ where
     }
 }
 
-// ===== Macro-generated Prioritized implementations =====
-
-/// Generates a `Prioritized` implementation for a state type.
+/// Priority strategy that always gives precedence to the server's request.
 ///
-/// # Strategies
-///
-/// - `server_wins` — the server always wins tiebreaks. `Priority = bool`,
-///   client gets `false`, server gets `true`.
-/// - `from_cloned_requests` — clones both request values and compares them
-///   (`Clone + PartialOrd` required). Uses `SelfPriority<StateType>` as the
-///   priority type.
+/// Unlike [`from_cloned_requests`], this strategy imposes no trait requirements whatsoever:
+/// request types need not implement [`Clone`] or [`PartialOrd`].
 ///
 /// # Example
 ///
 /// ```ignore
+/// use rpc::{State, Method, define_prioritized};
+/// use rpc::traits::state::priority::server_wins;
+///
+/// // Minimal method types for demonstration
+/// pub struct ClientM;
+/// impl Method for ClientM {
+///     type Req = String;
+///     type Resp = ();
+/// }
+///
+/// pub struct ServerM;
+/// impl Method for ServerM {
+///     type Req = String;
+///     type Resp = ();
+/// }
+///
+/// pub struct MyState;
+/// impl State for MyState {
+///     type ClientMethod = ClientM;
+///     type ServerMethod = ServerM;
+/// }
+///
+/// // Server requests always win over client requests.
+/// define_prioritized!(MyState, server_wins);
+/// ```
+pub mod server_wins {
+    use std::marker::PhantomData;
+
+    pub type Priority<S> = (bool, PhantomData<S>);
+
+    pub fn client_priority<State: crate::State>(
+        _request: &<State::ClientMethod as crate::Method>::Req,
+    ) -> Priority<State> {
+        (false, PhantomData)
+    }
+
+    pub fn server_priority<State: crate::State>(
+        _request: &<State::ServerMethod as crate::Method>::Req,
+    ) -> Priority<State> {
+        (true, PhantomData)
+    }
+}
+
+/// Priority strategy that compares priorities by cloning the request values.
+///
+/// This strategy uses [`SelfPriority`], which wraps either the client or server
+/// request and compares them via [`PartialOrd`].
+///
+/// # State requirements
+///
+/// The state `S` must satisfy the constraints of [`SelfPriority`]:
+///
+/// - `<S::ClientMethod as Method>::Req: Clone`
+/// - `<S::ServerMethod as Method>::Req: Clone`
+/// - `<S::ClientMethod as Method>::Req: PartialOrd<<S::ServerMethod as Method>::Req>`
+///
+/// That is, the client request type must implement `PartialOrd` against the
+/// server request type (`client > server`), as defined by the [`Priority`] impl
+/// on [`SelfPriority`]. Both request types must also be [`Clone`] so the values
+/// can be stored in the returned SelfPriority struct for potential future
+/// `choose` calls.
+///
+/// # Example
+///
+/// ```ignore
+/// use rpc::{State, Method, define_prioritized};
+/// use rpc::traits::state::priority::from_cloned_requests;
+///
+/// // Minimal method types for demonstration
+/// pub struct ClientM;
+/// impl Method for ClientM {
+///     type Req = u64; // u64: Clone + PartialOrd<u64>
+///     type Resp = ();
+/// }
+///
+/// pub struct ServerM;
+/// impl Method for ServerM {
+///     type Req = u64; // same inner type as client req
+///     type Resp = ();
+/// }
+///
+/// pub struct MyState;
+/// impl State for MyState {
+///     type ClientMethod = ClientM;
+///     type ServerMethod = ServerM;
+/// }
+///
+/// // Derive Prioritized via the from_cloned_requests strategy.
+/// // Client requests with higher u64 values "win" over server requests.
+/// // Ties default to the Server request.
+/// define_prioritized!(MyState, from_cloned_requests);
+/// ```
+pub mod from_cloned_requests {
+    use super::SelfPriority;
+
+    pub type Priority<S> = SelfPriority<S>;
+
+    pub fn client_priority<S>(request: &<S::ClientMethod as crate::Method>::Req) -> Priority<S>
+    where
+        S: crate::State,
+        <S::ClientMethod as crate::Method>::Req: Clone,
+        <S::ServerMethod as crate::Method>::Req: Clone,
+        <S::ClientMethod as crate::Method>::Req:
+            PartialOrd<<S::ServerMethod as crate::Method>::Req>,
+    {
+        SelfPriority::Client(request.clone())
+    }
+
+    pub fn server_priority<S>(request: &<S::ServerMethod as crate::Method>::Req) -> Priority<S>
+    where
+        S: crate::State,
+        <S::ClientMethod as crate::Method>::Req: Clone,
+        <S::ServerMethod as crate::Method>::Req: Clone,
+        <S::ClientMethod as crate::Method>::Req:
+            PartialOrd<<S::ServerMethod as crate::Method>::Req>,
+    {
+        SelfPriority::Server(request.clone())
+    }
+}
+
+/// Generates a `Prioritized` implementation for a state type using a strategy module.
+///
+/// The strategy module must provide:
+///
+/// - `Priority` — an associated type implementing [`Priority`]
+/// - `client_priority` — function returning the client's priority
+/// - `server_priority` — function returning the server's priority
+///
+/// # Example
+///
+/// ```ignore
+/// use my_crate::State;
+///
 /// pub struct MyState;
 /// impl State for MyState {
 ///     type ClientMethod = MyClientMethod;
 ///     type ServerMethod = MyServerMethod;
 /// }
 ///
-/// // Server always wins (default tiebreak behavior)
-/// define_prioritized!(MyState, server_wins);
+/// // Use the server_wins strategy module
+/// define_prioritized!(MyState, crate::traits::state::priority::server_wins);
 ///
-/// // Or: compare cloned request values
-/// define_prioritized!(MyState, from_cloned_requests);
+/// // Or: use from_cloned_requests
+/// define_prioritized!(MyState, crate::traits::state::priority::from_cloned_requests);
 /// ```
 #[macro_export]
 macro_rules! define_prioritized {
-    // ── server_wins strategy ──
-    ($StateType:ty, server_wins) => {
+    ($StateType:ty, $($StrategyModule:tt)+) => {
         impl $crate::traits::Prioritized for $StateType {
-            type Priority = bool;
-
-            fn client_priority(
-                _request: &<Self::ClientMethod as $crate::Method>::Req,
-            ) -> Self::Priority {
-                false
-            }
-
-            fn server_priority(
-                _request: &<Self::ServerMethod as $crate::Method>::Req,
-            ) -> Self::Priority {
-                true
-            }
-        }
-    };
-
-    // ── from_cloned_requests strategy ──
-    ($StateType:ty, from_cloned_requests) => {
-        impl $crate::traits::Prioritized for $StateType
-        where
-            <Self::ClientMethod as $crate::Method>::Req:
-                Clone + PartialOrd<<Self::ServerMethod as $crate::Method>::Req>,
-            <Self::ServerMethod as $crate::Method>::Req: Clone,
-        {
-            type Priority = $crate::traits::state::priority::SelfPriority<Self>;
+            type Priority = $($StrategyModule)+::Priority<Self>;
 
             fn client_priority(
                 request: &<Self::ClientMethod as $crate::Method>::Req,
             ) -> Self::Priority {
-                $crate::traits::state::priority::SelfPriority::Client(request.clone())
+                $($StrategyModule)+::client_priority(request)
             }
 
             fn server_priority(
                 request: &<Self::ServerMethod as $crate::Method>::Req,
             ) -> Self::Priority {
-                $crate::traits::state::priority::SelfPriority::Server(request.clone())
+                $($StrategyModule)+::server_priority(request)
             }
         }
     };
 }
+
+struct Test;
+
+impl State for Test {
+    type ClientMethod = NotApplicable;
+
+    type ServerMethod = NotApplicable;
+}
+
+// define_prioritized!(Test, self::server_wins);
+define_prioritized!(Test, self::from_cloned_requests);
