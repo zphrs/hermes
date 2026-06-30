@@ -1,6 +1,6 @@
+use crate::traits::HandleError;
 use crate::traits::method::can_transition;
 use crate::traits::{self, method::Loopback};
-use crate::traits::{HandleError, method};
 use crate::transport::ReplyHelper;
 use std::marker::PhantomData;
 

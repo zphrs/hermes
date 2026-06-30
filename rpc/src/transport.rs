@@ -69,7 +69,8 @@ pub trait Client: BiStream {
         Rh: crate::Handler<Method>,
     >(
         &self,
-        stream: (Replier, &'a mut Self::RecvStream),
+        replier: Replier,
+        stream: &'a mut Self::RecvStream,
         handler: &'a mut Rh,
     ) -> impl Future<
         Output = Result<
@@ -83,7 +84,8 @@ pub trait Client: BiStream {
         <Self as BiStream>::RecvStream: 'a,
     {
         async move {
-            let (write, read) = stream;
+            let write = replier;
+            let read = stream;
             let mut receiver = minicbor_io::AsyncReader::new(read);
             receiver.set_max_len(Method::Req::max_len() as u32);
             let Some(root) = (match receiver.read::<Method::Req>().await {
@@ -128,7 +130,7 @@ pub trait Client: BiStream {
         let (write, read) = stream;
         let replier = ImmediateReplier::from(write);
         let out = self
-            .handle_one_request_with_handler((replier, read), handler)
+            .handle_one_request_with_handler(replier, read, handler)
             .map(|v| v.map(|v| v.into_inner()));
         out
     }

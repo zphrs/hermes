@@ -1,22 +1,16 @@
-use crate::{
-    machine_cursor::state_handler::handle_transition_request::{
-        HandleTransitionRequest, HandleTransitionRequestState,
-    },
-    traits::{Handler, priority::Priority},
-};
+use crate::{Handler, ImmediateReplier};
 mod concurrent_request_handler;
-mod handle_transition_request;
 
 use std::{
     convert::Infallible,
     io::ErrorKind,
     marker::PhantomData,
     pin::{Pin, pin},
-    task::{Context, Poll, ready},
+    task::Poll,
 };
 
 use crate::{
-    ImmediateReplier, RpcMessage,
+    RpcMessage,
     machine_cursor::{self, SplitReceipt},
     traits::{Prioritized, state::role},
     transport::ReplyHelper,
@@ -315,9 +309,24 @@ where
         &self.client
     }
 
-    pub fn handle_transition_request<'a>(
+    pub async fn handle_transition_request<'a>(
         &'a mut self,
-    ) -> HandleTransitionRequest<'a, State, Role, RootMethod, Client, H>
+    ) -> Result<
+        PendingTransitionReceipt<
+            'a,
+            State,
+            RootMethod,
+            Role,
+            Client,
+            <State as Prioritized>::Priority,
+            Client::SendStream,
+        >,
+        TransitionRequestError<
+            Client::Error,
+            H::Error,
+            <DelayedReplier<RootMethod> as ReplyHelper<RootMethod>>::Error,
+        >,
+    >
     where
         RootMethod::Req: crate::RpcMessage + Clone,
         State: Prioritized,
@@ -329,11 +338,58 @@ where
             ..
         } = self;
         let fut = client.accept_stream();
-        HandleTransitionRequest {
-            client: Some(client),
-            role: *role,
-            inner: HandleTransitionRequestState::AcceptStream { fut, handler },
+
+        let mut stream = match fut.await {
+            Ok(stream) => stream,
+            Err(e) => Err(TransitionRequestError::Client(e))?,
+        };
+
+        let mut with_priority = WithPriority::<RootMethod, H, State, Role>::new(handler, *role);
+        let receipt = {
+            let replier = DelayedReplier::<RootMethod>::new();
+            // inlined `client.handle_one_request_with_handler(replier, stream, handler)`
+            // in order to avoid https://github.com/rust-lang/rust/issues/100013
+            let stream = &mut stream.1;
+            let handler = &mut with_priority;
+            async move {
+                let write = replier;
+                let read = stream;
+                let mut receiver = minicbor_io::AsyncReader::new(read);
+                receiver.set_max_len(RootMethod::Req::max_len() as u32);
+                let Some(root) = (match receiver.read::<RootMethod::Req>().await {
+                    Ok(v) => v,
+                    Err(e) => Err(HandleOneRequestError::Read(e))?,
+                }) else {
+                    return Err(HandleOneRequestError::Read(minicbor_io::Error::Io(
+                        ErrorKind::ConnectionAborted.into(),
+                    )));
+                };
+                let out = match handler.handle(write, root).await {
+                    Ok(v) => v,
+                    Err(traits::HandleError::Handler(e)) => {
+                        return Err(HandleOneRequestError::App(e));
+                    }
+                    Err(traits::HandleError::Replier(e)) => {
+                        return Err(HandleOneRequestError::Replier(e));
+                    }
+                };
+                Ok(out)
+            }
         }
+        .await?;
+
+        let priority = with_priority
+            .into_priority()
+            .expect("priority is set during handle");
+
+        Ok(PendingTransitionReceipt(
+            receipt,
+            self.role,
+            &self.client,
+            state::Wrapper::new(),
+            priority,
+            stream.0,
+        ))
     }
 
     /// handles requests in parallel until a method called is not a loopback.
@@ -381,8 +437,45 @@ where
                         ConcurrentRequestHandler::<RootMethod, LoopbackMethod, LoopbackHandler>::new(
                             handler,
                         );
+                    // inlined `client.handle_one_request(stream, concurrent_handler)`
+                    // in order to avoid https://github.com/rust-lang/rust/issues/100013
+                    let out = {
+                        let this = &client;
+                        let stream = &mut stream;
+                        let handler = &mut concurrent_handler;
+                        let (write, read) = stream;
+                        let replier = ImmediateReplier::from(write);
+                        let out = {
+                            async move {
+                                let write = replier;
+                                let read = read;
+                                let mut receiver = minicbor_io::AsyncReader::new(read);
+                                receiver.set_max_len(RootMethod::Req::max_len() as u32);
+                                let Some(root) = (match receiver.read::<RootMethod::Req>().await {
+                                    Ok(v) => v,
+                                    Err(e) => Err(HandleOneRequestError::Read(e))?,
+                                }) else {
+                                    return Err(HandleOneRequestError::Read(minicbor_io::Error::Io(
+                                        ErrorKind::ConnectionAborted.into(),
+                                    )));
+                                };
+                                let out = match handler.handle(write, root).await {
+                                    Ok(v) => v,
+                                    Err(traits::HandleError::Handler(e)) => {
+                                        return Err(HandleOneRequestError::App(e));
+                                    }
+                                    Err(traits::HandleError::Replier(e)) => {
+                                        return Err(HandleOneRequestError::Replier(e));
+                                    }
+                                };
+                                Ok(out)
+                            }
+                        }
+                            .map(|v| v.map(|v| v.into_inner()));
+                        out
+                    }.await;
 
-                        (client.handle_one_request(&mut stream, &mut concurrent_handler).await, stream)
+                        (out, stream)
                     });
                 }
                 next_result = js.select_next_some() => {
@@ -542,7 +635,7 @@ impl<
         // Role is role::Server.
         //
         // Since Role cannot be implemented outside of this crate due to sealing,
-        // it's perfectly safe to do so.
+        // it's perfectly safe to assume the two types are identical.
         let priority = unsafe {
             match Role::to_enum() {
                 role::WhichRole::Client => State::client_priority(&std::mem::transmute::<
@@ -559,110 +652,5 @@ impl<
         self.priority = Some(priority);
 
         self.handler.handle(replier, value).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        machine_cursor::state_handler::{
-            DelayedReplier, PendingTransitionReceipt, StateHandler, TransitionRequestError,
-            WithPriority,
-        },
-        transport::{Client as _, Incoming as _, Transport},
-    };
-    use tokio::task::JoinSet;
-
-    use crate::{MachineCursor, traits::state};
-
-    mod login {
-        use maxlen::MaxLen;
-        use std::convert::Infallible;
-
-        use crate::traits::{
-            Prioritized,
-            method::{can_transition, not_applicable},
-            state::{self, Wrapper},
-        };
-
-        #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-        #[cbor(flat)]
-        pub enum Response {
-            #[n(0)]
-            TryAgain(#[n(0)] state::Wrapper<State>),
-        }
-
-        impl crate::Method for Method {
-            /// whether or not to let the login go through
-            type Req = bool;
-            type Res = Response;
-            type CanTransition = can_transition::True;
-        }
-        pub struct Method;
-
-        pub struct State;
-
-        impl crate::traits::State for State {
-            /// we use [`None`] as a method that is impossible to construct
-            type ClientMethod = not_applicable::Method;
-
-            type ServerMethod = Method;
-        }
-
-        impl Prioritized for State {
-            type Priority = bool;
-
-            fn client_priority(
-                _request: &<Self::ClientMethod as crate::Method>::Req,
-            ) -> Self::Priority {
-                false
-            }
-
-            fn server_priority(
-                _request: &<Self::ServerMethod as crate::Method>::Req,
-            ) -> Self::Priority {
-                true
-            }
-        }
-
-        impl crate::Handler for Method {
-            type Error = Infallible;
-
-            async fn handle<Replier: crate::transport::ReplyHelper<Self>>(
-                &mut self,
-                replier: Replier,
-                value: <Self as crate::Method>::Req,
-            ) -> Result<
-                Replier::Receipt<Self>,
-                crate::traits::HandleError<Replier::Error, Self::Error>,
-            > {
-                match value {
-                    true => replier.reply(Response::TryAgain(Wrapper::new())).await,
-                    false => replier.reply(Response::TryAgain(Wrapper::new())).await,
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_state_flow() {
-        let network = crate::in_memory_transport::Network::new();
-
-        let mut js = JoinSet::new();
-        static SERVER_ADDR: u32 = 0;
-        // server
-        {
-            let net = network.clone();
-            js.spawn(async move {
-                let tp = net.new_transport(SERVER_ADDR);
-                let incoming = tp.accept().await.expect("infallible");
-                let conn = incoming.accept().await.expect("successful incoming");
-                let mut login_cursor =
-                    MachineCursor::<login::State, _, _>::new(conn, state::role::Server);
-                let (mut handler, sender) = login_cursor.into_parts(login::Method);
-                let res = handler.handle_transition_request().await;
-            });
-        }
     }
 }
