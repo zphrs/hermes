@@ -9,9 +9,11 @@
 // mod concurrent_request_handler;
 mod processor;
 mod requester;
+
 #[cfg(test)]
 mod test;
 mod tiebreak;
+mod transition_request_method;
 
 pub use processor::Processor;
 pub use requester::Requester;
