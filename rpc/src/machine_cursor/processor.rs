@@ -22,7 +22,7 @@ use tracing::trace;
 
 use crate::{
     HandleOneRequestError, Method,
-    machine_cursor::state_handler::concurrent_request_handler::{
+    machine_cursor::processor::concurrent_request_handler::{
         ConcurrentRequestHandler, ConcurrentRequestHandlerError,
     },
     traits::{
@@ -36,7 +36,7 @@ use crate::{
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-pub struct StateHandler<State, Role, RootMethod, Client, H>
+pub struct Processor<State, Role, RootMethod, Client, H>
 where
     State: traits::State,
     Role: state::Role,
@@ -242,7 +242,7 @@ impl<
     /// the returned [`SplitReceipt`].
     pub async fn split(
         self,
-        sender: machine_cursor::sender::Sender<Role, State::ClientMethod, Connection>,
+        sender: machine_cursor::requester::Requester<Role, State::ClientMethod, Connection>,
     ) -> Result<(OldMethod::Res, SplitReceipt<Connection, Role>), std::io::Error>
     where
         Connection::SendStream: futures::AsyncWrite + Unpin,
@@ -281,7 +281,7 @@ impl<
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-impl<State, Role, RootMethod, Client, H> StateHandler<State, Role, RootMethod, Client, H>
+impl<State, Role, RootMethod, Client, H> Processor<State, Role, RootMethod, Client, H>
 where
     State: traits::State,
     Role: state::Role,

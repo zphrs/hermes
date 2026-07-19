@@ -7,21 +7,22 @@
 //! all requests sent alongside how received messages are handled.
 
 // mod concurrent_request_handler;
-mod sender;
-mod state_handler;
+mod processor;
+mod requester;
 #[cfg(test)]
 mod test;
+mod tiebreak;
 
-pub use sender::Sender;
-pub use state_handler::StateHandler;
+pub use processor::Processor;
+pub use requester::Requester;
 
-pub use state_handler::TransitionRequestError;
+pub use processor::TransitionRequestError;
 
 use crate::{
     CallerError, Method,
     machine_cursor::{
-        sender::{RequestTransition, TransitionReceipt},
-        state_handler::PendingTransitionReceipt,
+        processor::PendingTransitionReceipt,
+        requester::{RequestTransition, TransitionReceipt},
     },
     traits::{self, Prioritized, state},
     transport::CallerExt,
@@ -150,17 +151,17 @@ where
         self,
         handler: Handler,
     ) -> (
-        StateHandler<State, state::role::Client, State::ClientMethod, Connection, Handler>,
-        Sender<state::role::Client, State::ServerMethod, Connection>,
+        Processor<State, state::role::Client, State::ClientMethod, Connection, Handler>,
+        Requester<state::role::Client, State::ServerMethod, Connection>,
     ) {
-        let handler = StateHandler::new(
+        let handler = Processor::new(
             state::Wrapper::new(),
             state::role::Client,
             handler,
             self.conn.clone(),
         );
 
-        let sender = Sender::new(&self.state_wrapper, state::role::Client, self.conn.clone());
+        let sender = Requester::new(&self.state_wrapper, state::role::Client, self.conn.clone());
 
         (handler, sender)
     }
@@ -182,7 +183,7 @@ where
             State::Priority,
             Connection::SendStream,
         >,
-        sender: Sender<state::role::Client, State::ServerMethod, Connection>,
+        sender: Requester<state::role::Client, State::ServerMethod, Connection>,
     ) -> Result<
         (
             <State::ClientMethod as Method>::Res,
@@ -213,7 +214,7 @@ where
     >(
         receipt: TransitionReceipt<T, state::role::Client, Connection>,
         wrapper: state::Wrapper<NewState>,
-        handler: StateHandler<State, state::role::Client, State::ClientMethod, Connection, H>,
+        handler: Processor<State, state::role::Client, State::ClientMethod, Connection, H>,
     ) -> Result<
         MachineCursor<NewState, Connection, state::role::Client>,
         CallerError<<Connection as crate::Caller>::Error>,
@@ -248,17 +249,17 @@ where
         self,
         handler: Handler,
     ) -> (
-        StateHandler<State, state::role::Server, State::ServerMethod, Connection, Handler>,
-        Sender<state::role::Server, State::ClientMethod, Connection>,
+        Processor<State, state::role::Server, State::ServerMethod, Connection, Handler>,
+        Requester<state::role::Server, State::ClientMethod, Connection>,
     ) {
-        let handler = StateHandler::new(
+        let handler = Processor::new(
             state::Wrapper::new(),
             state::role::Server,
             handler,
             self.conn.clone(),
         );
 
-        let sender = Sender::new(&self.state_wrapper, state::role::Server, self.conn.clone());
+        let sender = Requester::new(&self.state_wrapper, state::role::Server, self.conn.clone());
 
         (handler, sender)
     }
@@ -278,7 +279,7 @@ where
             State::Priority,
             Connection::SendStream,
         >,
-        sender: Sender<state::role::Server, State::ClientMethod, Connection>,
+        sender: Requester<state::role::Server, State::ClientMethod, Connection>,
     ) -> Result<
         (
             <State::ServerMethod as Method>::Res,
@@ -309,7 +310,7 @@ where
     >(
         receipt: TransitionReceipt<T, state::role::Server, Connection>,
         wrapper: state::Wrapper<NewState>,
-        handler: StateHandler<State, state::role::Server, State::ServerMethod, Connection, H>,
+        handler: Processor<State, state::role::Server, State::ServerMethod, Connection, H>,
     ) -> Result<
         MachineCursor<NewState, Connection, state::role::Server>,
         CallerError<<Connection as crate::Caller>::Error>,

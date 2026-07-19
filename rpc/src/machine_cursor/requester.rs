@@ -44,7 +44,7 @@ impl<Res, Role: state::Role, Caller: crate::transport::Caller>
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-pub struct Sender<Role, RootMethod, Caller>
+pub struct Requester<Role, RootMethod, Caller>
 where
     Role: state::Role,
     Caller: crate::transport::Caller,
@@ -59,7 +59,7 @@ where
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-impl<Role, RootMethod, Caller> Sender<Role, RootMethod, Caller>
+impl<Role, RootMethod, Caller> Requester<Role, RootMethod, Caller>
 where
     Role: state::Role,
     Caller: crate::transport::Caller,
@@ -142,7 +142,7 @@ where
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-impl<Role, RootMethod, Caller> Sender<Role, RootMethod, Caller>
+impl<Role, RootMethod, Caller> Requester<Role, RootMethod, Caller>
 where
     Role: state::Role,
     Caller: crate::transport::Caller,

@@ -7,7 +7,7 @@ use tracing::warn;
 use crate::{
     MachineCursor, Transport,
     in_memory_transport::Connection,
-    machine_cursor::state_handler::DelayedReplier,
+    machine_cursor::processor::DelayedReplier,
     traits::{method::not_applicable, state},
     transport::{Client, Incoming},
 };

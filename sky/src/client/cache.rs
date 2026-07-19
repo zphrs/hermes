@@ -1,5 +1,5 @@
 use rpc::{
-    machine_cursor::{self, StateHandler},
+    machine_cursor::{self, Processor},
     state::role,
 };
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub type Sender<State> = Arc<
-    machine_cursor::Sender<
+    machine_cursor::Requester<
         role::Client,
         <State as rpc::State>::ServerMethod,
         quinn_transport::Connection,
@@ -29,7 +29,7 @@ pub type Sender<State> = Arc<
 >;
 
 pub type Parts<State> = (
-    StateHandler<
+    Processor<
         State,
         role::Client,
         NotApplicable,
