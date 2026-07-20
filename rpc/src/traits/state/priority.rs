@@ -23,9 +23,12 @@
 //! |               |
 //! ```
 
+use std::any::TypeId;
+
 use crate::traits::{State, method::not_applicable::NotApplicable};
 
 mod r#enum {
+    #[repr(u8)]
     pub enum Priority {
         Client = 1,
         Server = 2,
@@ -80,6 +83,115 @@ pub trait Prioritized: State + Sized {
     /// Returns the [`Self::Priority`](Prioritized::Priority) of the server's
     /// transition request.
     fn server_priority(request: &<Self::ServerMethod as crate::Method>::Req) -> Self::Priority;
+}
+
+/// Dispatches to [`Prioritized::client_priority`] or [`Prioritized::server_priority`] based on
+/// the caller's role and whether the context is a **Processor** or **Requester**.
+///
+/// Four methods form a 2×2 matrix:
+///
+/// - **Processor** roles map directly: client→client, server→server.
+/// - **Requester** roles are swapped (e.g. server→client) because it owns both
+/// sides but receives callbacks from the *other* side.
+/// - `_static` variants assert [`TypeId`] equality (`'static` required).
+/// - Non-`_static` variants assert [`size_of`] equality (no `'static` bound).
+///
+/// |                | `_static`                   | non-`_static`        |
+/// |----------------|-----------------------------|----------------------|
+/// | **Processor**  | `processor_priority_static` | `processor_priority` |
+/// | **Requester**  | `requester_priority_static` | `requester_priority` |
+///
+/// The method body is identical between static and non-static variants; only the
+/// assertion differs ([`assert_same_type_id`] vs [`assert_same_size`]).
+pub(crate) trait PrioritizedUnsafeExt: Prioritized {
+    /// Caller must ensure that this is only called within a Processor with the
+    /// passed in RootMethod being the RootMethod of the Processor.
+    unsafe fn processor_priority_static<Role: crate::state::Role, RootRequest>(
+        req: &RootRequest,
+    ) -> Self::Priority
+    where
+        RootRequest: 'static,
+        <Self::ServerMethod as crate::Method>::Req: 'static,
+        <Self::ClientMethod as crate::Method>::Req: 'static,
+    {
+        match Role::to_enum() {
+            crate::state::role::WhichRole::Client => {
+                assert_same_type_id::<RootRequest, Self::ClientMethod>();
+                Self::client_priority(unsafe { std::mem::transmute(req) })
+            }
+            crate::state::role::WhichRole::Server => {
+                assert_same_type_id::<RootRequest, Self::ServerMethod>();
+                Self::server_priority(unsafe { std::mem::transmute(req) })
+            }
+        }
+    }
+    /// Caller must ensure that this is only called within a Processor with the
+    /// passed in RootMethod being the RootMethod of the Processor.
+    unsafe fn processor_priority<Role: crate::state::Role, RootRequest>(
+        req: &RootRequest,
+    ) -> Self::Priority {
+        match Role::to_enum() {
+            crate::state::role::WhichRole::Client => {
+                assert_same_size::<RootRequest, Self::ClientMethod>();
+                Self::client_priority(unsafe { std::mem::transmute(req) })
+            }
+            crate::state::role::WhichRole::Server => {
+                assert_same_size::<RootRequest, Self::ServerMethod>();
+                Self::server_priority(unsafe { std::mem::transmute(req) })
+            }
+        }
+    }
+    /// Caller must ensure that this is only called within a Requester with the
+    /// passed in RootMethod being the RootMethod of the Requester.
+    unsafe fn requester_priority_static<Role: crate::state::Role, RootRequest>(
+        req: &RootRequest,
+    ) -> Self::Priority
+    where
+        RootRequest: 'static,
+        <Self::ServerMethod as crate::Method>::Req: 'static,
+        <Self::ClientMethod as crate::Method>::Req: 'static,
+    {
+        match Role::to_enum() {
+            crate::state::role::WhichRole::Server => {
+                assert_same_type_id::<RootRequest, Self::ClientMethod>();
+                Self::client_priority(unsafe { std::mem::transmute(req) })
+            }
+            crate::state::role::WhichRole::Client => {
+                assert_same_type_id::<RootRequest, Self::ServerMethod>();
+                Self::server_priority(unsafe { std::mem::transmute(req) })
+            }
+        }
+    }
+    /// Caller must ensure that this is only called within a Requester with the
+    /// passed in RootMethod being the RootMethod of the Requester.
+    unsafe fn requester_priority<Role: crate::state::Role, RootRequest>(
+        req: &RootRequest,
+    ) -> Self::Priority {
+        match Role::to_enum() {
+            crate::state::role::WhichRole::Server => {
+                assert_same_size::<RootRequest, Self::ClientMethod>();
+                Self::client_priority(unsafe { std::mem::transmute(req) })
+            }
+            crate::state::role::WhichRole::Client => {
+                assert_same_size::<RootRequest, Self::ServerMethod>();
+                Self::server_priority(unsafe { std::mem::transmute(req) })
+            }
+        }
+    }
+}
+
+impl<T: Prioritized> PrioritizedUnsafeExt for T {}
+
+fn assert_same_type_id<RootRequest, PMethod: crate::Method>()
+where
+    PMethod::Req: 'static,
+    RootRequest: 'static,
+{
+    assert_eq!(TypeId::of::<RootRequest>(), TypeId::of::<PMethod::Req>());
+}
+
+fn assert_same_size<RootRequest, PMethod: crate::Method>() {
+    assert_eq!(size_of::<RootRequest>(), size_of::<PMethod::Req>());
 }
 
 impl<S: crate::traits::State, T: PartialOrd> Priority<S> for T {

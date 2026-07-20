@@ -261,6 +261,8 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let generics = &input.generics;
+    let can_cache =
+        generics.type_params().next().is_none() && generics.const_params().next().is_none();
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let implementation = match &input.data {
@@ -292,15 +294,27 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
                 }
             };
 
-            quote! {
-                impl #impl_generics MaxLen for #name #ty_generics #where_clause {
+            let biggest_inst = quote! {
                     fn biggest_instantiation() -> Self {
                         #field_inits
                     }
+            };
 
-                    fn max_len() -> usize {
-                        static OL: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
-                        *OL.get_or_init(|| <Self as MaxLen>::max_len_init())
+            if can_cache {
+                quote! {
+                    impl #impl_generics MaxLen for #name #ty_generics #where_clause {
+                        #biggest_inst
+
+                        fn max_len() -> usize {
+                            static OL: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
+                            *OL.get_or_init(|| <Self as MaxLen>::max_len_init())
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    impl #impl_generics MaxLen for #name #ty_generics #where_clause {
+                        #biggest_inst
                     }
                 }
             }
@@ -336,8 +350,7 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
                 }
             });
 
-            quote! {
-                impl #impl_generics MaxLen for #name #ty_generics #where_clause {
+            let biggest_inst = quote! {
                     fn biggest_instantiation() -> Self {
                         let variants = [
                             #(#variant_constructions),*
@@ -347,10 +360,23 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
                             .max_by_key(|v| minicbor::len(v))
                             .unwrap()
                     }
+            };
 
-                    fn max_len() -> usize {
-                        static OL: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
-                        *OL.get_or_init(|| <Self as MaxLen>::max_len_init())
+            if can_cache {
+                quote! {
+                    impl #impl_generics MaxLen for #name #ty_generics #where_clause {
+                        #biggest_inst
+
+                        fn max_len() -> usize {
+                            static OL: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
+                            *OL.get_or_init(|| <Self as MaxLen>::max_len_init())
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    impl #impl_generics MaxLen for #name #ty_generics #where_clause {
+                        #biggest_inst
                     }
                 }
             }

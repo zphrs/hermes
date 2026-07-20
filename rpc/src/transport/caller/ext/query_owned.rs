@@ -1,10 +1,10 @@
 use std::{
     marker::PhantomData,
     pin::pin,
-    task::{Poll, ready},
+    task::{Poll, Waker, ready},
 };
 
-use futures::FutureExt as _;
+use futures::{FutureExt as _, future::FusedFuture};
 use maxlen::MaxLen;
 use tracing::debug;
 
@@ -25,41 +25,63 @@ impl<C: Caller, M: crate::Method, RootReq> Unpin for PendingQueryOwned<C, M, Roo
 /// for inspecting the RootReq and the Caller mid-resolution of the future.
 pub struct PendingQueryOwned<C: Caller, M: crate::Method, RootReq> {
     caller: Option<C>,
-    req: RootReq,
+    req: Option<RootReq>,
     state: QueryState<C>,
     _marker: PhantomData<M>,
+    cancel: bool,
+    waker: Option<Waker>,
 }
 
-impl<C: Caller, M: crate::Method, RootReq> PendingQueryOwned<C, M, RootReq>
-where
-    RootReq: From<M::Req>,
-{
-    pub fn new(caller: C, req: M::Req) -> Self {
+impl<C: Caller, M: crate::Method, RootReq> PendingQueryOwned<C, M, RootReq> {
+    pub fn new(caller: C, req: M::Req) -> Self
+    where
+        RootReq: From<M::Req>,
+    {
         Self {
             caller: caller.into(),
-            req: req.into(),
+            req: Some(req.into()),
             state: QueryState::Entrypoint(),
             _marker: PhantomData,
+            cancel: false,
+            waker: None,
         }
     }
 
     pub fn caller(&self) -> Option<&'_ C> {
         self.caller.as_ref()
     }
-    /// aborts the request and returns the future.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the caller's future has already resolved successfully.
-    pub fn abort(mut self) -> C {
-        self.caller
-            .take()
-            .expect("A PendingQuery should not be aborted if future has already resolved")
+    /// Ensures we abort after the receiverfut finishes
+    pub fn abort_early(mut self) -> Self {
+        assert_eq!(self.cancel, false);
+        if matches!(self.state, QueryState::ReceiverFut(_)) {}
+        self.cancel = true;
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
+        self
     }
 
-    pub fn root_req(&self) -> &RootReq {
-        &self.req
+    pub fn root_req(&self) -> Option<&RootReq> {
+        self.req.as_ref()
     }
+}
+
+impl<C: Caller, M: crate::Method, RootReq: crate::RpcMessage> FusedFuture
+    for PendingQueryOwned<C, M, RootReq>
+where
+    M::Res: crate::RpcMessage,
+    RootReq: crate::RpcMessage,
+{
+    fn is_terminated(&self) -> bool {
+        self.caller.is_none()
+    }
+}
+
+pub enum Error<Transport, C, RootReq> {
+    Minicbor(minicbor_io::Error),
+    Transport(Transport),
+    Cancelled(C, RootReq),
+    Closed,
 }
 
 impl<C: Caller, M: crate::Method, RootReq> Future for PendingQueryOwned<C, M, RootReq>
@@ -67,7 +89,7 @@ where
     M::Res: crate::RpcMessage,
     RootReq: crate::RpcMessage,
 {
-    type Output = Result<(M::Res, C), CallerError<C::Error>>;
+    type Output = Result<(M::Res, C, RootReq), Error<C::Error, C, RootReq>>;
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
@@ -78,7 +100,14 @@ where
             req,
             state,
             _marker,
+            cancel,
+            waker,
         } = &mut *self;
+        if let Some(waker) = waker {
+            waker.clone_from(cx.waker());
+        } else {
+            *waker = cx.waker().clone().into();
+        }
         match state {
             QueryState::Entrypoint() => {
                 let stream = caller.as_ref().unwrap().open_stream();
@@ -88,7 +117,7 @@ where
                 let res = ready!(pin!(stream_fut).poll_unpin(cx));
                 let (write, read) = match res {
                     Ok(v) => v,
-                    Err(e) => return Poll::Ready(Err(CallerError::Transport(e))),
+                    Err(e) => return Poll::Ready(Err(Error::Transport(e))),
                 };
                 debug!("sending query");
                 {
@@ -101,7 +130,7 @@ where
             QueryState::SenderFut(sender, read) => {
                 let sync_fut = sender.sync();
                 match ready!(pin!(sync_fut).poll_unpin(cx)) {
-                    Err(e) => return Poll::Ready(Err(CallerError::Minicbor(e))),
+                    Err(e) => return Poll::Ready(Err(Error::Minicbor(e))),
                     Ok(_) => (),
                 };
                 debug!("sent query");
@@ -110,17 +139,35 @@ where
                 ));
 
                 receiver.set_max_len(<M::Res as MaxLen>::max_len() as u32);
+                if *cancel {
+                    return Poll::Ready(Err(Error::Cancelled(
+                        caller.take().expect("shouldn't get here more than once"),
+                        req.take().expect("shouldn't get here more than once"),
+                    )));
+                };
                 *state = QueryState::ReceiverFut(receiver);
                 // drops write here to indicate no more writes will occur
             }
             QueryState::ReceiverFut(receiver) => {
+                if *cancel {
+                    return Poll::Ready(Err(Error::Cancelled(
+                        caller.take().expect("shouldn't get here more than once"),
+                        req.take().expect("shouldn't get here more than once"),
+                    )));
+                }
                 let out = match ready!(pin!(receiver.read::<M::Res>()).poll_unpin(cx)) {
-                    Err(e) => Err(CallerError::Minicbor(e)),
+                    Err(e) => Err(Error::Minicbor(e)),
                     Ok(Some(out)) => Ok(out),
-                    Ok(None) => Err(CallerError::Closed),
+                    Ok(None) => Err(Error::Closed),
                 };
                 debug!("received message");
-                return Poll::Ready(out.map(|out| (out, caller.take().expect(""))));
+                return Poll::Ready(out.map(|out| {
+                    (
+                        out,
+                        caller.take().expect("shouldn't get here more than once"),
+                        req.take().expect("shouldn't get here more than once"),
+                    )
+                }));
             }
         };
         cx.waker().wake_by_ref();

@@ -16,8 +16,10 @@
 2. with the receipt, send a notification that we've transitioned fully to the
    awaiting processor.
 
-While waiting for the transition request to turn into a receipt, also wait
-for the processor to receive a transition request. If the processor does receive a transition request then it will tiebreak. If our request wins then continue waiting for the transition request to turn into a receipt.
+While waiting for the transition request to turn into a receipt, also wait for
+the processor to receive a transition request. If the processor does receive a
+transition request then it will tiebreak. If our request wins then continue
+waiting for the transition request to turn into a receipt.
 
 ## Processor
 
@@ -31,7 +33,7 @@ for the processor to receive a transition request. If the processor does receive
         1. break out of the processor tiebreaking (discard the IncomingTransitionRequest) and wait for the RequestTransition to finish
     4. else if tiebroken in the direction of the IncomingTransitionRequest:
         1. send off the IncomingTransitionRequest with the tiebreak flag set
-4. wait for the notification that the requester has fully transitioned
+4. wait for the notification that the remote requester has fully transitioned
 
 
 ## Datatypes needed for each step

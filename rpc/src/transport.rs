@@ -6,7 +6,7 @@ use futures::FutureExt as _;
 pub use in_memory_transport::MemoryTransport;
 mod replier;
 
-pub use caller::ext::{PendingQuery, PendingQueryOwned};
+pub use caller::ext::{self, PendingQuery, PendingQueryOwned};
 
 pub use conn::Connection;
 
@@ -32,9 +32,26 @@ pub enum CallerError<T> {
     Aborted,
 }
 
+impl<T, C, RootReq> TryFrom<query_owned::Error<T, C, RootReq>> for CallerError<T> {
+    type Error = &'static str;
+
+    fn try_from(value: query_owned::Error<T, C, RootReq>) -> Result<Self, Self::Error> {
+        Ok(match value {
+            query_owned::Error::Cancelled(c, root_req) => Err("query was cancelled")?,
+
+            query_owned::Error::Minicbor(error) => CallerError::Minicbor(error),
+            query_owned::Error::Transport(transport) => CallerError::Transport(transport),
+            query_owned::Error::Closed => CallerError::Closed,
+        })
+    }
+}
+
 use std::{fmt::Debug, io::ErrorKind};
 
-use crate::traits::{self, method};
+use crate::{
+    traits::{self, method},
+    transport::ext::query_owned,
+};
 #[derive(Debug, thiserror::Error)]
 pub enum HandleOneRequestError<R, E> {
     #[error("replier: {0}")]

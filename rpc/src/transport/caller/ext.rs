@@ -1,5 +1,5 @@
 mod query;
-mod query_owned;
+pub mod query_owned;
 
 use tracing::debug;
 

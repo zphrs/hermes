@@ -1,397 +1,29 @@
 use std::{
-    marker::PhantomData,
     pin::pin,
-    sync::{Arc, atomic::AtomicBool},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
-use futures::{FutureExt, TryStreamExt, poll, select, stream::FuturesUnordered};
+use futures::{FutureExt as _, select};
 use tokio::task::JoinSet;
-use tracing::warn;
+use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::{
-    MachineCursor, Transport,
+    Transport,
     in_memory_transport::Connection,
-    machine_cursor::processor::DelayedReplier,
-    in_memory_transport::{Connection, SendStream},
     machine_cursor::{
         MachineCursorClient, MachineCursorServer,
-        sender::RequestTransition,
-        state_handler::{DelayedReplier, PendingTransitionReceipt},
-        test::waitlist::TableOffer,
-        tiebreak,
+        test::waitlist::{TableOffer, WaitingList},
+        transition::{
+            self, RequestTransition, processor::ProcessorTransition,
+            requester::RequesterTransition, tiebreak::from_processor_to_completion,
+        },
     },
-    state::{priority::Server, role},
-    traits::{method::not_applicable, state},
-    transport::{Client, Incoming},
+    state::role,
+    traits::method::not_applicable::{self},
+    transport::Incoming,
 };
 
-mod login {
-    use maxlen::MaxLen;
-
-    use super::actions;
-    use std::convert::Infallible;
-
-    use crate::{
-        state::priority::server_wins,
-        traits::{
-            Prioritized,
-            method::{can_transition, not_applicable},
-            state::{self, Wrapper},
-        },
-    };
-
-    #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-    #[cbor(flat)]
-    pub enum Response {
-        #[n(0)]
-        TryAgain(#[n(0)] state::Wrapper<State>),
-        #[n(1)]
-        Ok(#[n(0)] state::Wrapper<actions::State>),
-    }
-
-    impl crate::Method for Method {
-        /// whether or not to let the login go through
-        type Req = bool;
-        type Res = Response;
-        type CanTransition = can_transition::True;
-    }
-    pub struct Method;
-
-    pub struct State;
-
-    impl crate::traits::State for State {
-        /// we use [`None`] as a method that is impossible to construct
-        type ClientMethod = not_applicable::Method;
-
-        type ServerMethod = Method;
-    }
-
-    crate::define_prioritized!(State, server_wins);
-
-    impl crate::Handler for Method {
-        type Error = Infallible;
-
-        async fn handle<Replier: crate::transport::ReplyHelper<Self>>(
-            &mut self,
-            replier: Replier,
-            value: <Self as crate::Method>::Req,
-        ) -> Result<Replier::Receipt<Self>, crate::traits::HandleError<Replier::Error, Self::Error>>
-        {
-            match value {
-                true => replier.reply(Response::Ok(Wrapper::new())).await,
-                false => replier.reply(Response::TryAgain(Wrapper::new())).await,
-            }
-        }
-    }
-}
-
-mod actions {
-
-    use std::convert::Infallible;
-
-    use maxlen::MaxLen;
-
-    use crate::traits::{Prioritized, method::can_transition, state};
-
-    use super::login;
-
-    #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-    #[cbor(flat)]
-    pub enum Request {
-        #[n(0)]
-        Logout(),
-        #[n(1)]
-        Ping(),
-    }
-
-    impl TryFrom<Request> for PingRequest {
-        type Error = Request;
-
-        fn try_from(value: Request) -> Result<Self, Self::Error> {
-            tracing::warn!("trying from {value:?}");
-            match value {
-                Request::Ping() => Ok(PingRequest),
-                other => Err(other),
-            }
-        }
-    }
-
-    impl From<PingRequest> for Request {
-        fn from(_value: PingRequest) -> Self {
-            Request::Ping()
-        }
-    }
-
-    #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-    pub struct PingRequest;
-
-    #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-    pub struct PingResponse;
-
-    pub struct PingMethod;
-
-    impl crate::Method for PingMethod {
-        type Req = PingRequest;
-
-        type Res = PingResponse;
-
-        type CanTransition = can_transition::False;
-    }
-
-    #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
-    #[cbor(flat)]
-    pub enum Response {
-        #[n(0)]
-        Logout(#[cbor(skip)] state::Wrapper<login::State>),
-        #[n(1)]
-        Ping(#[cbor(skip)] state::Wrapper<State>),
-    }
-
-    impl From<PingResponse> for Response {
-        fn from(_value: PingResponse) -> Self {
-            Response::Ping(state::Wrapper::new())
-        }
-    }
-    #[derive(Clone)]
-    pub struct Method;
-    impl crate::Method for Method {
-        type Req = Request;
-
-        type Res = Response;
-
-        type CanTransition = can_transition::True;
-    }
-
-    impl crate::Handler<PingMethod> for Method {
-        type Error = Infallible;
-
-        async fn handle<Replier: crate::transport::ReplyHelper<PingMethod>>(
-            &mut self,
-            replier: Replier,
-            _value: <PingMethod as crate::Method>::Req,
-        ) -> Result<
-            Replier::Receipt<PingMethod>,
-            crate::traits::HandleError<Replier::Error, Self::Error>,
-        > {
-            replier.reply(PingResponse).await
-        }
-    }
-
-    impl crate::Handler for Method {
-        type Error = Infallible;
-
-        async fn handle<Replier: crate::transport::ReplyHelper<Self>>(
-            &mut self,
-            replier: Replier,
-            value: <Self as crate::Method>::Req,
-        ) -> Result<Replier::Receipt<Self>, crate::traits::HandleError<Replier::Error, Self::Error>>
-        {
-            match value {
-                Request::Logout() => replier.reply(Response::Logout(state::Wrapper::new())).await,
-                Request::Ping() => {
-                    replier
-                        .reply_with::<PingMethod, _>(self, PingRequest, From::from)
-                        .await
-                }
-            }
-        }
-    }
-    pub struct State;
-
-    impl crate::traits::State for State {
-        type ClientMethod = Method;
-
-        type ServerMethod = Method;
-    }
-
-    impl Prioritized for State {
-        type Priority = bool;
-
-        fn client_priority(
-            _request: &<Self::ClientMethod as crate::Method>::Req,
-        ) -> Self::Priority {
-            false
-        }
-
-        fn server_priority(
-            _request: &<Self::ServerMethod as crate::Method>::Req,
-        ) -> Self::Priority {
-            true
-        }
-    }
-}
-
-#[tokio::test]
-#[test_log::test]
-async fn test_state_flow() {
-    let network = crate::in_memory_transport::Network::new();
-
-    let mut js = JoinSet::new();
-    static SERVER_ADDR: u32 = 0;
-    // server
-    {
-        let net = network.clone();
-        js.spawn(async move {
-            let tp = net.new_transport(SERVER_ADDR);
-            let incoming = tp.accept().await.expect("infallible");
-            let conn = incoming.accept().await.expect("successful incoming");
-            let mut stream = conn.accept_stream().await.unwrap();
-            let receipt = conn
-                .handle_one_request_with_handler(
-                    DelayedReplier::new(),
-                    &mut stream.1,
-                    &mut login::Method,
-                )
-                .await
-                .unwrap();
-            let mut login_cursor =
-                MachineCursorServer::<login::State, _>::new(conn);
-
-            let actions_cursor = loop {
-                let (mut handler, sender) = login_cursor.into_parts(login::Method);
-                let stream = handler.accept_stream().await.unwrap();
-                let res = handler.handle_transition_request(stream).await.unwrap();
-                let (res, split_receipt) = res.split(sender).await.unwrap();
-
-                match res {
-                    login::Response::TryAgain(wrapper) => {
-                        login_cursor = MachineCursor::from_split_receipt(split_receipt, wrapper, handler)
-                            .await
-                            .unwrap()
-                    }
-                    login::Response::Ok(wrapper) => {
-                        break MachineCursor::from_split_receipt(split_receipt, wrapper, handler)
-                            .await
-                            .unwrap();
-                    }
-                }
-            };
-
-            let (mut handler, sender) = actions_cursor.into_parts(actions::Method);
-            let client_jh = tokio::spawn(async move {
-                let js = FuturesUnordered::new();
-                for _ in 0..10 {
-                    js.push(sender.request_loopback::<actions::PingMethod>(actions::PingRequest));
-                }
-                js.try_collect::<Vec<_>>().await.unwrap();
-                sender
-                    .request_transition::<actions::Method>(actions::Request::Logout())
-                    .await
-                    .unwrap()
-            });
-            let (res, transition_receipt) = tokio::select! {
-                _finalized_handler = handler.handle_requests::<actions::PingMethod, _>(actions::Method) => {
-                    panic!("client shouldn't log out for this example")
-                },
-                client_jh = client_jh => {
-                    client_jh.unwrap().extract_result()
-                }
-            };
-            let wrapper = match res {
-                actions::Response::Logout(wrapper) => wrapper,
-                actions::Response::Ping(_wrapper) => unreachable!("we made a logout request above"),
-            };
-
-            let _login_cursor =
-                MachineCursor::<actions::State, _, state::role::Server>::from_transition_receipt(
-                    transition_receipt,
-                    wrapper,
-                    handler,
-                ).await.unwrap();
-        });
-    };
-    // client
-    {
-        let net = network.clone();
-        js.spawn(async move {
-            let tp = net.new_transport(1u32);
-            let conn = tp.connect(&SERVER_ADDR).await.unwrap();
-            let login_cursor = MachineCursorClient::<login::State, _>::new(conn);
-            let (handler, sender) = login_cursor.into_parts(not_applicable::Handler);
-            // request login to fail
-            let (res, receipt) = sender
-                .request_transition::<login::Method>(false)
-                .await
-                .unwrap()
-                .extract_result();
-            let login_cursor = match res {
-                login::Response::TryAgain(wrapper) => {
-                    MachineCursor::<login::State, _, state::role::Client>::from_transition_receipt(
-                        receipt, wrapper, handler,
-                    )
-                    .await
-                    .unwrap()
-                }
-                login::Response::Ok(_wrapper) => {
-                    unreachable!("we asked to be rejected")
-                }
-            };
-            let (handler, sender) = login_cursor.into_parts(not_applicable::Handler);
-            let (res, receipt) = sender
-                .request_transition::<login::Method>(true)
-                .await
-                .unwrap()
-                .extract_result();
-
-            let actions_cursor = match res {
-                login::Response::TryAgain(_wrapper) => {
-                    unreachable!("we asked to be accepted")
-                }
-                login::Response::Ok(wrapper) => {
-                    MachineCursor::<login::State, _, state::role::Client>::from_transition_receipt(
-                        receipt, wrapper, handler,
-                    )
-                    .await
-                    .unwrap()
-                }
-            };
-            let (mut handler, sender) = actions_cursor.into_parts(actions::Method);
-            warn!(
-                "should flesh out how the functions work when both the client and the server
-                are both listening and replying to one another."
-            );
-
-            let loopback_futs =
-                tokio::spawn(async move {
-                    FuturesUnordered::from_iter((0..10).map(|_| {
-                        sender.request_loopback::<actions::PingMethod>(actions::PingRequest)
-                    }))
-                    .try_collect::<Vec<_>>()
-                    .await
-                    .unwrap();
-                    sender
-                });
-
-            let pending_transition_receipt = handler
-                .handle_requests::<actions::PingMethod, _>(actions::Method)
-                .await
-                .unwrap();
-
-            let sender = loopback_futs.await.expect("loopback futs not to panic");
-
-            let (res, split_receipt) = pending_transition_receipt.split(sender).await.unwrap();
-
-            match res {
-                actions::Response::Logout(wrapper) => {
-                    let _new_machine =
-                        MachineCursor::from_split_receipt(split_receipt, wrapper, handler)
-                            .await
-                            .unwrap();
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                    warn!("got here!");
-                }
-                actions::Response::Ping(wrapper) => {
-                    MachineCursor::from_split_receipt(split_receipt, wrapper, handler)
-                        .await
-                        .unwrap();
-                    panic!("ping should have been a loopback request")
-                }
-            };
-        });
-    }
-    js.join_all().await;
-}
 mod waitlist {
     //! a trivial example of a restaurant waiting list, where a customer (the
     //! client) can enter via the [`HostStand`] [`State`] and request a
@@ -406,8 +38,8 @@ mod waitlist {
     use std::convert::Infallible;
 
     use crate::{
-        Handler, Method, State, define_prioritized,
-        state::{self, Prioritized, priority::server_wins},
+        Handler, Method, define_prioritized,
+        state::{self, priority::server_wins},
         traits::method::{can_transition, not_applicable::NotApplicable},
     };
 
@@ -469,6 +101,26 @@ mod waitlist {
         type CanTransition = can_transition::True;
     }
 
+    impl crate::Handler for TableOffer {
+        type Error = Infallible;
+
+        fn handle<Replier: crate::transport::ReplyHelper<Self>>(
+            &mut self,
+            replier: Replier,
+            _value: <Self as Method>::Req,
+        ) -> impl Future<
+            Output = Result<
+                <Replier as crate::transport::ReplyHelper<Self>>::Receipt<Self>,
+                crate::traits::HandleError<
+                    <Replier as crate::transport::ReplyHelper<Self>>::Error,
+                    <Self as Handler<Self>>::Error,
+                >,
+            >,
+        > {
+            replier.reply(state::Wrapper::new())
+        }
+    }
+
     pub struct Leave;
 
     impl crate::Method for Leave {
@@ -508,11 +160,12 @@ mod waitlist {
 
 #[tokio::test]
 #[test_log::test]
-async fn tiebreak() {
+async fn join() {
+    debug!("Here!");
     let network = crate::in_memory_transport::Network::new();
 
     let mut js = JoinSet::new();
-    static SERVER_ADDR: u32 = 0;
+    const SERVER_ADDR: u32 = 0;
     // server
     {
         let net = network.clone();
@@ -520,149 +173,289 @@ async fn tiebreak() {
             let tp = net.new_transport(SERVER_ADDR);
             let incoming = tp.accept().await.expect("infallible");
             let conn = incoming.accept().await.expect("successful incoming");
-            let mut host_stand_cursor = MachineCursorServer::<waitlist::HostStand, _>::new(conn);
-            let seated_cursor = loop {
-                let (mut handler, sender) = host_stand_cursor.into_parts(waitlist::Join);
+            let host_stand_cursor = MachineCursorServer::<waitlist::HostStand, _>::new(conn);
 
-                let stream = handler.accept_stream().await.unwrap();
-                // wait for client to join waiting list
-                let transition = handler.handle_transition_request(stream).await.unwrap();
+            let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
+            // wait for client to join waiting list
+            let transition = processor.handle_transition_request().1.await.unwrap();
+            let transition = transition.next_with_requester(requester).await.unwrap();
+            let (res, transition) = transition.extract_res();
+            let waiting_list = transition.finish(res);
 
-                let (res, receipt) = transition.split(sender).await.unwrap();
-                // create waiting_list cursor after client joined waiting list
-                let waiting_list = MachineCursor::from_split_receipt(receipt, res, handler)
-                    .await
-                    .unwrap();
-                let (mut handler, sender) = waiting_list.into_parts(waitlist::Leave);
-
-                let wait_for_available_table = async {
-                    // wait 10ms (pretend arbitrary delay before table becomes
-                    // available) to take client off of waiting list
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-
-                    sender.request_transition::<TableOffer>(())
-                };
-
-                let request_transition_jh = tokio::spawn(wait_for_available_table);
-                let abort_handle = request_transition_jh.abort_handle();
-                let mut request_transition_jh = request_transition_jh.fuse();
-
-                let received_logout_request = Arc::new(AtomicBool::new(false));
-                let fut = async {
-                    let stream = handler.accept_stream().await.unwrap();
-                    received_logout_request.store(true, std::sync::atomic::Ordering::AcqRel);
-                    handler.handle_transition_request(stream).await
-                }
-                .fuse();
-                let mut pending_transition_receipt_fut = Box::pin(fut);
-
-                enum Res<'a> {
-                    RequestTransition(
-                        RequestTransition<(), TableOffer, role::Server, Connection<u32>>,
-                    ),
-                    TransitionReceipt(
-                        PendingTransitionReceipt<
-                            'a,
-                            waitlist::WaitingList,
-                            waitlist::Leave,
-                            role::Server,
-                            Connection<u32>,
-                            (bool, PhantomData<waitlist::WaitingList>),
-                            SendStream,
-                        >,
-                    ),
-                }
-                let result = select! {
-                    request_transition = request_transition_jh => {
-                        Res::RequestTransition(request_transition.unwrap())
-                    },
-                    transition_receipt = pending_transition_receipt_fut => {
-                        Res::TransitionReceipt(transition_receipt.unwrap())
-                    }
-                };
-
-                match result {
-                    Res::RequestTransition(request_transition) => {
-                        // if we got here, then we sent off a request to transition
-                        // before we fully read in a request to abort.
-
-                        if received_logout_request.load(std::sync::atomic::Ordering::AcqRel) {
-                            let pending_transition_receipt =
-                                pending_transition_receipt_fut.as_mut().await.unwrap();
-
-                            let tiebreak = MachineCursorServer::tiebreak(
-                                pending_transition_receipt,
-                                request_transition,
-                            )
-                            .await
-                            .unwrap();
-
-                            drop(pending_transition_receipt_fut);
-
-                            let (res, parts) = tiebreak.into_parts(handler).await.unwrap();
-
-                            match res {
-                                tiebreak::Res::Remote(seated) => {
-                                    break MachineCursorServer::from_tiebreak_parts(seated, parts);
-                                }
-                                tiebreak::Res::Local(host_stand) => {
-                                    host_stand_cursor =
-                                        MachineCursorServer::from_tiebreak_parts(host_stand, parts);
-                                }
-                            }
-                        } else {
-                            // if we're here then we don't have any pending
-                            // requests that we're handling so we must race
-                            // between the request_transition and
-                            // the pending_transition_receipt.
-                            //
-                            // If the remote has sent off a logout request
-                            // then the remote won't resolve our request
-                            // without tiebreaking. Either the remote tiebreaks
-                            // in our direction and sends back an acknowledgement
-                            // of our request before we get their initial
-                            // request or we get their request.
-                            let mut request_transition = request_transition.fuse();
-                            let res = select! {
-                                transition_receipt = request_transition => {
-                                    transition_receipt.unwrap()
-                                }
-                            };
-                        }
-                    }
-                    Res::TransitionReceipt(pending_transition_receipt) => {
-                        let request_transition = match poll!(request_transition_jh) {
-                            std::task::Poll::Ready(ready) => ready.unwrap(),
-                            std::task::Poll::Pending => {
-                                abort_handle.abort(); // still was sleeping
-                                todo!()
-                            }
-                        };
-
-                        MachineCursorServer::tiebreak(
-                            pending_transition_receipt,
-                            request_transition,
-                        )
-                        .await
-                        .unwrap();
-                        todo!()
-                    }
-                };
-            };
-
-            // let request_to_transition = request_transition_jh.await.unwrap();
-
-            // MachineCursorServer::tiebreak(pending_transition_receipt, request_to_transition);
+            debug!("server transitioned to waitlist");
         });
     };
     // client
-    {
-        let net = network.clone();
-        js.spawn(async move {
-            let tp = net.new_transport(1u32);
-            let conn = tp.connect(&SERVER_ADDR).await.unwrap();
-            let login_cursor = MachineCursorClient::<waitlist::HostStand, _>::new(conn);
-        });
-    }
+
+    let net = network.clone();
+    const SHOULD_LEAVE: bool = false;
+    js.spawn(async move {
+        let tp = net.new_transport(1u32);
+        let conn = tp.connect(&SERVER_ADDR).await.unwrap();
+        let host_stand_cursor = MachineCursorClient::<waitlist::HostStand, _>::new(conn);
+
+        debug!("client looping");
+        let waiting_list_cursor = {
+            // join the list
+            let (processor, requester) = host_stand_cursor.into_parts(not_applicable::Handler);
+            let requester_transition = requester.request_transition::<waitlist::Join>(());
+            let requester_transition = requester_transition.next().await.unwrap();
+
+            let transition::requester::Need::Processor(requester_transition) = requester_transition
+            else {
+                panic!("unexpected Need variant")
+            };
+            let (res, requester_transition) = requester_transition.extract_res();
+            requester_transition.finish(processor, res).await.unwrap()
+        };
+
+        let (processor, requester) = waiting_list_cursor.into_parts(waitlist::TableOffer);
+    });
+
+    js.join_all().await;
+}
+
+#[tokio::test]
+#[test_log::test]
+async fn tiebreak() {
+    debug!("Here!");
+    let network = crate::in_memory_transport::Network::new();
+
+    let mut js = JoinSet::new();
+    const SERVER_ADDR: u32 = 0;
+
+    let net = network.clone();
+    let server_fut = async move {
+        let tp = net.new_transport(SERVER_ADDR);
+        let incoming = tp.accept().await.expect("infallible");
+        let conn = incoming.accept().await.expect("successful incoming");
+        let mut host_stand_cursor = MachineCursorServer::<waitlist::HostStand, _>::new(conn);
+        let _seated_cursor = loop {
+            debug!("looping");
+            let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
+            // wait for client to join waiting list
+            let transition = processor.handle_transition_request().1.await.unwrap();
+            let transition = transition.next_with_requester(requester).await.unwrap();
+            let (res, transition) = transition.extract_res();
+            let waiting_list = transition.finish(res);
+
+            debug!("transitioned to waitlist");
+
+            let (processor, requester) = waiting_list.into_parts(waitlist::Leave);
+
+            let wrapped_requester = Arc::new(Mutex::new(Some(requester)));
+
+            let weak_wrapped_requester = Arc::downgrade(&wrapped_requester);
+            let wait_for_available_table = {
+                async move {
+                    // wait 10ms (pretend arbitrary delay before table becomes
+                    // available) to take client off of waiting list
+
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    let res = Some(
+                        weak_wrapped_requester
+                            .upgrade()?
+                            .lock()
+                            .unwrap()
+                            .take()?
+                            .request_transition::<waitlist::TableOffer>(()),
+                    );
+                    debug!("sent off transition");
+
+                    res
+                }
+                .instrument(Span::current())
+            };
+
+            let request_transition_jh = tokio::spawn(wait_for_available_table);
+            let abort_handle = request_transition_jh.abort_handle();
+            let mut request_transition_jh = request_transition_jh.fuse();
+
+            let (to_sacrifice, processor_transition_fut) = processor.handle_transition_request();
+
+            let processor_transition_fut = processor_transition_fut.fuse();
+            let mut processor_transition_fut = pin!(processor_transition_fut);
+
+            enum Select {
+                Processor(
+                    ProcessorTransition<
+                        transition::processor::Entrypoint<
+                            waitlist::WaitingList,
+                            <WaitingList as crate::State>::ServerMethod,
+                            role::Server,
+                            Connection<u32>,
+                        >,
+                    >,
+                ),
+                Requester(
+                    Option<
+                        RequesterTransition<
+                            waitlist::WaitingList,
+                            RequestTransition<
+                                (),
+                                waitlist::TableOffer,
+                                role::Server,
+                                Connection<u32>,
+                            >,
+                        >,
+                    >,
+                ),
+            }
+
+            // race between the transition and wait_for_available_table
+            let select = select! {
+                transition = processor_transition_fut => {
+                    Select::Processor(transition.unwrap())
+                }
+                requester = request_transition_jh => {
+                    Select::Requester(requester.unwrap())
+                }
+            };
+
+            let tiebreak_res = match select {
+                Select::Processor(processor_transition) => {
+                    let maybe_requester = wrapped_requester.lock().unwrap().take();
+                    if let Some(requester) = maybe_requester {
+                        abort_handle.abort();
+                        let res = processor_transition
+                            .next_with_requester(requester)
+                            .await
+                            .unwrap();
+                        let (wrapper, transition) = res.extract_res();
+                        host_stand_cursor = transition.finish(wrapper);
+                        continue;
+                    }
+                    // if above was not some then it must have gotten to the
+                    // transition
+                    let requester_transition = request_transition_jh.await.unwrap().unwrap();
+                    debug!("waiting for an ack on its request");
+
+                    transition::tiebreak::tiebreak(
+                        processor_transition,
+                        requester_transition,
+                        to_sacrifice,
+                    )
+                    .await
+                }
+                Select::Requester(maybe_requester) => {
+                    // should always be some here because this thread doesn't take
+                    // until the processor wins
+                    let requester_transition = maybe_requester.unwrap();
+                    from_processor_to_completion(
+                        processor_transition_fut,
+                        to_sacrifice,
+                        requester_transition,
+                    )
+                    .await
+                }
+            };
+
+            match tiebreak_res.unwrap() {
+                transition::tiebreak::TiebreakResult::ProcessorWon(
+                    finalize_processor_transition,
+                ) => {
+                    let (res, finalize_processor_transition) =
+                        finalize_processor_transition.extract_res();
+                    host_stand_cursor = finalize_processor_transition.finish(res).await.unwrap();
+                    continue;
+                }
+                transition::tiebreak::TiebreakResult::RequesterWon(
+                    finalize_requester_transition,
+                ) => {
+                    let (res, finalize_requester_transition) =
+                        finalize_requester_transition.extract_res();
+                    let seated_cursor = finalize_requester_transition.finish(res).await.unwrap();
+                    break seated_cursor;
+                }
+            }
+        };
+    };
+    js.spawn(server_fut.instrument(info_span!("server")));
+
+    // client
+
+    let net = network.clone();
+    let client_fut = async move {
+        let tp = net.new_transport(1u32);
+        let conn = tp.connect(&SERVER_ADDR).await.unwrap();
+        let mut host_stand_cursor = MachineCursorClient::<waitlist::HostStand, _>::new(conn);
+        let seated_cursor = loop {
+            debug!("looping");
+            let waiting_list_cursor = {
+                // join the list
+                let (processor, requester) = host_stand_cursor.into_parts(not_applicable::Handler);
+                let requester_transition = requester.request_transition::<waitlist::Join>(());
+                let requester_transition = requester_transition.next().await.unwrap();
+
+                let transition::requester::Need::Processor(requester_transition) =
+                    requester_transition
+                else {
+                    panic!("unexpected Need variant")
+                };
+                let (res, requester_transition) = requester_transition.extract_res();
+                requester_transition.finish(processor, res).await.unwrap()
+            };
+            debug!("joined waitlist");
+
+            const SHOULD_LEAVE: bool = true;
+
+            let (processor, requester) = waiting_list_cursor.into_parts(TableOffer);
+
+            if SHOULD_LEAVE {
+                tokio::time::sleep(Duration::from_millis(4)).await;
+
+                let requester_transition = requester.request_transition::<waitlist::Leave>(());
+
+                tracing::trace!("sending leave request; waiting for tiebreak");
+                let (to_sacrifice, processor_transition) = processor.handle_transition_request();
+                match from_processor_to_completion(
+                    processor_transition,
+                    to_sacrifice,
+                    requester_transition,
+                )
+                .await
+                .unwrap()
+                {
+                    transition::tiebreak::TiebreakResult::ProcessorWon(
+                        finalize_processor_transition,
+                    ) => {
+                        let (res, finalize_processor_transition) =
+                            finalize_processor_transition.extract_res();
+                        debug!("processor won");
+                        let seated_cursor =
+                            finalize_processor_transition.finish(res).await.unwrap();
+                        debug!("processor finished");
+
+                        break seated_cursor;
+                    }
+                    transition::tiebreak::TiebreakResult::RequesterWon(
+                        finalize_requester_transition,
+                    ) => {
+                        let (res, finalize_requester_transition) =
+                            finalize_requester_transition.extract_res();
+                        debug!("requester won");
+                        host_stand_cursor =
+                            finalize_requester_transition.finish(res).await.unwrap();
+                        debug!("requester finished");
+
+                        continue;
+                    }
+                }
+            } else {
+                let (to_sacrifice, processor_transition) = processor.handle_transition_request();
+                let (res, processor_transition) = processor_transition
+                    .await
+                    .unwrap()
+                    .next_with_requester(requester)
+                    .await
+                    .unwrap()
+                    .extract_res();
+                let seated_cursor = processor_transition.finish(res);
+                break seated_cursor;
+            }
+        };
+    };
+    js.spawn(client_fut.instrument(info_span!("client")));
+
     js.join_all().await;
 }

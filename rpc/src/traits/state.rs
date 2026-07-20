@@ -1,6 +1,7 @@
 pub mod priority;
 pub mod role;
 
+pub(crate) use priority::PrioritizedUnsafeExt;
 pub use priority::{Prioritized, Priority};
 pub(crate) use role::Role;
 
