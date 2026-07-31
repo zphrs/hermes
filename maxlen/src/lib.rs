@@ -148,6 +148,12 @@ impl MaxLen for SystemTime {
     }
 }
 
+impl MaxLen for Duration {
+    fn biggest_instantiation() -> Self {
+        Duration::MAX
+    }
+}
+
 impl<A: MaxLen, B: MaxLen> MaxLen for (A, B) {
     fn biggest_instantiation() -> Self {
         (A::biggest_instantiation(), B::biggest_instantiation())

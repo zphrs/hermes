@@ -1,12 +1,30 @@
+pub mod final_endpoint;
+mod setup_conn;
+pub mod tiebreak;
+pub use setup_conn::{ConnPair, setup_conn};
+pub(self) mod test_states;
+
 use std::{
     pin::pin,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
+pub mod prelude {
+    pub use super::{
+        ConnPair, setup_conn,
+        test_states::{
+            Entrypoint, Request,
+            client_endpoint::ClientEndpoint,
+            entrypoint::{client, server},
+            server_endpoint::ServerEndpoint,
+        },
+    };
+}
+
 use futures::{FutureExt as _, select};
 use tokio::task::JoinSet;
-use tracing::{Instrument, Span, debug, info_span, warn};
+use tracing::{Instrument, Span, debug, info_span};
 
 use crate::{
     Transport,

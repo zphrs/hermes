@@ -1,3 +1,5 @@
+pub mod child;
+
 use std::marker::PhantomData;
 
 pub mod can_transition {

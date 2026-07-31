@@ -160,7 +160,7 @@ impl<C, State: crate::traits::State> minicbor::Encode<C> for Wrapper<State> {
 }
 
 impl<State: crate::traits::State> Wrapper<State> {
-    pub fn new() -> Wrapper<State> {
+    pub const fn new() -> Wrapper<State> {
         Self {
             _marker: PhantomData,
         }

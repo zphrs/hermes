@@ -121,7 +121,7 @@ where
         >,
     )
     where
-        RootMethod::Req: crate::RpcMessage + Clone,
+        RootMethod::Req: crate::RpcMessage,
         State: Prioritized,
         Client: 'a,
     {

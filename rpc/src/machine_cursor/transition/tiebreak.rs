@@ -321,7 +321,6 @@ where
     }
 
     let result = select! {
-        // if we got here then we know we MUST tiebreak
         processor_transition = to_processor_transition => {
             let processor_transition = processor_transition?;
             Select::Processor(processor_transition)
@@ -358,7 +357,7 @@ where
                 }
                 TiebreakChoice::Requester => {
                     debug!("requester won tiebreak");
-                    let (root_req, receipt) = request_transition
+                    let (_root_req, receipt) = request_transition
                         .await
                         .map_err(|e| CallerError::try_from(e).unwrap())?;
                     let (res, receipt) = receipt.extract_result();
@@ -373,14 +372,14 @@ where
                 }
             }
         }
-        Select::Requester((root_req, receipt)) => {
+        Select::Requester((_root_req, receipt)) => {
             debug!("requester won first");
+            let (res, receipt) = receipt.extract_result();
             // if we got here then it means the other side either:
             // - tiebroke in the requester's favor or
             // - didn't have any tiebreak whatsoever.
             // We need to figure out which one the other side did to ensure we
             // consume the request sent out by the other side.
-            let (res, receipt) = receipt.extract_result();
             let (in_tiebreak, res): (_, TransitionMethod::Res) = res.into_parts();
             let receipt = receipt.insert_result(res);
 

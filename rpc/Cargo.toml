@@ -25,6 +25,7 @@ quinn = ["dep:quinn"]
 [dev-dependencies]
 anyhow = "1.0.102"
 derive_more = { version = "2.1.1", features = ["from", "try_into"] }
+hegeltest = "0.28.6"
 minicbor-derive = "0.19.3"
 quic-rpc = "0.20.0"
 serde = "1.0.228"
