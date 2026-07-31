@@ -244,8 +244,11 @@
 //! 3. Standard CBOR encoding is used (via `minicbor::len`)
 
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, parse_macro_input};
+use syn::{Data, DeriveInput, Fields, Ident, parse_macro_input};
+
+use proc_macro_crate::{FoundCrate, crate_name};
 
 /// Derives the `MaxLen` trait for structs and enums.
 ///
@@ -258,6 +261,15 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 /// See the crate-level documentation for comprehensive examples.
 #[proc_macro_derive(MaxLen)]
 pub fn derive_max_len(input: TokenStream) -> TokenStream {
+    let found_crate = crate_name("maxlen").expect("maxlen is present");
+
+    let maxlen = match found_crate {
+        FoundCrate::Itself => quote!(crate::MaxLen),
+        FoundCrate::Name(name) => {
+            let ident = Ident::new(&name, Span::call_site());
+            quote!( ::#ident::MaxLen )
+        }
+    };
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let generics = &input.generics;
@@ -272,7 +284,7 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
                     let field_assignments = fields.named.iter().map(|field| {
                         let field_name = &field.ident;
                         quote! {
-                            #field_name: MaxLen::biggest_instantiation()
+                            #field_name: #maxlen::biggest_instantiation()
                         }
                     });
                     quote! {
@@ -283,7 +295,7 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
                 }
                 Fields::Unnamed(fields) => {
                     let field_inits = fields.unnamed.iter().map(|_| {
-                        quote! { MaxLen::biggest_instantiation() }
+                        quote! { #maxlen::biggest_instantiation() }
                     });
                     quote! {
                         Self(#(#field_inits),*)
@@ -302,18 +314,18 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
 
             if can_cache {
                 quote! {
-                    impl #impl_generics MaxLen for #name #ty_generics #where_clause {
+                    impl #impl_generics #maxlen for #name #ty_generics #where_clause {
                         #biggest_inst
 
                         fn max_len() -> usize {
                             static OL: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
-                            *OL.get_or_init(|| <Self as MaxLen>::max_len_init())
+                            *OL.get_or_init(|| <Self as #maxlen>::max_len_init())
                         }
                     }
                 }
             } else {
                 quote! {
-                    impl #impl_generics MaxLen for #name #ty_generics #where_clause {
+                    impl #impl_generics #maxlen for #name #ty_generics #where_clause {
                         #biggest_inst
                     }
                 }
@@ -327,7 +339,7 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
                         let field_assignments = fields.named.iter().map(|field| {
                             let field_name = &field.ident;
                             quote! {
-                                #field_name: MaxLen::biggest_instantiation()
+                                #field_name: #maxlen::biggest_instantiation()
                             }
                         });
                         quote! {
@@ -338,7 +350,7 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
                     }
                     Fields::Unnamed(fields) => {
                         let field_inits = fields.unnamed.iter().map(|_| {
-                            quote! { MaxLen::biggest_instantiation() }
+                            quote! { #maxlen::biggest_instantiation() }
                         });
                         quote! {
                             Self::#variant_name(#(#field_inits),*)
@@ -364,18 +376,18 @@ pub fn derive_max_len(input: TokenStream) -> TokenStream {
 
             if can_cache {
                 quote! {
-                    impl #impl_generics MaxLen for #name #ty_generics #where_clause {
+                    impl #impl_generics #maxlen for #name #ty_generics #where_clause {
                         #biggest_inst
 
                         fn max_len() -> usize {
                             static OL: ::std::sync::OnceLock<usize> = ::std::sync::OnceLock::new();
-                            *OL.get_or_init(|| <Self as MaxLen>::max_len_init())
+                            *OL.get_or_init(|| <Self as #maxlen>::max_len_init())
                         }
                     }
                 }
             } else {
                 quote! {
-                    impl #impl_generics MaxLen for #name #ty_generics #where_clause {
+                    impl #impl_generics #maxlen for #name #ty_generics #where_clause {
                         #biggest_inst
                     }
                 }
