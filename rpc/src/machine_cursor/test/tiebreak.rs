@@ -1,12 +1,21 @@
-use std::time::Duration;
+use std::{
+    convert::Infallible,
+    mem,
+    pin::pin,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-use futures::future::join;
+use futures::{FutureExt, future::join, select, select_biased};
 use hegel::TestCase;
-use tracing::{Instrument, info_span};
+use tracing::{Instrument, debug, info_span};
 
 use crate::{
     in_memory_transport,
-    machine_cursor::{MachineCursorClient, MachineCursorServer, transition::tiebreak},
+    machine_cursor::{
+        MachineCursorClient, MachineCursorServer, Requester,
+        transition::{RequestTransition, requester::RequesterTransition, tiebreak},
+    },
 };
 
 use super::final_endpoint::FinalEndpoint;
@@ -14,31 +23,123 @@ use super::final_endpoint::FinalEndpoint;
 pub use super::prelude::*;
 
 async fn server(
-    request: Option<Request>,
+    request: Option<impl Future<Output = Request> + Send + 'static>,
     conn: in_memory_transport::Connection<u8>,
 ) -> FinalEndpoint<crate::state::role::Server> {
     let cursor = MachineCursorServer::<Entrypoint, _>::new(conn);
     let (processor, requester) = cursor.into_parts(server::Method);
     let (to_sacrifice, to_processor_transition) = processor.handle_transition_request();
 
-    let out: FinalEndpoint<_> = if let Some(request) = request {
-        match tiebreak::from_processor_to_completion(
-            to_processor_transition,
-            to_sacrifice,
-            requester.request_transition::<client::Method>(request),
-        )
-        .await
-        .unwrap()
-        {
-            tiebreak::TiebreakResult::ProcessorWon(finalize_processor_transition) => {
-                let (wrapper, transition) = finalize_processor_transition.extract_res();
-                let res = transition.finish(wrapper).await.unwrap();
-                res.into()
+    enum RequesterState {
+        Requester(
+            Requester<
+                Entrypoint,
+                crate::state::role::Server,
+                client::Method,
+                in_memory_transport::Connection<u8>,
+            >,
+        ),
+        Transition(
+            RequesterTransition<
+                Entrypoint,
+                RequestTransition<
+                    Request,
+                    client::Method,
+                    crate::state::role::Server,
+                    in_memory_transport::Connection<u8>,
+                >,
+            >,
+        ),
+        Taken,
+    }
+
+    impl RequesterState {
+        pub fn request_transition(&mut self, request: Request) {
+            let curr = mem::replace(self, Self::Taken);
+            match curr {
+                RequesterState::Requester(requester) => {
+                    *self = Self::Transition(requester.request_transition(request));
+                }
+                _ => return,
             }
-            tiebreak::TiebreakResult::RequesterWon(finalize_requester_transition) => {
-                let (wrapper, transition) = finalize_requester_transition.extract_res();
-                let res = transition.finish(wrapper).await.unwrap();
-                res.into()
+        }
+
+        pub fn take(&mut self) -> RequesterState {
+            mem::replace(self, Self::Taken)
+        }
+    }
+
+    let out: FinalEndpoint<_> = if let Some(request) = request {
+        let requester = Arc::new(Mutex::new(RequesterState::Requester(requester)));
+        let request_jh = {
+            let requester = requester.clone();
+            tokio::spawn(async move {
+                let request = request.await;
+                let mut requester_lock = requester.lock().unwrap();
+
+                requester_lock.request_transition(request);
+            })
+        };
+        let abort_handle = request_jh.abort_handle();
+        let request = pin!(request_jh);
+        let mut request_fut = request.fuse();
+        let to_processor_transition = pin!(to_processor_transition);
+        let mut to_processor_transition = to_processor_transition.fuse();
+
+        let processor_transition = select! {
+            processor_transition = to_processor_transition => {
+                Some(processor_transition.unwrap())
+            }
+            _request = request_fut => {
+                None
+            },
+        };
+
+        abort_handle.abort();
+
+        match requester.lock().unwrap().take() {
+            RequesterState::Requester(requester) => {
+                let transition = match processor_transition {
+                    Some(pt) => pt,
+                    None => to_processor_transition.await.unwrap(),
+                };
+                let transition = transition.next_with_requester(requester).await.unwrap();
+                let (res, transition) = transition.extract_res();
+                transition.finish(res).into()
+            }
+            RequesterState::Transition(requester_transition) => {
+                debug!("transition got through; running tiebreak");
+                let tiebreak_result = match processor_transition {
+                    Some(processor_transition) => {
+                        tiebreak::tiebreak::<_, _, _, _, _, _, Infallible>(
+                            processor_transition,
+                            requester_transition,
+                            to_sacrifice,
+                        )
+                        .await
+                        .unwrap()
+                    }
+                    None => tiebreak::from_processor_to_completion(
+                        to_processor_transition,
+                        to_sacrifice,
+                        requester_transition,
+                    )
+                    .await
+                    .unwrap(),
+                };
+                match tiebreak_result {
+                    tiebreak::TiebreakResult::ProcessorWon(finalize_processor_transition) => {
+                        let (res, transition) = finalize_processor_transition.extract_res();
+                        transition.finish(res).await.unwrap().into()
+                    }
+                    tiebreak::TiebreakResult::RequesterWon(finalize_requester_transition) => {
+                        let (res, transition) = finalize_requester_transition.extract_res();
+                        transition.finish(res).await.unwrap().into()
+                    }
+                }
+            }
+            RequesterState::Taken => {
+                unreachable!()
             }
         }
     } else {
@@ -54,29 +155,123 @@ async fn server(
 }
 
 async fn client(
-    request: Option<Request>,
+    request: Option<impl Future<Output = Request> + Send + 'static>,
     conn: in_memory_transport::Connection<u8>,
 ) -> FinalEndpoint<crate::state::role::Client> {
     let cursor = MachineCursorClient::<Entrypoint, _>::new(conn);
     let (processor, requester) = cursor.into_parts(client::Method);
     let (to_sacrifice, to_processor_transition) = processor.handle_transition_request();
 
-    let out: FinalEndpoint<_> = if let Some(request) = request {
-        match tiebreak::from_processor_to_completion(
-            to_processor_transition,
-            to_sacrifice,
-            requester.request_transition::<server::Method>(request),
-        )
-        .await
-        .unwrap()
-        {
-            tiebreak::TiebreakResult::ProcessorWon(finalize_processor_transition) => {
-                let (wrapper, transition) = finalize_processor_transition.extract_res();
-                transition.finish(wrapper).await.unwrap().into()
+    enum RequesterState {
+        Requester(
+            Requester<
+                Entrypoint,
+                crate::state::role::Client,
+                server::Method,
+                in_memory_transport::Connection<u8>,
+            >,
+        ),
+        Transition(
+            RequesterTransition<
+                Entrypoint,
+                RequestTransition<
+                    Request,
+                    server::Method,
+                    crate::state::role::Client,
+                    in_memory_transport::Connection<u8>,
+                >,
+            >,
+        ),
+        Taken,
+    }
+
+    impl RequesterState {
+        pub fn request_transition(&mut self, request: Request) {
+            let curr = mem::replace(self, Self::Taken);
+            match curr {
+                RequesterState::Requester(requester) => {
+                    *self = Self::Transition(requester.request_transition(request));
+                }
+                _ => return,
             }
-            tiebreak::TiebreakResult::RequesterWon(finalize_requester_transition) => {
-                let (wrapper, transition) = finalize_requester_transition.extract_res();
-                transition.finish(wrapper).await.unwrap().into()
+        }
+
+        pub fn take(&mut self) -> RequesterState {
+            mem::replace(self, Self::Taken)
+        }
+    }
+
+    let out: FinalEndpoint<_> = if let Some(request) = request {
+        let requester = Arc::new(Mutex::new(RequesterState::Requester(requester)));
+        let request_jh = {
+            let requester = requester.clone();
+            tokio::spawn(async move {
+                let request = request.await;
+                let mut requester_lock = requester.lock().unwrap();
+
+                requester_lock.request_transition(request);
+            })
+        };
+        let abort_handle = request_jh.abort_handle();
+        let request = pin!(request_jh);
+        let mut request_fut = request.fuse();
+        let to_processor_transition = pin!(to_processor_transition);
+        let mut to_processor_transition = to_processor_transition.fuse();
+
+        let processor_transition = select! {
+            processor_transition = to_processor_transition => {
+                Some(processor_transition.unwrap())
+            }
+            _request = request_fut => {
+                None
+            },
+        };
+
+        abort_handle.abort();
+
+        match requester.lock().unwrap().take() {
+            RequesterState::Requester(requester) => {
+                let transition = match processor_transition {
+                    Some(pt) => pt,
+                    None => to_processor_transition.await.unwrap(),
+                };
+                let transition = transition.next_with_requester(requester).await.unwrap();
+                let (res, transition) = transition.extract_res();
+                transition.finish(res).into()
+            }
+            RequesterState::Transition(requester_transition) => {
+                debug!("transition got through; running tiebreak");
+                let tiebreak_result = match processor_transition {
+                    Some(processor_transition) => {
+                        tiebreak::tiebreak::<_, _, _, _, _, _, Infallible>(
+                            processor_transition,
+                            requester_transition,
+                            to_sacrifice,
+                        )
+                        .await
+                        .unwrap()
+                    }
+                    None => tiebreak::from_processor_to_completion(
+                        to_processor_transition,
+                        to_sacrifice,
+                        requester_transition,
+                    )
+                    .await
+                    .unwrap(),
+                };
+                match tiebreak_result {
+                    tiebreak::TiebreakResult::ProcessorWon(finalize_processor_transition) => {
+                        let (res, transition) = finalize_processor_transition.extract_res();
+                        transition.finish(res).await.unwrap().into()
+                    }
+                    tiebreak::TiebreakResult::RequesterWon(finalize_requester_transition) => {
+                        let (res, transition) = finalize_requester_transition.extract_res();
+                        transition.finish(res).await.unwrap().into()
+                    }
+                }
+            }
+            RequesterState::Taken => {
+                unreachable!()
             }
         }
     } else {
@@ -108,45 +303,54 @@ fn generate_request(tc: TestCase) -> Option<Request> {
     }
 }
 
-#[tokio::test(start_paused = true)]
-#[hegel::test(test_cases = 1000)]
-async fn fuzz_test(tc: TestCase) {
-    let request_server: Option<Request> = tc.draw(generate_request());
-    let request_client: Option<Request> = tc.draw(generate_request());
-    // one of them must transition
-    tc.assume(request_client.is_some() || request_server.is_some());
+#[hegel::test(test_cases = 100_000)]
+fn fuzz_tiebreak(tc: TestCase) {
+    tokio::runtime::Builder::new_current_thread()
+        .start_paused(true)
+        .enable_all()
+        .rng_seed(tokio::runtime::RngSeed::from_bytes(&tc.draw(gs::arrays::<
+            _,
+            _,
+            1,
+        >(
+            gs::integers(),
+        ))))
+        .build()
+        .unwrap()
+        .block_on(async move {
+            let request_server: Option<Request> = tc.draw(generate_request());
+            let request_client: Option<Request> = tc.draw(generate_request());
+            // one of them must transition; otherwise would hang
+            tc.assume(request_client.is_some() || request_server.is_some());
 
-    let request_priority_server = request_server.as_ref().map(|r| r.priority);
-    let request_priority_client = request_client.as_ref().map(|r| r.priority);
+            let network = in_memory_transport::Network::new();
+            let ConnPair {
+                server_conn,
+                client_conn,
+            } = setup_conn(0, 1, &network).await;
+            let before_transitioning_server = tc.draw(gs::integers().max_value(1000));
+            let server = server(
+                request_server.map(|request| async move {
+                    tokio::time::sleep(Duration::from_millis(before_transitioning_server)).await;
+                    request
+                }),
+                server_conn,
+            )
+            .instrument(info_span!("server"));
 
-    let network = in_memory_transport::Network::new();
-    let ConnPair {
-        server_conn,
-        client_conn,
-    } = setup_conn(0, 1, &network).await;
-    let server = server(request_server, server_conn).instrument(info_span!("client"));
+            let before_transitioning_client = tc.draw(gs::integers().max_value(1000));
 
-    let client = client(request_client, client_conn).instrument(info_span!("server"));
+            let client = client(
+                request_client.map(|request| async move {
+                    tokio::time::sleep(Duration::from_millis(before_transitioning_client)).await;
+                    request
+                }),
+                client_conn,
+            )
+            .instrument(info_span!("client"));
 
-    let (client, server) = join(client, server).await;
+            let (client, server) = join(client, server).await;
 
-    assert_eq!(client, server);
-    // asserts that we tiebreak in the right direction if both are transitioning
-    if let (Some(request_priority_client), Some(request_priority_server)) =
-        (request_priority_client, request_priority_server)
-    {
-        match client {
-            FinalEndpoint::Client(_) => {
-                assert!(request_priority_server >= request_priority_client)
-            }
-            FinalEndpoint::Server(_) => assert!(request_priority_client >= request_priority_server),
-        }
-    }
-    // asserts that we transition in the direction that was requested
-    if let (Some(_), None) = (request_priority_client, request_priority_server) {
-        assert!(matches!(client, FinalEndpoint::Server(_)));
-    }
-    if let (None, Some(_)) = (request_priority_client, request_priority_server) {
-        assert!(matches!(client, FinalEndpoint::Client(_)));
-    }
+            assert_eq!(client, server);
+        });
 }

@@ -41,12 +41,14 @@ pub trait ToQuery<Method: crate::traits::Method, Role: crate::traits::state::Rol
     fn to_query(&self, role: &Role) -> method::Wrapper<Method>;
 }
 
-pub struct Handle<Method: crate::traits::Method, Handler: traits::Handler<Method>> {
+pub struct Handle<Method: crate::traits::Method, Handler: traits::Handler<Method, Method>> {
     _marker: method::Wrapper<Method>,
     handler: Handler,
 }
 
-impl<Method: crate::traits::Method, Handler: traits::Handler<Method>> Handle<Method, Handler> {
+impl<Method: crate::traits::Method, Handler: traits::Handler<Method, Method>>
+    Handle<Method, Handler>
+{
     pub(crate) fn into_parts(self) -> (method::Wrapper<Method>, Handler) {
         (self._marker, self.handler)
     }
@@ -59,14 +61,16 @@ impl<Method: crate::traits::Method, Handler: traits::Handler<Method>> Handle<Met
 pub trait ToHandle<
     Method: crate::traits::Method,
     Role: crate::traits::state::Role,
-    Handler: crate::traits::Handler<Method>,
+    Handler: crate::traits::Handler<Method, Method>,
 >
 {
     fn to_handle(&self, role: &Role, handler: Handler) -> Handle<Method, Handler>;
 }
 
-impl<State: crate::traits::State, Handler: crate::traits::Handler<State::ServerMethod>>
-    ToHandle<State::ServerMethod, role::Server, Handler> for Wrapper<State>
+impl<
+    State: crate::traits::State,
+    Handler: crate::traits::Handler<State::ServerMethod, State::ServerMethod>,
+> ToHandle<State::ServerMethod, role::Server, Handler> for Wrapper<State>
 where
     State::ServerMethod: method::Method,
 {
@@ -83,8 +87,10 @@ where
     }
 }
 
-impl<State: crate::traits::State, Handler: crate::traits::Handler<State::ClientMethod>>
-    ToHandle<State::ClientMethod, role::Client, Handler> for Wrapper<State>
+impl<
+    State: crate::traits::State,
+    Handler: crate::traits::Handler<State::ClientMethod, State::ClientMethod>,
+> ToHandle<State::ClientMethod, role::Client, Handler> for Wrapper<State>
 where
     State::ClientMethod: method::Method,
 {

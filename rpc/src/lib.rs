@@ -6,7 +6,7 @@ mod tests;
 pub mod traits;
 pub mod transport;
 pub use machine_cursor::MachineCursor;
-pub use traits::{Handler, Method, RpcMessage, State, state};
+pub use traits::{Handler, Method, RpcMessage, State, method, state};
 
 pub use transport::{MemoryTransport, in_memory_transport};
 

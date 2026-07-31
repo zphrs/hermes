@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use crate::{
     CallerError,
     machine_cursor::transition::{RequestTransition, requester::RequesterTransition},
+    method::ancestor::Leaf,
     traits::{
         method::{self, CanTransition, Loopback},
         state::{self, ToQuery},
@@ -112,8 +113,7 @@ where
     where
         RootMethod::Req: crate::RpcMessage + From<M::Req>,
         M::Res: crate::RpcMessage,
-        // TODO: make this use a bespoke trait
-        RootMethod: From<M>,
+        M: Leaf<RootMethod>,
     {
         let Self { role, caller, .. } = self;
         RequesterTransition::new(RequestTransition::<_, M, _, _>::new(req, role, caller))

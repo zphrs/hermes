@@ -1,6 +1,8 @@
 use crate::machine_cursor::transition::processor::Entrypoint;
 use crate::machine_cursor::transition::processor::ProcessorTransition;
+use crate::method::is_leaf;
 use crate::state::priority::Client;
+
 use maxlen::MaxLen;
 
 use crate::{
@@ -21,6 +23,8 @@ impl crate::Method for Method {
     type Res = NotApplicable;
 
     type CanTransition = can_transition::False;
+
+    type IsLeaf = is_leaf::True;
 }
 
 impl<
@@ -71,7 +75,7 @@ impl<
     Role: crate::state::Role,
     RootMethod: crate::Method,
     Client: crate::transport::Client,
-    H: crate::Handler<RootMethod>,
+    H: crate::Handler<RootMethod, RootMethod>,
 > ProcessorSacrifice for Processor<State, Role, RootMethod, Client, H>
 {
 }

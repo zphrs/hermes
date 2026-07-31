@@ -1,4 +1,6 @@
-pub mod child;
+pub mod ancestor;
+
+pub use ancestor::Ancestor;
 
 use std::marker::PhantomData;
 
@@ -29,7 +31,17 @@ impl<M: Method<CanTransition = can_transition::False>> Loopback for M {}
 pub trait CanTransition: Method<CanTransition = can_transition::True> {}
 
 impl<M: Method<CanTransition = can_transition::True>> CanTransition for M {}
+pub mod is_leaf {
 
+    pub(super) trait IsLeaf {}
+
+    pub struct False;
+
+    pub struct True;
+
+    impl IsLeaf for True {}
+    impl IsLeaf for False {}
+}
 pub trait Method {
     type Req;
     type Res;
@@ -41,9 +53,17 @@ pub trait Method {
         can_transition::True or can_transition::False as a marker struct"
     )]
     type CanTransition: can_transition::Transitions;
+    #[expect(
+        private_bounds,
+        reason = "IsLeaf is more private to force users to either use
+        is_leaf::True or is_leaf::False as a marker struct"
+    )]
+    // Whether this method does not contain any sub-methods.
+    type IsLeaf: is_leaf::IsLeaf;
 }
+
 pub mod not_applicable {
-    use crate::traits::method::can_transition;
+    use crate::{method::is_leaf, traits::method::can_transition};
     use std::convert::Infallible;
 
     /// Type for a method whose requests and responses are impossible to construct;
@@ -74,22 +94,24 @@ pub mod not_applicable {
         type Res = Response;
 
         type CanTransition = can_transition::False;
+
+        type IsLeaf = is_leaf::True;
     }
 
     pub struct Handler;
 
-    impl crate::Handler<Method> for Handler {
+    impl<RootMethod> crate::Handler<RootMethod, Method> for Handler {
         type Error = Infallible;
 
-        async fn handle<Replier: crate::transport::ReplyHelper<Method>>(
+        async fn handle<Replier: crate::transport::ReplyHelper<Method, RootMethod>>(
             &mut self,
             replier: Replier,
             value: <Method as super::Method>::Req,
         ) -> Result<
-            <Replier as crate::transport::ReplyHelper<Method>>::Receipt<Method>,
+            <Replier as crate::transport::ReplyHelper<Method, RootMethod>>::Receipt<Method>,
             crate::traits::HandleError<
-                <Replier as crate::transport::ReplyHelper<Method>>::Error,
-                <Self as crate::Handler<Method>>::Error,
+                <Replier as crate::transport::ReplyHelper<Method, RootMethod>>::Error,
+                <Self as crate::Handler<RootMethod, Method>>::Error,
             >,
         > {
             unimplemented!("no point in implementing since the request can't be constructed")

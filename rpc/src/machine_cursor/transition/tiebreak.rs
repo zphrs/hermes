@@ -269,7 +269,10 @@ pub async fn from_processor_to_completion<
             TransitionRequestError<
                 <Conn as crate::transport::Client>::Error,
                 HError,
-                <DelayedReplier<ProcessorMethod> as ReplyHelper<ProcessorMethod>>::Error,
+                <DelayedReplier<ProcessorMethod> as ReplyHelper<
+                    ProcessorMethod,
+                    ProcessorMethod,
+                >>::Error,
             >,
         >,
     >,

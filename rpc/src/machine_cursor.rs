@@ -22,9 +22,9 @@ pub use requester::Requester;
 pub use processor::TransitionRequestError;
 
 use crate::{
+    Method,
     traits::{self, state},
     transport::CallerExt,
-    Method,
 };
 #[expect(
     private_bounds,
@@ -96,7 +96,7 @@ where
             _role: state::role::Client,
         }
     }
-    pub fn into_parts<Handler: traits::Handler<State::ClientMethod>>(
+    pub fn into_parts<Handler: traits::Handler<State::ClientMethod, State::ClientMethod>>(
         self,
         handler: Handler,
     ) -> (
@@ -129,7 +129,7 @@ where
             _role: state::role::Server,
         }
     }
-    pub fn into_parts<Handler: traits::Handler<State::ServerMethod>>(
+    pub fn into_parts<Handler: traits::Handler<State::ServerMethod, State::ServerMethod>>(
         self,
         handler: Handler,
     ) -> (

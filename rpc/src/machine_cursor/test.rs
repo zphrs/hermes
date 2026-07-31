@@ -1,6 +1,7 @@
 pub mod final_endpoint;
+pub mod from_processor_to_completion;
 mod setup_conn;
-pub mod tiebreak;
+mod tiebreak;
 pub use setup_conn::{ConnPair, setup_conn};
 pub(self) mod test_states;
 
@@ -57,8 +58,9 @@ mod waitlist {
 
     use crate::{
         Handler, Method, define_prioritized,
+        method::Ancestor,
         state::{self, priority::server_wins},
-        traits::method::{can_transition, not_applicable::NotApplicable},
+        traits::method::{can_transition, is_leaf, not_applicable::NotApplicable},
     };
 
     pub struct HostStand;
@@ -79,23 +81,26 @@ mod waitlist {
         type Res = state::Wrapper<WaitingList>;
 
         type CanTransition = can_transition::True;
+        type IsLeaf = is_leaf::True;
     }
 
-    impl Handler for Join {
+    impl<RootMethod: Ancestor<Join>> Handler<RootMethod> for Join {
         type Error = Infallible;
 
-        async fn handle<Replier: crate::transport::ReplyHelper<Self>>(
+        fn handle<Replier: crate::transport::ReplyHelper<Self, RootMethod>>(
             &mut self,
             replier: Replier,
-            _value: <Self as Method>::Req,
-        ) -> Result<
-            <Replier as crate::transport::ReplyHelper<Self>>::Receipt<Self>,
-            crate::traits::HandleError<
-                <Replier as crate::transport::ReplyHelper<Self>>::Error,
-                <Self as Handler<Self>>::Error,
+            value: <Self as Method>::Req,
+        ) -> impl Future<
+            Output = Result<
+                <Replier as crate::transport::ReplyHelper<Self, RootMethod>>::Receipt<Self>,
+                crate::traits::HandleError<
+                    <Replier as crate::transport::ReplyHelper<Self, RootMethod>>::Error,
+                    <Self as Handler<RootMethod, Self>>::Error,
+                >,
             >,
         > {
-            replier.reply(state::Wrapper::new()).await
+            replier.reply(state::Wrapper::new())
         }
     }
 
@@ -117,21 +122,22 @@ mod waitlist {
         type Res = state::Wrapper<Seated>;
 
         type CanTransition = can_transition::True;
+        type IsLeaf = is_leaf::True;
     }
 
-    impl crate::Handler for TableOffer {
+    impl crate::Handler<TableOffer> for TableOffer {
         type Error = Infallible;
 
-        fn handle<Replier: crate::transport::ReplyHelper<Self>>(
+        fn handle<Replier: crate::transport::ReplyHelper<Self, TableOffer>>(
             &mut self,
             replier: Replier,
-            _value: <Self as Method>::Req,
+            value: <Self as Method>::Req,
         ) -> impl Future<
             Output = Result<
-                <Replier as crate::transport::ReplyHelper<Self>>::Receipt<Self>,
+                <Replier as crate::transport::ReplyHelper<Self, TableOffer>>::Receipt<Self>,
                 crate::traits::HandleError<
-                    <Replier as crate::transport::ReplyHelper<Self>>::Error,
-                    <Self as Handler<Self>>::Error,
+                    <Replier as crate::transport::ReplyHelper<Self, TableOffer>>::Error,
+                    <Self as Handler<TableOffer, Self>>::Error,
                 >,
             >,
         > {
@@ -147,23 +153,26 @@ mod waitlist {
         type Res = state::Wrapper<HostStand>;
 
         type CanTransition = can_transition::True;
+        type IsLeaf = is_leaf::True;
     }
 
-    impl crate::Handler for Leave {
+    impl crate::Handler<Leave> for Leave {
         type Error = Infallible;
 
-        async fn handle<Replier: crate::transport::ReplyHelper<Self>>(
+        fn handle<Replier: crate::transport::ReplyHelper<Self, Leave>>(
             &mut self,
             replier: Replier,
-            _value: <Self as Method>::Req,
-        ) -> Result<
-            <Replier as crate::transport::ReplyHelper<Self>>::Receipt<Self>,
-            crate::traits::HandleError<
-                <Replier as crate::transport::ReplyHelper<Self>>::Error,
-                <Self as Handler<Self>>::Error,
+            value: <Self as Method>::Req,
+        ) -> impl Future<
+            Output = Result<
+                <Replier as crate::transport::ReplyHelper<Self, Leave>>::Receipt<Self>,
+                crate::traits::HandleError<
+                    <Replier as crate::transport::ReplyHelper<Self, Leave>>::Error,
+                    <Self as Handler<Leave, Self>>::Error,
+                >,
             >,
         > {
-            replier.reply(state::Wrapper::new()).await
+            replier.reply(state::Wrapper::new())
         }
     }
 
@@ -264,12 +273,12 @@ async fn tiebreak() {
             let wrapped_requester = Arc::new(Mutex::new(Some(requester)));
 
             let weak_wrapped_requester = Arc::downgrade(&wrapped_requester);
-            let wait_for_available_table = {
+            let table_ready = {
                 async move {
                     // wait 10ms (pretend arbitrary delay before table becomes
                     // available) to take client off of waiting list
 
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    tokio::time::sleep(Duration::from_millis(2)).await;
                     let res = Some(
                         weak_wrapped_requester
                             .upgrade()?
@@ -285,8 +294,8 @@ async fn tiebreak() {
                 .instrument(Span::current())
             };
 
-            let request_transition_jh = tokio::spawn(wait_for_available_table);
-            let abort_handle = request_transition_jh.abort_handle();
+            let request_transition_jh = tokio::spawn(table_ready);
+            let request_transition_abort_handle = request_transition_jh.abort_handle();
             let mut request_transition_jh = request_transition_jh.fuse();
 
             let (to_sacrifice, processor_transition_fut) = processor.handle_transition_request();
@@ -320,7 +329,7 @@ async fn tiebreak() {
                 ),
             }
 
-            // race between the transition and wait_for_available_table
+            // race between the transition and table_ready
             let select = select! {
                 transition = processor_transition_fut => {
                     Select::Processor(transition.unwrap())
@@ -334,7 +343,7 @@ async fn tiebreak() {
                 Select::Processor(processor_transition) => {
                     let maybe_requester = wrapped_requester.lock().unwrap().take();
                     if let Some(requester) = maybe_requester {
-                        abort_handle.abort();
+                        request_transition_abort_handle.abort();
                         let res = processor_transition
                             .next_with_requester(requester)
                             .await
@@ -415,7 +424,7 @@ async fn tiebreak() {
             };
             debug!("joined waitlist");
 
-            const SHOULD_LEAVE: bool = true;
+            const SHOULD_LEAVE: bool = false;
 
             let (processor, requester) = waiting_list_cursor.into_parts(TableOffer);
 
@@ -460,7 +469,7 @@ async fn tiebreak() {
                     }
                 }
             } else {
-                let (to_sacrifice, processor_transition) = processor.handle_transition_request();
+                let (_to_sacrifice, processor_transition) = processor.handle_transition_request();
                 let (res, processor_transition) = processor_transition
                     .await
                     .unwrap()

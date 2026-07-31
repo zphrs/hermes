@@ -81,9 +81,10 @@ pub trait Client: BiStream {
     // returned future.
     fn handle_one_request_with_handler<
         'a,
-        Replier: ReplyHelper<Method> + 'a,
+        Replier: ReplyHelper<Method, RootMethod> + 'a,
         Method: crate::Method,
-        Rh: crate::Handler<Method>,
+        RootMethod,
+        Rh: crate::Handler<RootMethod, Method>,
     >(
         &self,
         replier: Replier,
@@ -92,7 +93,7 @@ pub trait Client: BiStream {
     ) -> impl Future<
         Output = Result<
             Replier::Receipt<Method>,
-            HandleOneRequestError<<Replier as ReplyHelper<Method>>::Error, Rh::Error>,
+            HandleOneRequestError<<Replier as ReplyHelper<Method, RootMethod>>::Error, Rh::Error>,
         >,
     > + 'a
     where
@@ -126,7 +127,7 @@ pub trait Client: BiStream {
         }
     }
 
-    fn handle_one_request<'b, 'a, Method: crate::Method + 'a, Rh: crate::Handler<Method>>(
+    fn handle_one_request<'b, 'a, Method: crate::Method + 'a, Rh: crate::Handler<RootMethod, Method>, RootMethod>(
         &'b self,
         stream: &'a mut (Self::SendStream, Self::RecvStream),
         handler: &'a mut Rh,
@@ -134,7 +135,7 @@ pub trait Client: BiStream {
         Output = Result<
             Method::Res,
             HandleOneRequestError<
-                <ImmediateReplier<Self::SendStream, Method> as ReplyHelper<Method>>::Error,
+                <ImmediateReplier<Self::SendStream, Method> as ReplyHelper<Method, RootMethod>>::Error,
                 Rh::Error,
             >,
         >,
@@ -147,7 +148,7 @@ pub trait Client: BiStream {
         let (write, read) = stream;
         let replier = ImmediateReplier::from(write);
         let out = self
-            .handle_one_request_with_handler(replier, read, handler)
+            .handle_one_request_with_handler::<_, _, RootMethod, _>(replier, read, handler)
             .map(|v| v.map(|v| v.into_inner()));
         out
     }

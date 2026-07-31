@@ -1,3 +1,4 @@
+use crate::method::{Ancestor, is_leaf};
 use crate::traits::HandleError;
 use crate::traits::method::can_transition;
 use crate::traits::{self, method::Loopback};
@@ -8,7 +9,7 @@ use std::marker::PhantomData;
 pub struct ConcurrentRequestHandler<
     ParentMethod: crate::Method,
     LoopbackMethod: Loopback,
-    LoopbackHandler: traits::Handler<LoopbackMethod>,
+    LoopbackHandler: traits::Handler<ParentMethod, LoopbackMethod>,
 > {
     handler: LoopbackHandler,
     _marker: PhantomData<(ParentMethod, LoopbackMethod)>,
@@ -17,20 +18,33 @@ pub struct ConcurrentRequestHandler<
 impl<
     ParentMethod: crate::Method,
     LoopbackMethod: Loopback,
-    LoopbackHandler: traits::Handler<LoopbackMethod>,
-> crate::Handler for ConcurrentRequestHandler<ParentMethod, LoopbackMethod, LoopbackHandler>
+    LoopbackHandler: traits::Handler<ParentMethod, LoopbackMethod>,
+> Ancestor<ConcurrentRequestHandler<ParentMethod, LoopbackMethod, LoopbackHandler>>
+    for ParentMethod
+{
+}
+
+impl<
+    ParentMethod: crate::Method + Ancestor<LoopbackMethod>,
+    LoopbackMethod: Loopback,
+    LoopbackHandler: traits::Handler<ParentMethod, LoopbackMethod>,
+> crate::Handler<ParentMethod>
+    for ConcurrentRequestHandler<ParentMethod, LoopbackMethod, LoopbackHandler>
 where
     LoopbackMethod::Req: TryFrom<ParentMethod::Req, Error = ParentMethod::Req>,
 {
     type Error = ConcurrentRequestHandlerError<LoopbackHandler::Error, ParentMethod::Req>;
 
-    async fn handle<Replier: ReplyHelper<Self>>(
+    async fn handle<Replier: ReplyHelper<Self, ParentMethod>>(
         &mut self,
         replier: Replier,
         value: <Self as crate::Method>::Req,
     ) -> Result<
-        <Replier as ReplyHelper<Self>>::Receipt<Self>,
-        HandleError<<Replier as ReplyHelper<Self>>::Error, <Self as crate::Handler<Self>>::Error>,
+        <Replier as ReplyHelper<Self, ParentMethod>>::Receipt<Self>,
+        HandleError<
+            <Replier as ReplyHelper<Self, ParentMethod>>::Error,
+            <Self as crate::Handler<ParentMethod, Self>>::Error,
+        >,
     > {
         let parallel_req = match LoopbackMethod::Req::try_from(value) {
             Ok(v) => v,
@@ -58,19 +72,21 @@ impl<ParentMethod, LoopbackMethod, LoopbackHandler> crate::Method
 where
     ParentMethod: crate::Method,
     LoopbackMethod: Loopback,
-    LoopbackHandler: traits::Handler<LoopbackMethod>,
+    LoopbackHandler: traits::Handler<ParentMethod, LoopbackMethod>,
 {
     type Req = ParentMethod::Req;
 
     type Res = LoopbackMethod::Res;
 
     type CanTransition = can_transition::False;
+
+    type IsLeaf = is_leaf::False;
 }
 
 impl<
     ParentMethod: crate::Method,
     LoopbackMethod: Loopback,
-    LoopbackHandler: traits::Handler<LoopbackMethod>,
+    LoopbackHandler: traits::Handler<ParentMethod, LoopbackMethod>,
 > ConcurrentRequestHandler<ParentMethod, LoopbackMethod, LoopbackHandler>
 {
     pub fn new(handler: LoopbackHandler) -> Self {

@@ -8,17 +8,20 @@ pub enum HandleError<Replier, Handler> {
     Handler(#[from] Handler),
 }
 
-pub trait Handler<Method: crate::Method = Self> {
+pub trait Handler<RootMethod, Method: crate::Method = Self> {
     /// used to abort a reply midway through handling a request
     type Error;
-    fn handle<Replier: ReplyHelper<Method>>(
+    fn handle<Replier: ReplyHelper<Method, RootMethod>>(
         &mut self,
         replier: Replier,
         value: Method::Req,
     ) -> impl Future<
         Output = Result<
-            <Replier as ReplyHelper<Method>>::Receipt<Method>,
-            HandleError<<Replier as ReplyHelper<Method>>::Error, <Self as Handler<Method>>::Error>,
+            <Replier as ReplyHelper<Method, RootMethod>>::Receipt<Method>,
+            HandleError<
+                <Replier as ReplyHelper<Method, RootMethod>>::Error,
+                <Self as Handler<RootMethod, Method>>::Error,
+            >,
         >,
     >;
 }

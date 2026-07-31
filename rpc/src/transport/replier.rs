@@ -6,7 +6,14 @@ use minicbor::CborLen as _;
 
 use crate::{
     RpcMessage,
-    traits::{self, method},
+    method::{
+        Ancestor,
+        ancestor::{Branch, Leaf},
+    },
+    traits::{
+        self,
+        method::{self},
+    },
 };
 
 /// Returned when you call [`reply`](Call::reply) on a [Method] that implements
@@ -74,7 +81,7 @@ where
     }
 }
 
-pub trait ReplyHelper<Method: crate::Method>: Sized {
+pub trait ReplyHelper<Method: crate::Method, RootMethod>: Sized {
     type Error;
     type Receipt<M: crate::Method>;
     fn reply<Error>(
@@ -84,9 +91,10 @@ pub trait ReplyHelper<Method: crate::Method>: Sized {
         Output = Result<Self::Receipt<Method>, crate::traits::HandleError<Self::Error, Error>>,
     >
     where
-        Method::Res: RpcMessage;
+        Method::Res: RpcMessage,
+        Method: Leaf<RootMethod>;
 
-    fn reply_with<NewMethod: crate::Method, Handler: traits::Handler<NewMethod>>(
+    fn reply_with<NewMethod: crate::Method, Handler: traits::Handler<RootMethod, NewMethod>>(
         self,
         handler: &mut Handler,
         req: NewMethod::Req,
@@ -96,10 +104,14 @@ pub trait ReplyHelper<Method: crate::Method>: Sized {
             Self::Receipt<Method>,
             crate::traits::HandleError<Self::Error, Handler::Error>,
         >,
-    >;
+    >
+    where
+        Method: Branch<RootMethod>,
+        RootMethod: Ancestor<NewMethod>;
 }
 
-impl<T, Method: crate::Method> ReplyHelper<Method> for ImmediateReplier<T, Method>
+impl<T, Method: crate::Method, RootMethod> ReplyHelper<Method, RootMethod>
+    for ImmediateReplier<T, Method>
 where
     T: AsyncWrite + Unpin,
 {
@@ -124,7 +136,10 @@ where
         }
     }
 
-    async fn reply_with<NewMethod: crate::Method, Handler: traits::Handler<NewMethod>>(
+    async fn reply_with<
+        NewMethod: crate::Method,
+        Handler: traits::Handler<RootMethod, NewMethod>,
+    >(
         self,
         handler: &mut Handler,
         req: NewMethod::Req,

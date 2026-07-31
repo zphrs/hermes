@@ -3,7 +3,7 @@ use std::{convert::Infallible, marker::PhantomData, sync::LazyLock};
 use maxlen::MaxLen;
 use minicbor::bytes::ByteVec;
 
-use crate::RpcMessage;
+use crate::{RpcMessage, method::is_leaf};
 
 pub struct TransitionRequestMethod<M: crate::Method> {
     marker: PhantomData<M>,
@@ -15,6 +15,8 @@ impl<'a, M: crate::Method> crate::Method for TransitionRequestMethod<M> {
     type Res = Res;
 
     type CanTransition = M::CanTransition;
+
+    type IsLeaf = is_leaf::False;
 }
 
 /// Sets the tiebreak boolean flag

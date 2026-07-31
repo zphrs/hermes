@@ -1,12 +1,12 @@
 use std::convert::Infallible;
 
-use maxlen::MaxLen;
 use tokio::task::JoinSet;
 
 use crate::{
-    ImmediateReplier, RpcError, Transport,
+    RpcError, Transport,
     in_memory_transport::{self, MemoryTransport},
-    traits::method::can_transition::False,
+    method::Ancestor,
+    traits::method::{can_transition::False, is_leaf},
     transport::{self, CallerExt as _, Client, Incoming},
 };
 
@@ -26,10 +26,10 @@ pub enum Root {
 }
 
 pub mod ping {
-    use maxlen::MaxLen;
+
     use std::convert::Infallible;
 
-    use crate::traits::method::can_transition;
+    use crate::{method::is_leaf, traits::method::can_transition};
     #[derive(
         Debug,
         minicbor_derive::Encode,
@@ -61,12 +61,13 @@ pub mod ping {
         type Req = Request;
         type Res = Response;
         type CanTransition = can_transition::False;
+        type IsLeaf = is_leaf::True;
     }
 
-    impl crate::Handler for Method {
+    impl crate::Handler<super::RootHandler> for Method {
         type Error = Infallible;
 
-        async fn handle<Replier: crate::transport::ReplyHelper<Self>>(
+        async fn handle<Replier: crate::transport::ReplyHelper<Self, super::RootHandler>>(
             &mut self,
             replier: Replier,
             _value: <Self as crate::Method>::Req,
@@ -78,9 +79,8 @@ pub mod ping {
 }
 
 pub mod other_ping {
-    use maxlen::MaxLen;
 
-    use crate::traits::method::can_transition;
+    use crate::{method::is_leaf, traits::method::can_transition};
 
     #[derive(
         Debug,
@@ -106,12 +106,13 @@ pub mod other_ping {
         type Req = Request;
         type Res = Response;
         type CanTransition = can_transition::False;
+        type IsLeaf = is_leaf::True;
     }
 
-    impl crate::Handler for Method {
+    impl crate::Handler<super::RootHandler> for Method {
         type Error = std::convert::Infallible;
 
-        async fn handle<Replier: crate::transport::ReplyHelper<Self>>(
+        async fn handle<Replier: crate::transport::ReplyHelper<Self, super::RootHandler>>(
             &mut self,
             replier: Replier,
             _value: <Self as crate::Method>::Req,
@@ -129,7 +130,13 @@ impl crate::Method for RootHandler {
 
     type Res = ();
     type CanTransition = False;
+    type IsLeaf = is_leaf::False;
 }
+
+impl Ancestor<other_ping::Method> for RootHandler {}
+
+impl Ancestor<ping::Method> for RootHandler {}
+
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -137,10 +144,10 @@ pub enum Error {
     Rpc(#[from] RpcError),
 }
 
-impl crate::Handler for RootHandler {
+impl crate::Handler<RootHandler> for RootHandler {
     type Error = Infallible;
 
-    async fn handle<Replier: transport::ReplyHelper<Self>>(
+    async fn handle<Replier: transport::ReplyHelper<Self, RootHandler>>(
         &mut self,
         replier: Replier,
         value: <Self as crate::Method>::Req,
@@ -177,7 +184,9 @@ async fn test() {
         //         (replier, &mut read), &mut root_handler,
         //     );
         // async move { fut.await.map(|v| v.into_inner()) }.await;
-        let _ = conn.handle_one_request(&mut stream, &mut RootHandler).await;
+        let _ = conn
+            .handle_one_request::<_, _, RootHandler>(&mut stream, &mut RootHandler)
+            .await;
     });
     // client
     js.spawn(async move {

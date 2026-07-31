@@ -17,6 +17,16 @@ thiserror = "2.0.18"
 tokio = { version = "1.50.0", default-features = false }
 tracing = "0.1.44"
 
+# [profile.dev.package.hegeltest]
+# opt-level=3
+
+[profile.dev.build-override]
+opt-level=3
+
+# [profile.dev.package.hegeltest-c]
+# opt-level=3
+
+
 
 [features]
 default = ["quinn"]

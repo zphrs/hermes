@@ -1,2 +1,5 @@
 [build]
-rustflags = ['--cfg', 'getrandom_backend="deterministic_testing"']
+rustflags = [
+    '--cfg', 'getrandom_backend="deterministic_testing"',
+    "--cfg", "tokio_unstable"
+]

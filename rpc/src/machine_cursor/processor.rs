@@ -1,5 +1,6 @@
 use crate::machine_cursor::transition::processor::ProcessorTransition;
 use crate::machine_cursor::transition::requester::ToSacrifice;
+use crate::method::Ancestor;
 use crate::{Handler, ImmediateReplier, machine_cursor::PendingTransitionReceipt};
 mod concurrent_request_handler;
 
@@ -7,10 +8,7 @@ use std::{convert::Infallible, io::ErrorKind};
 
 use crate::state::PrioritizedUnsafeExt;
 
-use crate::{
-    traits::{Prioritized, state::role},
-    transport::ReplyHelper,
-};
+use crate::{traits::Prioritized, transport::ReplyHelper};
 
 use futures::{FutureExt as _, StreamExt as _, select, stream::FuturesUnordered};
 use maxlen::MaxLen;
@@ -40,7 +38,7 @@ where
     Role: state::Role,
     Client: crate::transport::Client,
     RootMethod: crate::Method,
-    H: traits::Handler<RootMethod>,
+    H: traits::Handler<RootMethod, RootMethod>,
 {
     _state: traits::state::Wrapper<State>,
     handler: H,
@@ -81,7 +79,7 @@ where
     Role: state::Role,
     Client: crate::transport::Client,
     RootMethod: crate::Method,
-    H: traits::Handler<RootMethod>,
+    H: traits::Handler<RootMethod, RootMethod>,
 {
     pub fn new<Wrapper: ToHandle<RootMethod, Role, H> + Into<traits::state::Wrapper<State>>>(
         state_wrapper: Wrapper,
@@ -115,7 +113,7 @@ where
                 TransitionRequestError<
                     Client::Error,
                     H::Error,
-                    <DelayedReplier<RootMethod> as ReplyHelper<RootMethod>>::Error,
+                    <DelayedReplier<RootMethod> as ReplyHelper<RootMethod, RootMethod>>::Error,
                 >,
             >,
         >,
@@ -202,12 +200,13 @@ where
     >
     where
         RootMethod::Req: crate::RpcMessage,
-        LoopbackHandler: traits::Handler<LoopbackMethod> + Clone,
+        LoopbackHandler: traits::Handler<RootMethod, LoopbackMethod> + Clone,
         LoopbackMethod::Req: TryFrom<RootMethod::Req, Error = RootMethod::Req>,
         <LoopbackMethod as Method>::Req: crate::RpcMessage,
-        H: crate::traits::Handler<RootMethod>,
+        H: crate::traits::Handler<RootMethod, RootMethod>,
         <RootMethod as Method>::Res: From<<LoopbackMethod as Method>::Res>,
         State: Prioritized,
+        RootMethod: Ancestor<LoopbackMethod>,
     {
         let Self {
             _state,
@@ -345,7 +344,7 @@ where
 struct WithPriority<
     'a,
     T: Method,
-    Handler: crate::Handler<T>,
+    Handler: crate::Handler<T, T>,
     State: Prioritized,
     Role: traits::state::Role,
 > {
@@ -359,7 +358,7 @@ struct WithPriority<
 impl<
     'a,
     M: crate::Method,
-    Handler: crate::Handler<M>,
+    Handler: crate::Handler<M, M>,
     State: Prioritized,
     Role: traits::state::Role,
 > WithPriority<'a, M, Handler, State, Role>
@@ -381,21 +380,24 @@ impl<
 
 impl<
     'a,
-    T: crate::Method,
-    Handler: crate::Handler<T>,
+    M: crate::Method,
+    Handler: crate::Handler<M, M>,
     State: Prioritized,
     Role: traits::state::Role,
-> crate::Handler<T> for WithPriority<'a, T, Handler, State, Role>
+> crate::Handler<M, M> for WithPriority<'a, M, Handler, State, Role>
 {
     type Error = Handler::Error;
 
-    async fn handle<Replier: ReplyHelper<T>>(
+    async fn handle<Replier: ReplyHelper<M, M>>(
         &mut self,
         replier: Replier,
-        value: <T as Method>::Req,
+        value: <M as Method>::Req,
     ) -> Result<
-        <Replier as ReplyHelper<T>>::Receipt<T>,
-        traits::HandleError<<Replier as ReplyHelper<T>>::Error, <Self as crate::Handler<T>>::Error>,
+        <Replier as ReplyHelper<M, M>>::Receipt<M>,
+        traits::HandleError<
+            <Replier as ReplyHelper<M, M>>::Error,
+            <Self as crate::Handler<M, M>>::Error,
+        >,
     > {
         // SAFETY: RootMethod aligns with the type
         // `State::ClientMethod::Req` if the Role is indeed Client.
