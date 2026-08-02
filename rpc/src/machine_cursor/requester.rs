@@ -81,7 +81,7 @@ where
     ///
     /// For example, if the RootMethod has a Req type of:
     ///
-    /// ```
+    /// ```ignore
     /// enum RootMethodRequest {
     ///     A(A::Req),
     ///     B(B::Req),
@@ -91,7 +91,7 @@ where
     /// where A and B are structs that implement Method and you're calling
     /// method A, then do:
     ///
-    /// ```
+    /// ```ignore
     /// request_transition::<A>(A::Req::new())
     /// ```
     ///

@@ -1,3 +1,5 @@
+//! 100% reliable in-memory transport intended for local testing.
+
 use std::{
     collections::HashMap,
     convert::Infallible,
@@ -46,7 +48,7 @@ where
     }
 }
 
-/// 100% reliable transport
+/// 100% reliable in-memory transport intended for local testing.
 #[derive(Clone)]
 pub struct MemoryTransport<Address = [u8; 16]> {
     address: Address,

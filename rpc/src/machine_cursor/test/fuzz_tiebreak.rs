@@ -1,5 +1,4 @@
 use std::{
-    convert::Infallible,
     mem,
     pin::pin,
     sync::{Arc, Mutex},
@@ -114,16 +113,9 @@ async fn server(
                 debug!("transition got through; running tiebreak");
                 let tiebreak_result = match processor_transition {
                     Some(processor_transition) => {
-                        tiebreak::between_processor_and_requester_transition::<
-                            _,
-                            _,
-                            _,
-                            _,
-                            _,
-                            _,
-                            Infallible,
-                        >(
-                            processor_transition, requester_transition, to_sacrifice
+                        tiebreak::between_processor_and_requester_transition(
+                            processor_transition,
+                            requester_transition,
                         )
                         .await
                         .unwrap()
@@ -255,16 +247,9 @@ async fn client(
                 debug!("transition got through; running tiebreak");
                 let tiebreak_result = match processor_transition {
                     Some(processor_transition) => {
-                        tiebreak::between_processor_and_requester_transition::<
-                            _,
-                            _,
-                            _,
-                            _,
-                            _,
-                            _,
-                            Infallible,
-                        >(
-                            processor_transition, requester_transition, to_sacrifice
+                        tiebreak::between_processor_and_requester_transition(
+                            processor_transition,
+                            requester_transition,
                         )
                         .await
                         .unwrap()
@@ -323,6 +308,7 @@ fn generate_request(tc: TestCase) -> Option<Request> {
 
 #[hegel::test(test_cases = 100_000)]
 fn fuzz_tiebreak(tc: TestCase) {
+    // needed to seed the rng
     tokio::runtime::Builder::new_current_thread()
         .start_paused(true)
         .enable_all()

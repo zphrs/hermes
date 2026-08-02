@@ -109,7 +109,7 @@ fn generate_request(tc: TestCase) -> Option<Request> {
 }
 
 #[tokio::test(start_paused = true)]
-#[hegel::test(test_cases = 1000)]
+#[hegel::test(test_cases = 10_000)]
 async fn fuzz_from_processor_to_completion(tc: TestCase) {
     let request_server: Option<Request> = tc.draw(generate_request());
     let request_client: Option<Request> = tc.draw(generate_request());

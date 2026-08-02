@@ -29,10 +29,8 @@ opt-level = 3
 [profile.dev.package.maxlen]
 opt-level = 3
 
-
 [profile.dev.package.tokio]
 opt-level = 3
-
 
 [profile.dev.package.hegeltest]
 opt-level=3

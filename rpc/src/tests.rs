@@ -91,6 +91,12 @@ pub mod other_ping {
     )]
     pub struct Request;
 
+    impl From<Request> for super::Root {
+        fn from(value: Request) -> Self {
+            Self::Other(value)
+        }
+    }
+
     #[derive(
         Debug,
         minicbor_derive::Encode,

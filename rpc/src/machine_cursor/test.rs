@@ -219,7 +219,6 @@ async fn join() {
             debug!("server transitioned to waitlist");
         });
     };
-    // client
 
     let net = network.clone();
     js.spawn(async move {
@@ -373,6 +372,7 @@ async fn test_tiebreak() {
                         to_sacrifice,
                     )
                     .await
+                    .unwrap()
                 }
                 Select::Requester(maybe_requester) => {
                     // should always be some here because this thread doesn't take
@@ -384,10 +384,11 @@ async fn test_tiebreak() {
                         requester_transition,
                     )
                     .await
+                    .unwrap()
                 }
             };
 
-            match tiebreak_res.unwrap() {
+            match tiebreak_res {
                 transition::tiebreak::TiebreakResult::ProcessorWon(
                     finalize_processor_transition,
                 ) => {

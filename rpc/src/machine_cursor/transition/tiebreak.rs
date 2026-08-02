@@ -1,7 +1,8 @@
+use std::pin::Pin;
 use std::{convert::Infallible, pin::pin};
 
 use futures::{FutureExt, select};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     CallerError, MachineCursor,
@@ -186,7 +187,6 @@ pub async fn between_processor_and_requester_transition<
     TransitionMethod: crate::Method,
     Role: crate::state::Role,
     Conn: crate::transport::Connection,
-    HError,
 >(
     processor_transition: ProcessorTransition<
         super::processor::Entrypoint<State, ProcessorMethod, Role, Conn>,
@@ -196,21 +196,28 @@ pub async fn between_processor_and_requester_transition<
         RequestTransition<RootReq, TransitionMethod, Role, Conn>,
     >,
     to_sacrifice: ToSacrifice,
-) -> Result<
-    TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
-    TiebreakError<Conn, HError>,
+) -> EventualTiebreakResult<
+    Result<
+        TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
+        TiebreakError<Conn, ()>,
+    >,
+    impl Future<
+        Output = Result<
+            TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
+            TiebreakError<Conn, ()>,
+        >,
+    >,
 >
 where
     TransitionMethod::Res: crate::RpcMessage,
     RootReq: crate::RpcMessage + From<TransitionMethod::Req>,
 {
-    let (delayed_receipt, role, conn, _wrapper, processor_priority, sender) =
-        processor_transition.into_inner().into_parts();
-
     let request_transition = requester_transition.into_inner();
 
+    let processor_transition_ref = processor_transition.inner_mut().inner_mut();
+
     assert!(
-        request_transition.query_req().caller().unwrap() == &conn,
+        request_transition.query_req().caller().unwrap() == processor_transition_ref.conn(),
         "processor and requester must both belong to the same connection"
     );
     let query_req = request_transition.query_req();
@@ -218,25 +225,28 @@ where
 
     let requester_priority = unsafe { State::requester_priority::<Role, _>(root_req) };
 
-    let choice = tiebreak_choice::<Role, State>(processor_priority, requester_priority);
+    let choice = tiebreak_choice::<Role, State>(
+        processor_transition_ref.take_priority().unwrap(),
+        requester_priority,
+    );
     let res = {
         use TiebreakChoice::*;
         match choice {
             // processor won
             Processor => {
+                let (delayed_receipt, role, conn, _wrapper, _processor_priority, sender) =
+                    processor_transition.into_inner().into_inner().into_parts();
                 debug!("processor won");
                 // not in a tiebreak because we won and so we won't actually
                 // send off the request transition (it's pending until we await
                 // request_transition/call requester_transition.next())
                 let (res, finalize_fut) = delayed_receipt.finalize(sender, false);
-                TiebreakResult::<ProcessorMethod, TransitionMethod::Res, Role, Conn>::ProcessorWon(
-                    FinalizeProcessorTransition {
-                        res,
-                        finalize_fut,
-                        role,
-                        conn,
-                    },
-                )
+                TiebreakResult::ProcessorWon(FinalizeProcessorTransition {
+                    res,
+                    finalize_fut,
+                    role,
+                    conn,
+                })
             }
             // requester won; need to wait for remote to come to the same
             // conclusion
@@ -252,12 +262,10 @@ where
 
                 let receipt = receipt.insert_result(res);
 
-                TiebreakResult::<ProcessorMethod, TransitionMethod::Res, Role, Conn>::RequesterWon(
-                    FinalizeRequesterTransition {
-                        receipt,
-                        to_sacrifice,
-                    },
-                )
+                TiebreakResult::RequesterWon(FinalizeRequesterTransition {
+                    receipt,
+                    to_sacrifice: processor_transition.into(),
+                })
             }
         }
     };
@@ -304,128 +312,139 @@ where
     RootReq: crate::RpcMessage + From<TransitionMethod::Req>,
     <Conn as crate::Caller>::Error: std::fmt::Debug,
 {
-    let to_processor_transition = pin!(to_processor_transition);
-    let mut request_transition = requester_transition.into_inner();
-    let requester_priority = unsafe {
-        State::requester_priority::<Role, _>(
-            request_transition
-                .query_req()
-                .root_req()
-                .expect("should be defined because request_transition hasn't been awaited yet"),
-        )
-    };
+    let fut = async move {
+        let to_processor_transition = pin!(to_processor_transition);
+        let mut request_transition = requester_transition.into_inner();
+        let requester_priority = unsafe {
+            State::requester_priority::<Role, _>(
+                request_transition
+                    .query_req()
+                    .root_req()
+                    .expect("should be defined because request_transition hasn't been awaited yet"),
+            )
+        };
 
-    let mut to_processor_transition = to_processor_transition.fuse();
+        let mut to_processor_transition = to_processor_transition.fuse();
 
-    enum Select<
-        State: crate::state::Prioritized,
-        RootMethod: crate::Method,
-        RootReq,
-        Role: crate::state::Role,
-        Conn: crate::transport::Connection,
-    > {
-        Processor(ProcessorTransition<Entrypoint<State, RootMethod, Role, Conn>>),
-        Requester(
-            (
-                RootReq,
-                TransitionReceipt<transition_request_method::Res, Role, Conn>,
+        enum Select<
+            State: crate::state::Prioritized,
+            RootMethod: crate::Method,
+            RootReq,
+            Role: crate::state::Role,
+            Conn: crate::transport::Connection,
+        > {
+            Processor(ProcessorTransition<Entrypoint<State, RootMethod, Role, Conn>>),
+            Requester(
+                (
+                    RootReq,
+                    TransitionReceipt<transition_request_method::Res, Role, Conn>,
+                ),
             ),
-        ),
-    }
+        }
 
-    let result = select! {
-        processor_transition = to_processor_transition => {
-            let processor_transition = processor_transition?;
-            Select::Processor(processor_transition)
-        },
-        tuple = request_transition => {
-            Select::Requester(tuple.map_err(|e| CallerError::try_from(e).unwrap())?)
-        },
-    };
-    let out = match result {
-        Select::Processor(processor_transition) => {
-            debug!("processor finished first");
-            // we know for sure we're tiebreaking here
-            let (delayed_receipt, role, conn, _wrapper, processor_priority, sender) =
-                processor_transition.into_inner().into_parts();
-            assert!(
-                request_transition.query_req().caller().unwrap() == &conn,
-                "processor and requester must both belong to the same connection"
-            );
+        let result = select! {
+            processor_transition = to_processor_transition => {
+                let processor_transition = processor_transition?;
+                Select::Processor(processor_transition)
+            },
+            tuple = request_transition => {
+                Select::Requester(tuple.map_err(|e| CallerError::try_from(e).unwrap())?)
+            },
+        };
+        let out = match result {
+            Select::Processor(processor_transition) => {
+                let mut processor_transition = processor_transition.into_inner().into_inner();
+                debug!("processor finished first");
+                // we know for sure we're tiebreaking here
+                assert!(
+                    processor_transition_mut.conn() == receipt.connection(),
+                    "processor and requester must both belong to the same connection"
+                );
 
-            // tell other side we're tiebreaking
-            match tiebreak_choice::<Role, State>(processor_priority, requester_priority) {
-                TiebreakChoice::Processor => {
-                    debug!("processor won tiebreak");
-                    let (res, finalize_fut) = delayed_receipt.finalize(sender, true);
-                    // make sure we cancelled properly
-                    assert!(matches!(
-                        request_transition.into_inner().abort_early().await,
-                        Err(query_owned::Error::Cancelled(_, _))
-                    ));
+                // tell other side we're tiebreaking
+                match tiebreak_choice::<Role, State>(
+                    processor_transition.take_priority().unwrap(),
+                    requester_priority,
+                ) {
+                    TiebreakChoice::Processor => {
+                        let (delayed_receipt, role, conn, _wrapper, _processor_priority, sender) =
+                            processor_transition.into_parts();
+                        debug!("processor won tiebreak");
+                        let (res, finalize_fut) = delayed_receipt.finalize(sender, true);
+                        // make sure we cancelled properly
+                        assert!(matches!(
+                            request_transition.into_inner().abort_early().await,
+                            Err(query_owned::Error::Cancelled(_, _))
+                        ));
 
-                    TiebreakResult::<ProcessorMethod, TransitionMethod::Res, Role, Conn>::ProcessorWon(
-                        FinalizeProcessorTransition {
-                            res,
-                            finalize_fut,
-                            role,
-                            conn,
-                        },
-                    )
+                        TiebreakResult::<ProcessorMethod, TransitionMethod::Res, Role, Conn>::ProcessorWon(
+                            FinalizeProcessorTransition {
+                                res,
+                                finalize_fut,
+                                role,
+                                conn,
+                            },
+                        )
+                    }
+                    TiebreakChoice::Requester => {
+                        debug!("requester won tiebreak");
+                        let (_root_req, receipt) = request_transition
+                            .await
+                            .map_err(|e| CallerError::try_from(e).unwrap())?;
+                        let (res, receipt) = receipt.extract_result();
+                        let (in_tiebreak, res): (_, TransitionMethod::Res) = res.into_parts();
+                        assert!(in_tiebreak);
+                        let receipt = receipt.insert_result(res);
+
+                        TiebreakResult::RequesterWon(FinalizeRequesterTransition {
+                            receipt,
+                            to_sacrifice,
+                        })
+                    }
                 }
-                TiebreakChoice::Requester => {
-                    debug!("requester won tiebreak");
-                    let (_root_req, receipt) = request_transition
-                        .await
-                        .map_err(|e| CallerError::try_from(e).unwrap())?;
-                    let (res, receipt) = receipt.extract_result();
-                    let (in_tiebreak, res): (_, TransitionMethod::Res) = res.into_parts();
-                    assert!(in_tiebreak);
-                    let receipt = receipt.insert_result(res);
+            }
+            Select::Requester((_root_req, receipt)) => {
+                debug!("requester won first");
+                let (res, receipt) = receipt.extract_result();
+                // if we got here then it means the other side either:
+                // - tiebroke in the requester's favor or
+                // - didn't have any tiebreak whatsoever.
+                // We need to figure out which one the other side did to ensure we
+                // consume the request sent out by the other side.
+                let (in_tiebreak, res): (_, TransitionMethod::Res) = res.into_parts();
+                let receipt = receipt.insert_result(res);
 
+                if in_tiebreak {
+                    debug!("in tiebreak");
+                    let processor_transition = to_processor_transition.await?;
+                    let mut processor_transition = processor_transition.into_inner().into_inner();
+
+                    assert!(
+                        processor_transition.conn() == receipt.connection(),
+                        "processor and requester must both belong to the same connection"
+                    );
+                    assert!(
+                        tiebreak_choice::<Role, State>(
+                            processor_transition.take_priority().unwrap(),
+                            requester_priority
+                        ) == TiebreakChoice::Requester
+                    );
+
+                    TiebreakResult::RequesterWon(FinalizeRequesterTransition {
+                        receipt,
+                        to_sacrifice,
+                    })
+                } else {
+                    debug!("not in tiebreak");
+                    warn!("NO ASSERTION THAT THE OLD PROCESSOR IS DROPPED!!");
                     TiebreakResult::RequesterWon(FinalizeRequesterTransition {
                         receipt,
                         to_sacrifice,
                     })
                 }
             }
-        }
-        Select::Requester((_root_req, receipt)) => {
-            debug!("requester won first");
-            let (res, receipt) = receipt.extract_result();
-            assert!(
-                request_transition.query_req().caller().unwrap() == receipt.connection(),
-                "processor and requester must both belong to the same connection"
-            );
-            // if we got here then it means the other side either:
-            // - tiebroke in the requester's favor or
-            // - didn't have any tiebreak whatsoever.
-            // We need to figure out which one the other side did to ensure we
-            // consume the request sent out by the other side.
-            let (in_tiebreak, res): (_, TransitionMethod::Res) = res.into_parts();
-            let receipt = receipt.insert_result(res);
-
-            if in_tiebreak {
-                debug!("in tiebreak");
-                let processor_transition = to_processor_transition.await?;
-                let processor_priority = processor_transition.into_inner().into_parts().4;
-                assert!(
-                    tiebreak_choice::<Role, State>(processor_priority, requester_priority)
-                        == TiebreakChoice::Requester
-                );
-
-                TiebreakResult::RequesterWon(FinalizeRequesterTransition {
-                    receipt,
-                    to_sacrifice,
-                })
-            } else {
-                debug!("not in tiebreak");
-                TiebreakResult::RequesterWon(FinalizeRequesterTransition {
-                    receipt,
-                    to_sacrifice,
-                })
-            }
-        }
+        };
+        Ok(out)
     };
     Ok(out)
 }

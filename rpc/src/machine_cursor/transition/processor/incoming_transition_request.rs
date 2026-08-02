@@ -20,7 +20,7 @@ pub struct PendingTransitionReceipt<
     Role,
     Client,
     traits::state::Wrapper<State>,
-    State::Priority,
+    Option<State::Priority>,
     Client::SendStream,
 );
 
@@ -40,7 +40,24 @@ impl<
         priority: State::Priority,
         sender: Client::SendStream,
     ) -> Self {
-        Self(delayed_receipt, role, client, wrapper, priority, sender)
+        Self(
+            delayed_receipt,
+            role,
+            client,
+            wrapper,
+            Some(priority),
+            sender,
+        )
+    }
+
+    pub(crate) fn conn(&self) -> &Client {
+        &self.2
+    }
+
+    pub(crate) fn take_priority(
+        &mut self,
+    ) -> Option<<State as crate::state::Prioritized>::Priority> {
+        self.4.take()
     }
 }
 
@@ -67,7 +84,7 @@ impl<
         should_tiebreak: bool,
     ) -> (
         OldMethod::Res,
-        State::Priority,
+        Option<State::Priority>,
         FinalizeFuture<Connection::SendStream>,
         SplitReceipt<Connection, Role>,
     )
@@ -109,7 +126,7 @@ impl<
         Role,
         Client,
         crate::state::Wrapper<State>,
-        State::Priority,
+        Option<State::Priority>,
         Client::SendStream,
     ) {
         (self.0, self.1, self.2, self.3, self.4, self.5)

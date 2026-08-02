@@ -60,10 +60,20 @@ impl<
         Role,
         Client,
         state::Wrapper<State>,
-        <State as Prioritized>::Priority,
+        Option<<State as Prioritized>::Priority>,
         Client::SendStream,
     ) {
         self.0.into_parts()
+    }
+
+    pub(crate) fn into_inner(self) -> PendingTransitionReceipt<State, OldMethod, Role, Client> {
+        self.0
+    }
+
+    pub(crate) fn inner_mut(
+        &mut self,
+    ) -> &mut PendingTransitionReceipt<State, OldMethod, Role, Client> {
+        &mut self.0
     }
 }
 

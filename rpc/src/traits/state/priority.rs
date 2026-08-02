@@ -7,7 +7,7 @@
 //! state, and where the client can initiate a transition from A->B and from
 //! B->C and the server can initiate a transition from B->A.
 //!
-//! ```
+//! ```text
 //! C               S
 //! |               |
 //! |-T(B)--------->| # client requests transition from entrypoint A to B
