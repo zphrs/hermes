@@ -8,7 +8,7 @@ use futures::{FutureExt as _, future::FusedFuture};
 use maxlen::MaxLen;
 use tracing::debug;
 
-use crate::{Caller, CallerError, transport::BiStream};
+use crate::{Caller, transport::BiStream};
 
 enum QueryState<C: Caller> {
     Entrypoint(),

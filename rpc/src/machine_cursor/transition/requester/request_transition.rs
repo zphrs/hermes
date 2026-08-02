@@ -1,8 +1,4 @@
-use std::{
-    marker::PhantomData,
-    pin::{Pin, pin},
-    task::ready,
-};
+use std::{pin::Pin, task::ready};
 
 use futures::{FutureExt as _, future::FusedFuture};
 
@@ -26,6 +22,7 @@ pub struct TransitionReceipt<Res, Role: crate::state::Role, Caller: crate::trans
     Caller,
 );
 
+#[expect(private_bounds, reason = "for role")]
 impl<Role: crate::state::Role, Caller: crate::transport::Caller>
     TransitionReceipt<(), Role, Caller>
 {
@@ -33,7 +30,6 @@ impl<Role: crate::state::Role, Caller: crate::transport::Caller>
         TransitionReceipt(result, self.1, self.2)
     }
 
-    #[expect(private_bounds)]
     pub(crate) async fn into_parts(
         mut self,
         processor: impl ProcessorSacrifice,
@@ -59,10 +55,6 @@ impl<Res, Role: crate::state::Role, Caller: crate::transport::Caller>
 
     pub fn connection_mut(&mut self) -> &mut Caller {
         &mut self.2
-    }
-
-    pub(crate) fn into_connection(self) -> Caller {
-        self.2
     }
 }
 

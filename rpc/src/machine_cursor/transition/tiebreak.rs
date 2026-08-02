@@ -1,18 +1,17 @@
 use std::{convert::Infallible, pin::pin};
 
 use futures::{FutureExt, select};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::{
-    CallerError, Handler, MachineCursor,
+    CallerError, MachineCursor,
     machine_cursor::{
-        Processor, TransitionRequestError,
+        TransitionRequestError,
         transition::{
             RequestTransition,
             processor::{DelayedReplier, Entrypoint, FinalizeFuture, ProcessorTransition},
             requester::{
-                AssertSacrificeError, NeedIncomingTransitionRequest, NeedProcessor,
-                RequesterTransition, RequesterTransitionEntrypoint, ToSacrifice, TransitionReceipt,
+                AssertSacrificeError, RequesterTransition, ToSacrifice, TransitionReceipt,
                 assert_remote_sacrifice,
             },
             transition_request_method,
@@ -22,6 +21,7 @@ use crate::{
     transport::{ReplyHelper, ext::query_owned},
 };
 
+#[expect(private_bounds, reason = "for role")]
 pub enum TiebreakResult<
     ProcessorMethod: crate::Method,
     RequesterRes,
@@ -53,6 +53,7 @@ impl<Res, Role, Conn: crate::transport::Connection> FinalizeProcessorTransition<
     }
 }
 
+#[expect(private_bounds, reason = "for role")]
 impl<Role: crate::state::Role, Conn: crate::transport::Connection>
     FinalizeProcessorTransition<(), Role, Conn>
 {
@@ -69,6 +70,7 @@ impl<Role: crate::state::Role, Conn: crate::transport::Connection>
     }
 }
 
+#[expect(private_bounds, reason = "for role")]
 pub struct FinalizeRequesterTransition<
     TransitionRes,
     Role: crate::state::Role,
@@ -78,6 +80,7 @@ pub struct FinalizeRequesterTransition<
     to_sacrifice: ToSacrifice,
 }
 
+#[expect(private_bounds, reason = "for role")]
 impl<Res, Role: crate::state::Role, Conn: crate::transport::Connection>
     FinalizeRequesterTransition<Res, Role, Conn>
 {
@@ -93,6 +96,7 @@ impl<Res, Role: crate::state::Role, Conn: crate::transport::Connection>
     }
 }
 
+#[expect(private_bounds, reason = "for role")]
 impl<Role: crate::state::Role, Conn: crate::transport::Connection>
     FinalizeRequesterTransition<(), Role, Conn>
 {
@@ -173,6 +177,7 @@ fn tiebreak_choice<Role: crate::state::Role, State: crate::state::Prioritized>(
     }
 }
 
+#[expect(private_bounds, reason = "for role")]
 pub async fn tiebreak<
     'a,
     State: crate::state::Prioritized,
@@ -255,6 +260,7 @@ where
     Ok(res)
 }
 
+#[expect(private_bounds, reason = "for role")]
 pub async fn from_processor_to_completion<
     State: crate::state::Prioritized,
     ProcessorMethod: crate::Method,

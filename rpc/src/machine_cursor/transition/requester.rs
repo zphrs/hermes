@@ -40,6 +40,7 @@ use crate::{
     state::{self, Prioritized},
 };
 
+#[expect(private_bounds, reason = "for role")]
 pub enum Need<
     State: crate::state::Prioritized,
     TransitionMethod: crate::Method,
@@ -48,21 +49,18 @@ pub enum Need<
 > {
     Processor(RequesterTransition<State, NeedProcessor<TransitionMethod::Res, Role, Caller>>),
     IncomingTransitionRequest(
+        #[expect(private_interfaces, reason = "for role")]
         RequesterTransition<
             State,
             NeedIncomingTransitionRequest<TransitionMethod::Res, Role, Caller, State::Priority>,
         >,
     ),
 }
+
+#[expect(private_bounds, reason = "for role")]
 pub struct NeedProcessor<Res, Role: crate::state::Role, Caller: crate::Caller>(
     TransitionReceipt<Res, Role, Caller>,
 );
-
-impl<Res, Role: crate::state::Role, Caller: crate::Caller> NeedProcessor<Res, Role, Caller> {
-    pub(crate) fn into_inner(self) -> TransitionReceipt<Res, Role, Caller> {
-        self.0
-    }
-}
 
 impl<Res, Role: crate::state::Role, Caller: crate::Caller>
     From<TransitionReceipt<Res, Role, Caller>> for NeedProcessor<Res, Role, Caller>
@@ -77,13 +75,14 @@ pub(crate) struct NeedIncomingTransitionRequest<
     Caller: crate::Caller,
     Priority,
 > {
-    pub receipt: TransitionReceipt<Res, Role, Caller>,
-    pub priority: Priority,
+    pub _receipt: TransitionReceipt<Res, Role, Caller>,
+    pub _priority: Priority,
 }
 
 pub type RequesterTransitionEntrypoint<State, RootReq, TransitionMethod, Role, Connection> =
     RequesterTransition<State, RequestTransition<RootReq, TransitionMethod, Role, Connection>>;
 
+#[expect(private_bounds, reason = "for role")]
 impl<
     State,
     RootReq,
@@ -130,7 +129,10 @@ impl<
             };
 
             Need::IncomingTransitionRequest(RequesterTransition::from(
-                NeedIncomingTransitionRequest { receipt, priority },
+                NeedIncomingTransitionRequest {
+                    _receipt: receipt,
+                    _priority: priority,
+                },
             ))
         } else {
             Need::Processor(RequesterTransition::from(NeedProcessor(receipt)))
@@ -150,6 +152,7 @@ impl<State, TransitionRes, Role: crate::state::Role, Conn: crate::transport::Cal
     }
 }
 
+#[expect(private_bounds, reason = "for role")]
 impl<State, TransitionRes, Role: crate::state::Role, Conn: crate::transport::Connection>
     RequesterTransition<State, NeedProcessor<TransitionRes, Role, Conn>>
 {
@@ -163,6 +166,8 @@ impl<State, TransitionRes, Role: crate::state::Role, Conn: crate::transport::Con
         (res, RequesterTransition::extracted(NeedProcessor(receipt)))
     }
 }
+
+#[expect(private_bounds, reason = "for role")]
 impl<State, Role: crate::state::Role, Conn: crate::transport::Connection>
     RequesterTransition<State, NeedProcessor<(), Role, Conn>>
 {

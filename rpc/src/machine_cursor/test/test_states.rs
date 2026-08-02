@@ -18,13 +18,14 @@ pub struct Request {
 }
 
 impl Request {
+    #[allow(dead_code)]
     pub const fn new(priority: Priority) -> Self {
         Self {
             priority,
             sleep: None,
         }
     }
-
+    #[allow(dead_code)]
     pub const fn with_sleep(mut self, sleep: Duration) -> Self {
         self.sleep = Some(sleep);
         self

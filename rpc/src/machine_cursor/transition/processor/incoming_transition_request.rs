@@ -24,6 +24,7 @@ pub struct PendingTransitionReceipt<
     Client::SendStream,
 );
 
+#[expect(private_bounds, reason = "for role")]
 impl<
     State: traits::Prioritized,
     OldMethod: traits::Method,

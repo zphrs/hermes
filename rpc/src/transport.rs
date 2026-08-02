@@ -37,7 +37,7 @@ impl<T, C, RootReq> TryFrom<query_owned::Error<T, C, RootReq>> for CallerError<T
 
     fn try_from(value: query_owned::Error<T, C, RootReq>) -> Result<Self, Self::Error> {
         Ok(match value {
-            query_owned::Error::Cancelled(c, root_req) => Err("query was cancelled")?,
+            query_owned::Error::Cancelled(_c, _root_req) => Err("query was cancelled")?,
 
             query_owned::Error::Minicbor(error) => CallerError::Minicbor(error),
             query_owned::Error::Transport(transport) => CallerError::Transport(transport),

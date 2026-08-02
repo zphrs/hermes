@@ -1,9 +1,4 @@
-use std::{
-    convert::Infallible,
-    mem::transmute,
-    pin::{Pin, pin},
-    task::Poll,
-};
+use std::{convert::Infallible, pin::pin, task::Poll};
 
 use futures::{FutureExt, ready};
 
@@ -90,7 +85,6 @@ impl<Method: crate::Method> DelayedReceipt<Method> {
             FinalizeFuture {
                 state: Some(FinalizeFutureState::Sender(sender)),
                 to_send: Some(to_send),
-                in_tiebreak,
             },
         )
     }
@@ -103,7 +97,6 @@ enum FinalizeFutureState<Sender: futures::AsyncWrite + Unpin> {
 
 pub struct FinalizeFuture<Sender: futures::AsyncWrite + Unpin> {
     to_send: Option<transition_request_method::Res>,
-    in_tiebreak: bool,
     state: Option<FinalizeFutureState<Sender>>,
 }
 

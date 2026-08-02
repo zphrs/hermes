@@ -25,7 +25,7 @@
 
 use std::any::TypeId;
 
-use crate::traits::{State, method::not_applicable::NotApplicable};
+use crate::traits::State;
 
 mod r#enum {
     #[repr(u8)]
@@ -106,6 +106,7 @@ pub trait Prioritized: State + Sized {
 pub(crate) trait PrioritizedUnsafeExt: Prioritized {
     /// Caller must ensure that this is only called within a Processor with the
     /// passed in RootMethod being the RootMethod of the Processor.
+    #[allow(dead_code)]
     unsafe fn processor_priority_static<Role: crate::state::Role, RootRequest>(
         req: &RootRequest,
     ) -> Self::Priority
@@ -143,6 +144,7 @@ pub(crate) trait PrioritizedUnsafeExt: Prioritized {
     }
     /// Caller must ensure that this is only called within a Requester with the
     /// passed in RootMethod being the RootMethod of the Requester.
+    #[allow(dead_code)]
     unsafe fn requester_priority_static<Role: crate::state::Role, RootRequest>(
         req: &RootRequest,
     ) -> Self::Priority
@@ -401,13 +403,19 @@ macro_rules! define_prioritized {
     };
 }
 
-struct Test;
+#[cfg(test)]
+mod test {
+    use crate::{State, method::not_applicable::NotApplicable};
 
-impl State for Test {
-    type ClientMethod = NotApplicable;
+    #[allow(dead_code)]
+    struct Test;
 
-    type ServerMethod = NotApplicable;
+    impl State for Test {
+        type ClientMethod = NotApplicable;
+
+        type ServerMethod = NotApplicable;
+    }
+
+    // define_prioritized!(Test, self::server_wins);
+    define_prioritized!(Test, super::from_cloned_requests);
 }
-
-// define_prioritized!(Test, self::server_wins);
-define_prioritized!(Test, self::from_cloned_requests);

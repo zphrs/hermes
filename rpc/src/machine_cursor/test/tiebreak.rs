@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use futures::{FutureExt, future::join, select, select_biased};
+use futures::{FutureExt, future::join, select};
 use hegel::TestCase;
 use tracing::{Instrument, debug, info_span};
 

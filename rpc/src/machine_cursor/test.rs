@@ -90,7 +90,7 @@ mod waitlist {
         fn handle<Replier: crate::transport::ReplyHelper<Self, RootMethod>>(
             &mut self,
             replier: Replier,
-            value: <Self as Method>::Req,
+            _value: <Self as Method>::Req,
         ) -> impl Future<
             Output = Result<
                 <Replier as crate::transport::ReplyHelper<Self, RootMethod>>::Receipt<Self>,
@@ -131,7 +131,7 @@ mod waitlist {
         fn handle<Replier: crate::transport::ReplyHelper<Self, TableOffer>>(
             &mut self,
             replier: Replier,
-            value: <Self as Method>::Req,
+            _value: <Self as Method>::Req,
         ) -> impl Future<
             Output = Result<
                 <Replier as crate::transport::ReplyHelper<Self, TableOffer>>::Receipt<Self>,
@@ -162,7 +162,7 @@ mod waitlist {
         fn handle<Replier: crate::transport::ReplyHelper<Self, Leave>>(
             &mut self,
             replier: Replier,
-            value: <Self as Method>::Req,
+            _value: <Self as Method>::Req,
         ) -> impl Future<
             Output = Result<
                 <Replier as crate::transport::ReplyHelper<Self, Leave>>::Receipt<Self>,
@@ -207,7 +207,7 @@ async fn join() {
             let transition = processor.handle_transition_request().1.await.unwrap();
             let transition = transition.next_with_requester(requester).await.unwrap();
             let (res, transition) = transition.extract_res();
-            let waiting_list = transition.finish(res);
+            let _waiting_list = transition.finish(res);
 
             debug!("server transitioned to waitlist");
         });
@@ -215,7 +215,6 @@ async fn join() {
     // client
 
     let net = network.clone();
-    const SHOULD_LEAVE: bool = false;
     js.spawn(async move {
         let tp = net.new_transport(1u32);
         let conn = tp.connect(&SERVER_ADDR).await.unwrap();
@@ -236,7 +235,7 @@ async fn join() {
             requester_transition.finish(processor, res).await.unwrap()
         };
 
-        let (processor, requester) = waiting_list_cursor.into_parts(waitlist::TableOffer);
+        let (_processor, _requester) = waiting_list_cursor.into_parts(waitlist::TableOffer);
     });
 
     js.join_all().await;
@@ -406,7 +405,7 @@ async fn tiebreak() {
         let tp = net.new_transport(1u32);
         let conn = tp.connect(&SERVER_ADDR).await.unwrap();
         let mut host_stand_cursor = MachineCursorClient::<waitlist::HostStand, _>::new(conn);
-        let seated_cursor = loop {
+        let _seated_cursor = loop {
             debug!("looping");
             let waiting_list_cursor = {
                 // join the list

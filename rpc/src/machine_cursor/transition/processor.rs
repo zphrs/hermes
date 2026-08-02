@@ -38,12 +38,14 @@ impl<Stage> ProcessorTransition<Stage> {
     }
 }
 
+#[expect(private_bounds, reason = "for role")]
 pub struct Entrypoint<
     State: traits::Prioritized,
     OldMethod: traits::Method,
     Role: traits::state::Role,
     Client: crate::transport::Client,
 >(PendingTransitionReceipt<State, OldMethod, Role, Client>);
+#[expect(private_bounds, reason = "for role")]
 impl<
     'a,
     State: traits::Prioritized,
@@ -93,6 +95,7 @@ impl<Conn, Role> NeedWrapper<Conn, Role, ()> {
     }
 }
 
+#[expect(private_bounds, reason = "for role")]
 impl<
     'a,
     State: traits::Prioritized,
@@ -110,6 +113,7 @@ impl<
     }
 }
 
+#[expect(private_bounds, reason = "for role")]
 impl<
     'a,
     State: traits::Prioritized,
@@ -156,6 +160,7 @@ impl<Conn, Role, Res> ProcessorTransition<NeedWrapper<Conn, Role, Res>> {
     }
 }
 
+#[expect(private_bounds, reason = "for role")]
 impl<Conn: transport::Connection, Role: state::Role>
     ProcessorTransition<NeedWrapper<Conn, Role, ()>>
 {

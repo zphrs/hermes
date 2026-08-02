@@ -1,7 +1,6 @@
 use crate::machine_cursor::transition::processor::Entrypoint;
 use crate::machine_cursor::transition::processor::ProcessorTransition;
 use crate::method::is_leaf;
-use crate::state::priority::Client;
 
 use maxlen::MaxLen;
 

@@ -102,7 +102,7 @@ where
     }
 
     pub fn handle_transition_request<'a>(
-        mut self,
+        self,
     ) -> (
         ToSacrifice,
         impl Future<
@@ -231,7 +231,7 @@ where
                     // inlined `client.handle_one_request(stream, concurrent_handler)`
                     // in order to avoid https://github.com/rust-lang/rust/issues/100013
                     let out = {
-                        let this = &client;
+                        let _this = &client;
                         let stream = &mut stream;
                         let handler = &mut concurrent_handler;
                         let (write, read) = stream;
@@ -348,10 +348,10 @@ struct WithPriority<
     State: Prioritized,
     Role: traits::state::Role,
 > {
-    method: method::Wrapper<T>,
+    _method: method::Wrapper<T>,
     handler: &'a mut Handler,
-    state: state::Wrapper<State>,
-    role: Role,
+    _state: state::Wrapper<State>,
+    _role: Role,
     priority: Option<State::Priority>,
 }
 
@@ -365,10 +365,10 @@ impl<
 {
     fn new(handler: &'a mut Handler, role: Role) -> Self {
         Self {
-            method: method::Wrapper::new(),
+            _method: method::Wrapper::new(),
             handler,
-            state: state::Wrapper::new(),
-            role,
+            _state: state::Wrapper::new(),
+            _role: role,
             priority: None,
         }
     }

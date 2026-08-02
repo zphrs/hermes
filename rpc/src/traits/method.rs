@@ -73,13 +73,13 @@ pub mod not_applicable {
     pub enum NotApplicable {}
 
     impl PartialEq for NotApplicable {
-        fn eq(&self, other: &Self) -> bool {
+        fn eq(&self, _other: &Self) -> bool {
             false
         }
     }
 
     impl PartialOrd for NotApplicable {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        fn partial_cmp(&self, _other: &Self) -> Option<std::cmp::Ordering> {
             None
         }
     }
@@ -105,8 +105,8 @@ pub mod not_applicable {
 
         async fn handle<Replier: crate::transport::ReplyHelper<Method, RootMethod>>(
             &mut self,
-            replier: Replier,
-            value: <Method as super::Method>::Req,
+            _replier: Replier,
+            _value: <Method as super::Method>::Req,
         ) -> Result<
             <Replier as crate::transport::ReplyHelper<Method, RootMethod>>::Receipt<Method>,
             crate::traits::HandleError<
