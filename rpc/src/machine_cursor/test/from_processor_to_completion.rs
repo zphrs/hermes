@@ -22,7 +22,7 @@ async fn server(
     let (to_sacrifice, to_processor_transition) = processor.handle_transition_request();
 
     let out: FinalEndpoint<_> = if let Some(request) = request {
-        match tiebreak::from_processor_to_completion(
+        match tiebreak::between_potential_processor_and_known_requester_transition(
             to_processor_transition,
             to_sacrifice,
             requester.request_transition::<client::Method>(request),
@@ -44,7 +44,7 @@ async fn server(
     } else {
         let processor_transition = to_processor_transition.await.unwrap();
         let processor_transition = processor_transition
-            .next_with_requester(requester)
+            .next_with_requester(requester, to_sacrifice)
             .await
             .unwrap();
         let (res, processor_transition) = processor_transition.extract_res();
@@ -62,7 +62,7 @@ async fn client(
     let (to_sacrifice, to_processor_transition) = processor.handle_transition_request();
 
     let out: FinalEndpoint<_> = if let Some(request) = request {
-        match tiebreak::from_processor_to_completion(
+        match tiebreak::between_potential_processor_and_known_requester_transition(
             to_processor_transition,
             to_sacrifice,
             requester.request_transition::<server::Method>(request),
@@ -82,7 +82,7 @@ async fn client(
     } else {
         let processor_transition = to_processor_transition.await.unwrap();
         let processor_transition = processor_transition
-            .next_with_requester(requester)
+            .next_with_requester(requester, to_sacrifice)
             .await
             .unwrap();
         let (res, processor_transition) = processor_transition.extract_res();

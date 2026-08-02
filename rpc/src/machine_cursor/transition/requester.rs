@@ -35,8 +35,8 @@ impl<State, Stage> RequesterTransition<State, Stage> {
 }
 
 use crate::{
-    CallerError, MachineCursor,
-    machine_cursor::transition::requester::processor_sacrifice::ProcessorSacrifice,
+    CallerError, Handler, MachineCursor,
+    machine_cursor::Processor,
     state::{self, Prioritized},
 };
 
@@ -177,13 +177,23 @@ impl<State, Role: crate::state::Role, Conn: crate::transport::Connection>
             _marker: PhantomData,
         }
     }
-    pub async fn finish<NewState: crate::State>(
+    pub async fn finish<
+        NewState: crate::State,
+        ProcessorMethod: crate::Method,
+        H: Handler<ProcessorMethod, ProcessorMethod>,
+    >(
         self,
-        processor: impl ProcessorSacrifice,
+        processor: Processor<State, Role, ProcessorMethod, Conn, H>,
         wrapper: state::Wrapper<NewState>,
     ) -> Result<MachineCursor<NewState, Conn, Role>, CallerError<<Conn as crate::Caller>::Error>>
+    where
+        State: crate::State,
     {
         let receipt = self.stage.0;
+        assert!(
+            processor.client() == receipt.connection(),
+            "requester and processor must belong to the same connection"
+        );
         let (role, conn) = receipt.into_parts(processor).await?;
 
         Ok(MachineCursor::new_with_role(conn, role, wrapper))

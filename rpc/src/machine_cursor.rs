@@ -23,6 +23,7 @@ pub use processor::TransitionRequestError;
 
 use crate::{
     Method,
+    state::Wrapper,
     traits::{self, state},
     transport::CallerExt,
 };
@@ -91,7 +92,7 @@ where
 {
     pub fn new(conn: Connection) -> Self {
         Self {
-            state_wrapper: Default::default(),
+            state_wrapper: Wrapper::new_without_check(),
             conn,
             _role: state::role::Client,
         }
@@ -104,7 +105,7 @@ where
         Requester<State, state::role::Client, State::ServerMethod, Connection>,
     ) {
         let handler = Processor::new(
-            state::Wrapper::new(),
+            self.state_wrapper.duplicate(),
             state::role::Client,
             handler,
             self.conn.clone(),
@@ -124,7 +125,7 @@ where
 {
     pub fn new(conn: Connection) -> Self {
         Self {
-            state_wrapper: Default::default(),
+            state_wrapper: state::Wrapper::new_without_check(),
             conn,
             _role: state::role::Server,
         }
@@ -137,7 +138,7 @@ where
         Requester<State, state::role::Server, State::ClientMethod, Connection>,
     ) {
         let handler = Processor::new(
-            state::Wrapper::new(),
+            self.state_wrapper.duplicate(),
             state::role::Server,
             handler,
             self.conn.clone(),

@@ -1,6 +1,10 @@
 use std::convert::Infallible;
 
-use crate::{method::is_leaf, state, traits::method::can_transition};
+use crate::{
+    method::is_leaf,
+    state::{self},
+    traits::method::can_transition,
+};
 
 use super::super::client_endpoint;
 
@@ -37,6 +41,7 @@ where
             tokio::time::sleep(sleep).await;
         }
 
-        replier.reply(state::Wrapper::new()).await
+        let res = replier.new_wrapper();
+        replier.reply(res).await
     }
 }

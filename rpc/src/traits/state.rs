@@ -1,5 +1,7 @@
+mod has_wrapper;
 pub mod priority;
 pub mod role;
+pub use has_wrapper::HasStateWrapper;
 
 pub(crate) use priority::PrioritizedUnsafeExt;
 pub use priority::{Prioritized, Priority};
@@ -127,14 +129,6 @@ where
     }
 }
 
-impl<State: crate::traits::State> Default for Wrapper<State> {
-    fn default() -> Self {
-        Self {
-            _marker: Default::default(),
-        }
-    }
-}
-
 impl<'b, C, State: crate::traits::State> minicbor::Decode<'b, C> for Wrapper<State> {
     fn decode(d: &mut minicbor::Decoder<'b>, ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
         Ok(Self {
@@ -145,7 +139,7 @@ impl<'b, C, State: crate::traits::State> minicbor::Decode<'b, C> for Wrapper<Sta
 
 impl<State: crate::traits::State> MaxLen for Wrapper<State> {
     fn biggest_instantiation() -> Self {
-        Self::new()
+        Self::new_without_check()
     }
 }
 
@@ -166,7 +160,12 @@ impl<C, State: crate::traits::State> minicbor::Encode<C> for Wrapper<State> {
 }
 
 impl<State: crate::traits::State> Wrapper<State> {
-    pub const fn new() -> Wrapper<State> {
+    pub(crate) fn duplicate(&self) -> Self {
+        Self::new_without_check()
+    }
+    // creates a new wrapper without ensuring that it is
+    // done only via the replier.
+    pub(crate) fn new_without_check() -> Wrapper<State> {
         Self {
             _marker: PhantomData,
         }

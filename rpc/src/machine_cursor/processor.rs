@@ -6,13 +6,13 @@ mod concurrent_request_handler;
 
 use std::{convert::Infallible, io::ErrorKind};
 
-use crate::state::PrioritizedUnsafeExt;
+use crate::state::{PrioritizedUnsafeExt, Wrapper};
 
 use crate::{traits::Prioritized, transport::ReplyHelper};
 
 use futures::{FutureExt as _, StreamExt as _, select, stream::FuturesUnordered};
 use maxlen::MaxLen;
-use tracing::{trace, warn};
+use tracing::trace;
 
 use crate::{
     HandleOneRequestError, Method,
@@ -123,14 +123,12 @@ where
         State: Prioritized,
         Client: 'a,
     {
-        warn!(
-            "Should only return to_sacrifice when the async block returned gets properly dropped!"
-        );
         (ToSacrifice::new(), async move {
             let Self {
                 mut handler,
                 role,
                 ref client,
+                _state,
                 ..
             } = self;
             let fut = client.accept_stream();
@@ -141,7 +139,7 @@ where
             };
 
             let mut with_priority =
-                WithPriority::<RootMethod, H, State, Role>::new(&mut handler, role);
+                WithPriority::<RootMethod, H, State, Role>::new(&mut handler, role, _state);
             let receipt = {
                 let replier = DelayedReplier::<RootMethod>::new();
                 // inlined `client.handle_one_request_with_handler(replier, stream, handler)`
@@ -175,15 +173,15 @@ where
             }
             .await?;
 
-            let priority = with_priority
-                .into_priority()
+            let (priority, state) = with_priority
+                .into_parts()
                 .expect("priority is set during handle");
 
             Ok(ProcessorTransition::new(PendingTransitionReceipt::new(
                 receipt,
                 self.role,
                 self.client,
-                state::Wrapper::new(),
+                state,
                 priority,
                 stream.0,
             )))
@@ -209,7 +207,7 @@ where
         RootMethod: Ancestor<LoopbackMethod>,
     {
         let Self {
-            _state,
+            _state: state,
             mut handler,
             _root_method,
             role,
@@ -330,7 +328,7 @@ where
             handler.handle(replier, root).await?,
             role.clone(),
             client,
-            state::Wrapper::new(),
+            state,
             priority,
             stream.0,
         ));
@@ -363,18 +361,18 @@ impl<
     Role: traits::state::Role,
 > WithPriority<'a, M, Handler, State, Role>
 {
-    fn new(handler: &'a mut Handler, role: Role) -> Self {
+    fn new(handler: &'a mut Handler, role: Role, state: state::Wrapper<State>) -> Self {
         Self {
             _method: method::Wrapper::new(),
             handler,
-            _state: state::Wrapper::new(),
+            _state: state,
             _role: role,
             priority: None,
         }
     }
 
-    pub fn into_priority(self) -> Option<State::Priority> {
-        self.priority
+    pub fn into_parts(self) -> Option<(State::Priority, Wrapper<State>)> {
+        self.priority.map(|v| (v, self._state))
     }
 }
 

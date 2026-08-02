@@ -178,7 +178,7 @@ fn tiebreak_choice<Role: crate::state::Role, State: crate::state::Prioritized>(
 }
 
 #[expect(private_bounds, reason = "for role")]
-pub async fn tiebreak<
+pub async fn between_processor_and_requester_transition<
     'a,
     State: crate::state::Prioritized,
     ProcessorMethod: crate::Method,
@@ -209,6 +209,10 @@ where
 
     let request_transition = requester_transition.into_inner();
 
+    assert!(
+        request_transition.query_req().caller().unwrap() == &conn,
+        "processor and requester must both belong to the same connection"
+    );
     let query_req = request_transition.query_req();
     let root_req = query_req.root_req().unwrap();
 
@@ -261,7 +265,7 @@ where
 }
 
 #[expect(private_bounds, reason = "for role")]
-pub async fn from_processor_to_completion<
+pub async fn between_potential_processor_and_known_requester_transition<
     State: crate::state::Prioritized,
     ProcessorMethod: crate::Method,
     TransitionMethod: crate::Method,
@@ -344,6 +348,11 @@ where
             // we know for sure we're tiebreaking here
             let (delayed_receipt, role, conn, _wrapper, processor_priority, sender) =
                 processor_transition.into_inner().into_parts();
+            assert!(
+                request_transition.query_req().caller().unwrap() == &conn,
+                "processor and requester must both belong to the same connection"
+            );
+
             // tell other side we're tiebreaking
             match tiebreak_choice::<Role, State>(processor_priority, requester_priority) {
                 TiebreakChoice::Processor => {
@@ -384,6 +393,10 @@ where
         Select::Requester((_root_req, receipt)) => {
             debug!("requester won first");
             let (res, receipt) = receipt.extract_result();
+            assert!(
+                request_transition.query_req().caller().unwrap() == receipt.connection(),
+                "processor and requester must both belong to the same connection"
+            );
             // if we got here then it means the other side either:
             // - tiebroke in the requester's favor or
             // - didn't have any tiebreak whatsoever.

@@ -35,7 +35,7 @@ impl<Role: crate::state::Role, Caller: crate::transport::Caller>
         processor: impl ProcessorSacrifice,
     ) -> Result<(Role, Caller), CallerError<<Caller as crate::Caller>::Error>>
     where
-        Caller: crate::transport::Client,
+        Caller: crate::transport::Client + PartialEq,
     {
         processor.sacrifice(&mut self.2).await?;
         Ok((self.1, self.2))
@@ -51,6 +51,10 @@ impl<Res, Role: crate::state::Role, Caller: crate::transport::Caller>
 {
     pub fn extract_result(self) -> (Res, TransitionReceipt<(), Role, Caller>) {
         (self.0, TransitionReceipt((), self.1, self.2))
+    }
+
+    pub fn connection(&self) -> &Caller {
+        &self.2
     }
 
     pub fn connection_mut(&mut self) -> &mut Caller {

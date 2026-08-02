@@ -10,6 +10,7 @@ use crate::{
         Ancestor,
         ancestor::{Branch, Leaf},
     },
+    state::HasStateWrapper,
     traits::{
         self,
         method::{self},
@@ -108,6 +109,13 @@ pub trait ReplyHelper<Method: crate::Method, RootMethod>: Sized {
     where
         Method: Branch<RootMethod>,
         RootMethod: Ancestor<NewMethod>;
+
+    fn new_wrapper(&self) -> crate::state::Wrapper<<Method::Res as HasStateWrapper>::State>
+    where
+        Method::Res: HasStateWrapper,
+    {
+        crate::state::Wrapper::new_without_check()
+    }
 }
 
 impl<T, Method: crate::Method, RootMethod> ReplyHelper<Method, RootMethod>
