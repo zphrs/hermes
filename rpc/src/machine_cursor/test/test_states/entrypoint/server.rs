@@ -37,6 +37,7 @@ where
             tokio::time::sleep(sleep).await;
         }
 
-        replier.reply(state::Wrapper::new()).await
+        let res = replier.new_wrapper();
+        replier.reply(res).await
     }
 }

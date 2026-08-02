@@ -103,7 +103,10 @@ async fn server(
                     Some(pt) => pt,
                     None => to_processor_transition.await.unwrap(),
                 };
-                let transition = transition.next_with_requester(requester).await.unwrap();
+                let transition = transition
+                    .next_with_requester(requester, to_sacrifice)
+                    .await
+                    .unwrap();
                 let (res, transition) = transition.extract_res();
                 transition.finish(res).into()
             }
@@ -111,15 +114,21 @@ async fn server(
                 debug!("transition got through; running tiebreak");
                 let tiebreak_result = match processor_transition {
                     Some(processor_transition) => {
-                        tiebreak::tiebreak::<_, _, _, _, _, _, Infallible>(
-                            processor_transition,
-                            requester_transition,
-                            to_sacrifice,
+                        tiebreak::between_processor_and_requester_transition::<
+                            _,
+                            _,
+                            _,
+                            _,
+                            _,
+                            _,
+                            Infallible,
+                        >(
+                            processor_transition, requester_transition, to_sacrifice
                         )
                         .await
                         .unwrap()
                     }
-                    None => tiebreak::from_processor_to_completion(
+                    None => tiebreak::between_potential_processor_and_known_requester_transition(
                         to_processor_transition,
                         to_sacrifice,
                         requester_transition,
@@ -145,7 +154,7 @@ async fn server(
     } else {
         let processor_transition = to_processor_transition.await.unwrap();
         let processor_transition = processor_transition
-            .next_with_requester(requester)
+            .next_with_requester(requester, to_sacrifice)
             .await
             .unwrap();
         let (res, processor_transition) = processor_transition.extract_res();
@@ -235,7 +244,10 @@ async fn client(
                     Some(pt) => pt,
                     None => to_processor_transition.await.unwrap(),
                 };
-                let transition = transition.next_with_requester(requester).await.unwrap();
+                let transition = transition
+                    .next_with_requester(requester, to_sacrifice)
+                    .await
+                    .unwrap();
                 let (res, transition) = transition.extract_res();
                 transition.finish(res).into()
             }
@@ -243,15 +255,21 @@ async fn client(
                 debug!("transition got through; running tiebreak");
                 let tiebreak_result = match processor_transition {
                     Some(processor_transition) => {
-                        tiebreak::tiebreak::<_, _, _, _, _, _, Infallible>(
-                            processor_transition,
-                            requester_transition,
-                            to_sacrifice,
+                        tiebreak::between_processor_and_requester_transition::<
+                            _,
+                            _,
+                            _,
+                            _,
+                            _,
+                            _,
+                            Infallible,
+                        >(
+                            processor_transition, requester_transition, to_sacrifice
                         )
                         .await
                         .unwrap()
                     }
-                    None => tiebreak::from_processor_to_completion(
+                    None => tiebreak::between_potential_processor_and_known_requester_transition(
                         to_processor_transition,
                         to_sacrifice,
                         requester_transition,
@@ -277,7 +295,7 @@ async fn client(
     } else {
         let processor_transition = to_processor_transition.await.unwrap();
         let processor_transition = processor_transition
-            .next_with_requester(requester)
+            .next_with_requester(requester, to_sacrifice)
             .await
             .unwrap();
         let (res, processor_transition) = processor_transition.extract_res();

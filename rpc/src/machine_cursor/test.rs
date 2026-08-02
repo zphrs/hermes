@@ -1,7 +1,7 @@
 pub mod final_endpoint;
 pub mod from_processor_to_completion;
+mod fuzz_tiebreak;
 mod setup_conn;
-mod tiebreak;
 pub use setup_conn::{ConnPair, setup_conn};
 pub(self) mod test_states;
 
@@ -35,7 +35,7 @@ use crate::{
         test::waitlist::{TableOffer, WaitingList},
         transition::{
             self, RequestTransition, processor::ProcessorTransition,
-            requester::RequesterTransition, tiebreak::from_processor_to_completion,
+            requester::RequesterTransition, tiebreak,
         },
     },
     state::role,
@@ -100,7 +100,8 @@ mod waitlist {
                 >,
             >,
         > {
-            replier.reply(state::Wrapper::new())
+            let res = replier.new_wrapper();
+            replier.reply(res)
         }
     }
 
@@ -141,7 +142,8 @@ mod waitlist {
                 >,
             >,
         > {
-            replier.reply(state::Wrapper::new())
+            let res = replier.new_wrapper();
+            replier.reply(res)
         }
     }
 
@@ -172,7 +174,8 @@ mod waitlist {
                 >,
             >,
         > {
-            replier.reply(state::Wrapper::new())
+            let res = replier.new_wrapper();
+            replier.reply(res)
         }
     }
 
@@ -204,8 +207,12 @@ async fn join() {
 
             let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
             // wait for client to join waiting list
-            let transition = processor.handle_transition_request().1.await.unwrap();
-            let transition = transition.next_with_requester(requester).await.unwrap();
+            let (to_sacrifice, transition) = processor.handle_transition_request();
+            let transition = transition.await.unwrap();
+            let transition = transition
+                .next_with_requester(requester, to_sacrifice)
+                .await
+                .unwrap();
             let (res, transition) = transition.extract_res();
             let _waiting_list = transition.finish(res);
 
@@ -243,7 +250,7 @@ async fn join() {
 
 #[tokio::test]
 #[test_log::test]
-async fn tiebreak() {
+async fn test_tiebreak() {
     debug!("Here!");
     let network = crate::in_memory_transport::Network::new();
 
@@ -260,8 +267,12 @@ async fn tiebreak() {
             debug!("looping");
             let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
             // wait for client to join waiting list
-            let transition = processor.handle_transition_request().1.await.unwrap();
-            let transition = transition.next_with_requester(requester).await.unwrap();
+            let (to_sacrifice, transition) = processor.handle_transition_request();
+            let transition = transition.await.unwrap();
+            let transition = transition
+                .next_with_requester(requester, to_sacrifice)
+                .await
+                .unwrap();
             let (res, transition) = transition.extract_res();
             let waiting_list = transition.finish(res);
 
@@ -344,7 +355,7 @@ async fn tiebreak() {
                     if let Some(requester) = maybe_requester {
                         request_transition_abort_handle.abort();
                         let res = processor_transition
-                            .next_with_requester(requester)
+                            .next_with_requester(requester, to_sacrifice)
                             .await
                             .unwrap();
                         let (wrapper, transition) = res.extract_res();
@@ -356,7 +367,7 @@ async fn tiebreak() {
                     let requester_transition = request_transition_jh.await.unwrap().unwrap();
                     debug!("waiting for an ack on its request");
 
-                    transition::tiebreak::tiebreak(
+                    transition::tiebreak::between_processor_and_requester_transition(
                         processor_transition,
                         requester_transition,
                         to_sacrifice,
@@ -367,7 +378,7 @@ async fn tiebreak() {
                     // should always be some here because this thread doesn't take
                     // until the processor wins
                     let requester_transition = maybe_requester.unwrap();
-                    from_processor_to_completion(
+                    tiebreak::between_potential_processor_and_known_requester_transition(
                         processor_transition_fut,
                         to_sacrifice,
                         requester_transition,
@@ -434,7 +445,7 @@ async fn tiebreak() {
 
                 tracing::trace!("sending leave request; waiting for tiebreak");
                 let (to_sacrifice, processor_transition) = processor.handle_transition_request();
-                match from_processor_to_completion(
+                match tiebreak::between_potential_processor_and_known_requester_transition(
                     processor_transition,
                     to_sacrifice,
                     requester_transition,
@@ -468,11 +479,11 @@ async fn tiebreak() {
                     }
                 }
             } else {
-                let (_to_sacrifice, processor_transition) = processor.handle_transition_request();
+                let (to_sacrifice, processor_transition) = processor.handle_transition_request();
                 let (res, processor_transition) = processor_transition
                     .await
                     .unwrap()
-                    .next_with_requester(requester)
+                    .next_with_requester(requester, to_sacrifice)
                     .await
                     .unwrap()
                     .extract_res();
