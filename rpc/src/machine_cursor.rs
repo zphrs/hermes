@@ -16,7 +16,7 @@ pub mod transition;
 
 pub use transition::PendingTransitionReceipt;
 
-pub use processor::Processor;
+pub use processor::{EventualTransitionRequest, Processor};
 pub use requester::Requester;
 
 pub use processor::TransitionRequestError;

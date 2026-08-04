@@ -1,15 +1,16 @@
 use crate::machine_cursor::transition::processor::ProcessorTransition;
-use crate::machine_cursor::transition::requester::ToSacrifice;
 use crate::method::Ancestor;
 use crate::{Handler, ImmediateReplier, machine_cursor::PendingTransitionReceipt};
 mod concurrent_request_handler;
 
+use std::pin::Pin;
 use std::{convert::Infallible, io::ErrorKind};
 
 use crate::state::{PrioritizedUnsafeExt, Wrapper};
 
 use crate::{traits::Prioritized, transport::ReplyHelper};
 
+use futures::future::FusedFuture;
 use futures::{FutureExt as _, StreamExt as _, select, stream::FuturesUnordered};
 use maxlen::MaxLen;
 use tracing::trace;
@@ -45,6 +46,45 @@ where
     _root_method: method::Wrapper<RootMethod>,
     role: Role,
     client: Client,
+}
+
+#[must_use = "should be explicitly awaited or alternatively passed into a tiebreak \
+    function to be awaited there"]
+pub struct EventualTransitionRequest<Fut> {
+    fut: Pin<Box<Fut>>,
+    done: bool,
+}
+
+impl<Fut> EventualTransitionRequest<Fut> {
+    pub(crate) fn new(fut: Fut) -> Self {
+        Self {
+            fut: Box::pin(fut),
+            done: false,
+        }
+    }
+}
+
+impl<Fut: futures::Future> FusedFuture for EventualTransitionRequest<Fut> {
+    fn is_terminated(&self) -> bool {
+        self.done
+    }
+}
+
+impl<Fut: Future> Future for EventualTransitionRequest<Fut> {
+    type Output = Fut::Output;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let out = self.fut.as_mut().poll(cx);
+
+        if out.is_ready() {
+            self.done = true;
+        }
+
+        out
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -103,8 +143,7 @@ where
 
     pub fn handle_transition_request<'a>(
         self,
-    ) -> (
-        ToSacrifice,
+    ) -> EventualTransitionRequest<
         impl Future<
             Output = Result<
                 ProcessorTransition<
@@ -117,13 +156,13 @@ where
                 >,
             >,
         >,
-    )
+    >
     where
         RootMethod::Req: crate::RpcMessage,
         State: Prioritized,
         Client: 'a,
     {
-        (ToSacrifice::new(), async move {
+        let fut = async move {
             let Self {
                 mut handler,
                 role,
@@ -185,16 +224,22 @@ where
                 priority,
                 stream.0,
             )))
-        })
+        };
+
+        EventualTransitionRequest::new(fut)
     }
 
     /// handles requests in parallel until a method called is not a loopback.
-    pub async fn handle_requests<LoopbackMethod: Loopback, LoopbackHandler>(
+    pub fn handle_requests<LoopbackMethod: Loopback, LoopbackHandler>(
         self,
         loopback_handler: LoopbackHandler,
-    ) -> Result<
-        PendingTransitionReceipt<State, RootMethod, Role, Client>,
-        MultipleRequestsError<Client::Error, LoopbackHandler::Error, H::Error>,
+    ) -> EventualTransitionRequest<
+        impl Future<
+            Output = Result<
+                PendingTransitionReceipt<State, RootMethod, Role, Client>,
+                MultipleRequestsError<Client::Error, LoopbackHandler::Error, H::Error>,
+            >,
+        >,
     >
     where
         RootMethod::Req: crate::RpcMessage,
@@ -206,132 +251,135 @@ where
         State: Prioritized,
         RootMethod: Ancestor<LoopbackMethod>,
     {
-        let Self {
-            _state: state,
-            mut handler,
-            _root_method,
-            role,
-            client,
-        } = self;
+        let fut = async move {
+            let Self {
+                _state: state,
+                mut handler,
+                _root_method,
+                role,
+                client,
+            } = self;
 
-        let mut js = FuturesUnordered::new();
-        let (root, stream) = loop {
-            select! {
-                maybe_stream = client.accept_stream().fuse() => {
-                    let mut stream = maybe_stream.map_err(MultipleRequestsError::Client)?;
-                    let handler = loopback_handler.clone();
+            let mut js = FuturesUnordered::new();
+            let (root, stream) = loop {
+                select! {
+                    maybe_stream = client.accept_stream().fuse() => {
+                        let mut stream = maybe_stream.map_err(MultipleRequestsError::Client)?;
+                        let handler = loopback_handler.clone();
 
-                    js.push(async {
-                    let mut concurrent_handler =
-                        ConcurrentRequestHandler::<RootMethod, LoopbackMethod, LoopbackHandler>::new(
-                            handler,
-                        );
-                    // inlined `client.handle_one_request(stream, concurrent_handler)`
-                    // in order to avoid https://github.com/rust-lang/rust/issues/100013
-                    let out = {
-                        let _this = &client;
-                        let stream = &mut stream;
-                        let handler = &mut concurrent_handler;
-                        let (write, read) = stream;
-                        let replier = ImmediateReplier::from(write);
+                        js.push(async {
+                        let mut concurrent_handler =
+                            ConcurrentRequestHandler::<RootMethod, LoopbackMethod, LoopbackHandler>::new(
+                                handler,
+                            );
+                        // inlined `client.handle_one_request(stream, concurrent_handler)`
+                        // in order to avoid https://github.com/rust-lang/rust/issues/100013
                         let out = {
-                            async move {
-                                let write = replier;
-                                let read = read;
-                                let mut receiver = minicbor_io::AsyncReader::new(read);
-                                receiver.set_max_len(RootMethod::Req::max_len() as u32);
-                                let Some(root) = (match receiver.read::<RootMethod::Req>().await {
-                                    Ok(v) => v,
-                                    Err(e) => Err(HandleOneRequestError::Read(e))?,
-                                }) else {
-                                    return Err(HandleOneRequestError::Read(minicbor_io::Error::Io(
-                                        ErrorKind::ConnectionAborted.into(),
-                                    )));
-                                };
-                                let out = match handler.handle(write, root).await {
-                                    Ok(v) => v,
-                                    Err(traits::HandleError::Handler(e)) => {
-                                        return Err(HandleOneRequestError::App(e));
-                                    }
-                                    Err(traits::HandleError::Replier(e)) => {
-                                        return Err(HandleOneRequestError::Replier(e));
-                                    }
-                                };
-                                Ok(out)
+                            let _this = &client;
+                            let stream = &mut stream;
+                            let handler = &mut concurrent_handler;
+                            let (write, read) = stream;
+                            let replier = ImmediateReplier::from(write);
+                            let out = {
+                                async move {
+                                    let write = replier;
+                                    let read = read;
+                                    let mut receiver = minicbor_io::AsyncReader::new(read);
+                                    receiver.set_max_len(RootMethod::Req::max_len() as u32);
+                                    let Some(root) = (match receiver.read::<RootMethod::Req>().await {
+                                        Ok(v) => v,
+                                        Err(e) => Err(HandleOneRequestError::Read(e))?,
+                                    }) else {
+                                        return Err(HandleOneRequestError::Read(minicbor_io::Error::Io(
+                                            ErrorKind::ConnectionAborted.into(),
+                                        )));
+                                    };
+                                    let out = match handler.handle(write, root).await {
+                                        Ok(v) => v,
+                                        Err(traits::HandleError::Handler(e)) => {
+                                            return Err(HandleOneRequestError::App(e));
+                                        }
+                                        Err(traits::HandleError::Replier(e)) => {
+                                            return Err(HandleOneRequestError::Replier(e));
+                                        }
+                                    };
+                                    Ok(out)
+                                }
                             }
-                        }
-                            .map(|v| v.map(|v| v.into_inner()));
-                        out
-                    }.await;
+                                .map(|v| v.map(|v| v.into_inner()));
+                            out
+                        }.await;
 
-                        (out, stream)
-                    });
-                }
-                next_result = js.select_next_some() => {
-                    match next_result {
-                        (Ok(_response), _) => {
-                            trace!("successfully replied")
-                        },
-                        (Err(HandleOneRequestError::App(ConcurrentRequestHandlerError::FailedConversion(root))), stream) => {
-                            // got to non-concurrent value, break out of
-                            // concurrent loop so we stop handling new
-                            // requests
-                            break (root, stream);
-                        }
-                        (Err(HandleOneRequestError::App(ConcurrentRequestHandlerError::ParallelHandler(e))), _) => Err(HandleOneRequestError::App(e))?,
-                        (Err(HandleOneRequestError::Replier(replier)), _) => Err(HandleOneRequestError::Replier(replier))?,
-                        (Err(HandleOneRequestError::Read(replier)), _) => Err(HandleOneRequestError::Read(replier))?,
-                    };
-                }
+                            (out, stream)
+                        });
+                    }
+                    next_result = js.select_next_some() => {
+                        match next_result {
+                            (Ok(_response), _) => {
+                                trace!("successfully replied")
+                            },
+                            (Err(HandleOneRequestError::App(ConcurrentRequestHandlerError::FailedConversion(root))), stream) => {
+                                // got to non-concurrent value, break out of
+                                // concurrent loop so we stop handling new
+                                // requests
+                                break (root, stream);
+                            }
+                            (Err(HandleOneRequestError::App(ConcurrentRequestHandlerError::ParallelHandler(e))), _) => Err(HandleOneRequestError::App(e))?,
+                            (Err(HandleOneRequestError::Replier(replier)), _) => Err(HandleOneRequestError::Replier(replier))?,
+                            (Err(HandleOneRequestError::Read(replier)), _) => Err(HandleOneRequestError::Read(replier))?,
+                        };
+                    }
+                };
             };
+
+            // wait for all concurrent requests to finish
+            // executing before continuing with transition
+            while let Some(next_result) = js.next().await {
+                match next_result {
+                    (Ok(_response), _) => {
+                        trace!("successfully replied")
+                    }
+
+                    (
+                        Err(HandleOneRequestError::App(
+                            ConcurrentRequestHandlerError::FailedConversion(_root),
+                        )),
+                        _,
+                    ) => {
+                        // got transition request in middle of transition,
+                        // exiting early with an error. Likely to close connection
+                        // fully, assuming the caller drops the Conn after any
+                        // error.
+                        return Err(MultipleRequestsError::MultipleActivePotentialTransitions());
+                    }
+                    (
+                        Err(HandleOneRequestError::App(
+                            ConcurrentRequestHandlerError::ParallelHandler(e),
+                        )),
+                        _,
+                    ) => Err(HandleOneRequestError::App(e))?,
+                    (Err(HandleOneRequestError::Replier(replier)), _) => {
+                        Err(HandleOneRequestError::Replier(replier))?
+                    }
+                    (Err(HandleOneRequestError::Read(replier)), _) => {
+                        Err(HandleOneRequestError::Read(replier))?
+                    }
+                };
+            }
+            debug_assert!(js.is_empty());
+            drop(js);
+            let priority = unsafe { State::processor_priority::<Role, _>(&root) };
+            let replier = DelayedReplier::new();
+            return Ok(PendingTransitionReceipt::new(
+                handler.handle(replier, root).await?,
+                role.clone(),
+                client,
+                state,
+                priority,
+                stream.0,
+            ));
         };
-
-        // wait for all concurrent requests to finish
-        // executing before continuing with transition
-        while let Some(next_result) = js.next().await {
-            match next_result {
-                (Ok(_response), _) => {
-                    trace!("successfully replied")
-                }
-
-                (
-                    Err(HandleOneRequestError::App(
-                        ConcurrentRequestHandlerError::FailedConversion(_root),
-                    )),
-                    _,
-                ) => {
-                    // got transition request in middle of transition,
-                    // exiting early with an error. Likely to close connection
-                    // fully, assuming the caller drops the Conn after any
-                    // error.
-                    return Err(MultipleRequestsError::MultipleActivePotentialTransitions());
-                }
-                (
-                    Err(HandleOneRequestError::App(
-                        ConcurrentRequestHandlerError::ParallelHandler(e),
-                    )),
-                    _,
-                ) => Err(HandleOneRequestError::App(e))?,
-                (Err(HandleOneRequestError::Replier(replier)), _) => {
-                    Err(HandleOneRequestError::Replier(replier))?
-                }
-                (Err(HandleOneRequestError::Read(replier)), _) => {
-                    Err(HandleOneRequestError::Read(replier))?
-                }
-            };
-        }
-        debug_assert!(js.is_empty());
-        drop(js);
-        let priority = unsafe { State::processor_priority::<Role, _>(&root) };
-        let replier = DelayedReplier::new();
-        return Ok(PendingTransitionReceipt::new(
-            handler.handle(replier, root).await?,
-            role.clone(),
-            client,
-            state,
-            priority,
-            stream.0,
-        ));
+        EventualTransitionRequest::new(fut)
     }
 }
 

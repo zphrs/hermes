@@ -6,7 +6,6 @@ pub use setup_conn::{ConnPair, setup_conn};
 pub(self) mod test_states;
 
 use std::{
-    pin::pin,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -207,12 +206,9 @@ async fn join() {
 
             let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
             // wait for client to join waiting list
-            let (to_sacrifice, transition) = processor.handle_transition_request();
+            let transition = processor.handle_transition_request();
             let transition = transition.await.unwrap();
-            let transition = transition
-                .next_with_requester(requester, to_sacrifice)
-                .await
-                .unwrap();
+            let transition = transition.next_with_requester(requester).await.unwrap();
             let (res, transition) = transition.extract_res();
             let _waiting_list = transition.finish(res);
 
@@ -266,12 +262,9 @@ async fn test_tiebreak() {
             debug!("looping");
             let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
             // wait for client to join waiting list
-            let (to_sacrifice, transition) = processor.handle_transition_request();
+            let transition = processor.handle_transition_request();
             let transition = transition.await.unwrap();
-            let transition = transition
-                .next_with_requester(requester, to_sacrifice)
-                .await
-                .unwrap();
+            let transition = transition.next_with_requester(requester).await.unwrap();
             let (res, transition) = transition.extract_res();
             let waiting_list = transition.finish(res);
 
@@ -307,10 +300,7 @@ async fn test_tiebreak() {
             let request_transition_abort_handle = request_transition_jh.abort_handle();
             let mut request_transition_jh = request_transition_jh.fuse();
 
-            let (to_sacrifice, processor_transition_fut) = processor.handle_transition_request();
-
-            let processor_transition_fut = processor_transition_fut.fuse();
-            let mut processor_transition_fut = pin!(processor_transition_fut);
+            let mut processor_transition_fut = processor.handle_transition_request();
 
             enum Select {
                 Processor(
@@ -354,7 +344,7 @@ async fn test_tiebreak() {
                     if let Some(requester) = maybe_requester {
                         request_transition_abort_handle.abort();
                         let res = processor_transition
-                            .next_with_requester(requester, to_sacrifice)
+                            .next_with_requester(requester)
                             .await
                             .unwrap();
                         let (wrapper, transition) = res.extract_res();
@@ -369,7 +359,6 @@ async fn test_tiebreak() {
                     transition::tiebreak::between_processor_and_requester_transition(
                         processor_transition,
                         requester_transition,
-                        to_sacrifice,
                     )
                     .await
                     .unwrap()
@@ -380,7 +369,6 @@ async fn test_tiebreak() {
                     let requester_transition = maybe_requester.unwrap();
                     tiebreak::between_potential_processor_and_known_requester_transition(
                         processor_transition_fut,
-                        to_sacrifice,
                         requester_transition,
                     )
                     .await
@@ -445,10 +433,9 @@ async fn test_tiebreak() {
                 let requester_transition = requester.request_transition::<waitlist::Leave>(());
 
                 tracing::trace!("sending leave request; waiting for tiebreak");
-                let (to_sacrifice, processor_transition) = processor.handle_transition_request();
+                let processor_transition = processor.handle_transition_request();
                 match tiebreak::between_potential_processor_and_known_requester_transition(
                     processor_transition,
-                    to_sacrifice,
                     requester_transition,
                 )
                 .await
@@ -480,11 +467,11 @@ async fn test_tiebreak() {
                     }
                 }
             } else {
-                let (to_sacrifice, processor_transition) = processor.handle_transition_request();
+                let processor_transition = processor.handle_transition_request();
                 let (res, processor_transition) = processor_transition
                     .await
                     .unwrap()
-                    .next_with_requester(requester, to_sacrifice)
+                    .next_with_requester(requester)
                     .await
                     .unwrap()
                     .extract_res();

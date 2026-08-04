@@ -5,7 +5,7 @@ use futures::{FutureExt as _, future::FusedFuture};
 use crate::{
     CallerError,
     machine_cursor::transition::{
-        requester::processor_sacrifice::ProcessorSacrifice,
+        requester::ToSacrifice,
         transition_request_method::{self, TransitionRequestMethod},
     },
     traits::method::can_transition,
@@ -32,7 +32,7 @@ impl<Role: crate::state::Role, Caller: crate::transport::Caller>
 
     pub(crate) async fn into_parts(
         mut self,
-        processor: impl ProcessorSacrifice,
+        processor: ToSacrifice,
     ) -> Result<(Role, Caller), CallerError<<Caller as crate::Caller>::Error>>
     where
         Caller: crate::transport::Client + PartialEq,

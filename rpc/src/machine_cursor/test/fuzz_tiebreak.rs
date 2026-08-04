@@ -27,7 +27,7 @@ async fn server(
 ) -> FinalEndpoint<crate::state::role::Server> {
     let cursor = MachineCursorServer::<Entrypoint, _>::new(conn);
     let (processor, requester) = cursor.into_parts(server::Method);
-    let (to_sacrifice, to_processor_transition) = processor.handle_transition_request();
+    let mut to_processor_transition = processor.handle_transition_request();
 
     enum RequesterState {
         Requester(
@@ -82,8 +82,6 @@ async fn server(
         let abort_handle = request_jh.abort_handle();
         let request = pin!(request_jh);
         let mut request_fut = request.fuse();
-        let to_processor_transition = pin!(to_processor_transition);
-        let mut to_processor_transition = to_processor_transition.fuse();
 
         let processor_transition = select! {
             processor_transition = to_processor_transition => {
@@ -102,10 +100,7 @@ async fn server(
                     Some(pt) => pt,
                     None => to_processor_transition.await.unwrap(),
                 };
-                let transition = transition
-                    .next_with_requester(requester, to_sacrifice)
-                    .await
-                    .unwrap();
+                let transition = transition.next_with_requester(requester).await.unwrap();
                 let (res, transition) = transition.extract_res();
                 transition.finish(res).into()
             }
@@ -122,7 +117,6 @@ async fn server(
                     }
                     None => tiebreak::between_potential_processor_and_known_requester_transition(
                         to_processor_transition,
-                        to_sacrifice,
                         requester_transition,
                     )
                     .await
@@ -146,7 +140,7 @@ async fn server(
     } else {
         let processor_transition = to_processor_transition.await.unwrap();
         let processor_transition = processor_transition
-            .next_with_requester(requester, to_sacrifice)
+            .next_with_requester(requester)
             .await
             .unwrap();
         let (res, processor_transition) = processor_transition.extract_res();
@@ -161,7 +155,7 @@ async fn client(
 ) -> FinalEndpoint<crate::state::role::Client> {
     let cursor = MachineCursorClient::<Entrypoint, _>::new(conn);
     let (processor, requester) = cursor.into_parts(client::Method);
-    let (to_sacrifice, to_processor_transition) = processor.handle_transition_request();
+    let mut to_processor_transition = processor.handle_transition_request();
 
     enum RequesterState {
         Requester(
@@ -216,8 +210,6 @@ async fn client(
         let abort_handle = request_jh.abort_handle();
         let request = pin!(request_jh);
         let mut request_fut = request.fuse();
-        let to_processor_transition = pin!(to_processor_transition);
-        let mut to_processor_transition = to_processor_transition.fuse();
 
         let processor_transition = select! {
             processor_transition = to_processor_transition => {
@@ -236,10 +228,7 @@ async fn client(
                     Some(pt) => pt,
                     None => to_processor_transition.await.unwrap(),
                 };
-                let transition = transition
-                    .next_with_requester(requester, to_sacrifice)
-                    .await
-                    .unwrap();
+                let transition = transition.next_with_requester(requester).await.unwrap();
                 let (res, transition) = transition.extract_res();
                 transition.finish(res).into()
             }
@@ -256,7 +245,6 @@ async fn client(
                     }
                     None => tiebreak::between_potential_processor_and_known_requester_transition(
                         to_processor_transition,
-                        to_sacrifice,
                         requester_transition,
                     )
                     .await
@@ -280,7 +268,7 @@ async fn client(
     } else {
         let processor_transition = to_processor_transition.await.unwrap();
         let processor_transition = processor_transition
-            .next_with_requester(requester, to_sacrifice)
+            .next_with_requester(requester)
             .await
             .unwrap();
         let (res, processor_transition) = processor_transition.extract_res();

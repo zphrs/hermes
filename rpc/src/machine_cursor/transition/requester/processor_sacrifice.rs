@@ -1,3 +1,4 @@
+use crate::machine_cursor::processor::EventualTransitionRequest;
 use crate::machine_cursor::transition::processor::Entrypoint;
 use crate::machine_cursor::transition::processor::ProcessorTransition;
 use crate::method::is_leaf;
@@ -26,24 +27,12 @@ impl crate::Method for Method {
     type IsLeaf = is_leaf::True;
 }
 
-impl<
-    ProcessorMethod: crate::Method,
-    Conn: crate::transport::Client,
-    State: crate::state::Prioritized,
-    Role: crate::state::Role,
-> ProcessorSacrifice for ProcessorTransition<Entrypoint<State, ProcessorMethod, Role, Conn>>
-{
-}
-
-pub trait ProcessorSacrifice {
-    fn sacrifice<Conn: crate::transport::Connection>(
-        self,
-        conn: &mut Conn,
-    ) -> impl Future<Output = Result<(), crate::CallerError<<Conn as Caller>::Error>>>
+pub(crate) trait ProcessorSacrifice {
+    fn sacrifice(self) -> ToSacrifice
     where
         Self: Sized,
     {
-        conn.notify::<Method, Notification>(Notification)
+        ToSacrifice(())
     }
 }
 
@@ -70,6 +59,17 @@ pub async fn assert_remote_sacrifice<Conn: crate::transport::Connection>(
 }
 
 impl<
+    ProcessorMethod: crate::Method,
+    Conn: crate::transport::Client,
+    State: crate::state::Prioritized,
+    Role: crate::state::Role,
+> ProcessorSacrifice for ProcessorTransition<Entrypoint<State, ProcessorMethod, Role, Conn>>
+{
+}
+
+impl<Fut> ProcessorSacrifice for EventualTransitionRequest<Fut> {}
+
+impl<
     State: crate::State,
     Role: crate::state::Role,
     RootMethod: crate::Method,
@@ -79,12 +79,16 @@ impl<
 {
 }
 
-pub struct ToSacrifice();
+pub struct ToSacrifice(());
 
 impl ToSacrifice {
-    pub(crate) fn new() -> Self {
-        Self()
+    pub fn sacrifice<Conn: crate::transport::Connection>(
+        self,
+        conn: &mut Conn,
+    ) -> impl Future<Output = Result<(), crate::CallerError<<Conn as Caller>::Error>>>
+    where
+        Self: Sized,
+    {
+        conn.notify::<Method, Notification>(Notification)
     }
 }
-
-impl ProcessorSacrifice for ToSacrifice {}

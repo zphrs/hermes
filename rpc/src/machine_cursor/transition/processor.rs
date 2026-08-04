@@ -21,7 +21,7 @@ use crate::{
     MachineCursor,
     machine_cursor::{
         Requester,
-        transition::requester::{AssertSacrificeError, ToSacrifice, assert_remote_sacrifice},
+        transition::requester::{AssertSacrificeError, assert_remote_sacrifice},
     },
     state::{self, Prioritized},
     traits, transport,
@@ -34,6 +34,10 @@ pub struct ProcessorTransition<Stage> {
 impl<Stage> ProcessorTransition<Stage> {
     pub(crate) fn into_inner(self) -> Stage {
         self.state
+    }
+
+    pub(crate) fn inner_mut(&mut self) -> &mut Stage {
+        &mut self.state
     }
 }
 
@@ -134,12 +138,10 @@ impl<
     pub async fn next_with_requester<RequesterMethod: crate::Method>(
         self,
         requester: Requester<State, Role, RequesterMethod, Conn>,
-        to_sacrifice: ToSacrifice,
     ) -> Result<
         ProcessorTransition<NeedWrapper<Conn, Role, ProcessorMethod::Res>>,
         NextWithRequesterError<<Conn as crate::transport::Client>::Error>,
     > {
-        drop(to_sacrifice);
         let (receipt, role, client, _wrapper, priority, sender) = self.state.into_parts();
         // don't need priority because we have the whole requester so we know
         // there can't possibly be a conflict
