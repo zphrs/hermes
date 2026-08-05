@@ -200,15 +200,24 @@ async fn join() {
         let net = network.clone();
         js.spawn(async move {
             let tp = net.new_transport(SERVER_ADDR);
-            let incoming = tp.accept().await.expect("infallible");
-            let conn = incoming.accept().await.expect("successful incoming");
+            let conn = tp
+                .accept()
+                .await
+                .expect("infallible")
+                .accept()
+                .await
+                .expect("successful incoming");
             let host_stand_cursor = MachineCursorServer::<waitlist::HostStand, _>::new(conn);
 
             let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
             // wait for client to join waiting list
-            let transition = processor.handle_transition_request();
-            let transition = transition.await.unwrap();
-            let transition = transition.next_with_requester(requester).await.unwrap();
+            let transition = processor
+                .handle_transition_request()
+                .await
+                .unwrap()
+                .next_with_requester(requester)
+                .await
+                .unwrap();
             let (res, transition) = transition.extract_res();
             let _waiting_list = transition.finish(res);
 
@@ -226,8 +235,11 @@ async fn join() {
         let waiting_list_cursor = {
             // join the list
             let (processor, requester) = host_stand_cursor.into_parts(not_applicable::Handler);
-            let requester_transition = requester.request_transition::<waitlist::Join>(());
-            let requester_transition = requester_transition.next().await.unwrap();
+            let requester_transition = requester
+                .request_transition::<waitlist::Join>(())
+                .next()
+                .await
+                .unwrap();
 
             let transition::requester::Need::Processor(requester_transition) = requester_transition
             else {

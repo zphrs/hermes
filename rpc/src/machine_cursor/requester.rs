@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use crate::{
     CallerError,
     machine_cursor::transition::{RequestTransition, requester::RequesterTransition},
-    method::ancestor::Leaf,
+    method::{ancestor::Leaf, is_leaf},
     traits::{
         method::{self, CanTransition, Loopback},
         state::{self, ToQuery},
@@ -65,7 +65,7 @@ where
         }
     }
 
-    pub async fn request_loopback<M: Loopback>(
+    pub async fn request_loopback<M: Loopback<IsLeaf = is_leaf::True>>(
         &self,
         req: M::Req,
     ) -> Result<M::Res, CallerError<Caller::Error>>

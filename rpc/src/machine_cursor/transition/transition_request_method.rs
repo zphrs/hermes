@@ -16,7 +16,7 @@ impl<'a, M: crate::Method> crate::Method for TransitionRequestMethod<M> {
 
     type CanTransition = M::CanTransition;
 
-    type IsLeaf = is_leaf::False;
+    type IsLeaf = is_leaf::True;
 }
 
 /// Sets the tiebreak boolean flag
