@@ -15,13 +15,5 @@ pub trait Handler<RootMethod, Method: crate::Method = Self> {
         &mut self,
         replier: Replier,
         value: Method::Req,
-    ) -> impl Future<
-        Output = Result<
-            <Replier as ReplyHelper<Method, RootMethod>>::Receipt<Method>,
-            HandleError<
-                <Replier as ReplyHelper<Method, RootMethod>>::Error,
-                <Self as Handler<RootMethod, Method>>::Error,
-            >,
-        >,
-    >;
+    ) -> impl Future<Output = Result<Replier::Receipt<Method>, HandleError<Replier::Error, Self::Error>>>;
 }

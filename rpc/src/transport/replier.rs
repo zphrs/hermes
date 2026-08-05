@@ -10,7 +10,7 @@ use crate::{
         Ancestor,
         ancestor::{Branch, Leaf},
     },
-    state::HasStateWrapper,
+    state::Has,
     traits::{
         self,
         method::{self},
@@ -85,6 +85,12 @@ where
 pub trait ReplyHelper<Method: crate::Method, RootMethod>: Sized {
     type Error;
     type Receipt<M: crate::Method>;
+
+    /// # Errors
+    ///
+    /// Will only error with a Replier error (Replier::Error). Returns a
+    /// HandleError that also allows for returning a Handler::Error for improved
+    /// ergonomics when calling within a Handler implementation.
     fn reply<Error>(
         self,
         res: Method::Res,
@@ -95,6 +101,11 @@ pub trait ReplyHelper<Method: crate::Method, RootMethod>: Sized {
         Method::Res: RpcMessage,
         Method: Leaf<RootMethod>;
 
+    /// # Errors
+    ///
+    /// Will only error with a Replier error (Replier::Error). Returns a
+    /// HandleError that also allows for returning a Handler::Error for improved
+    /// ergonomics when calling within a Handler implementation.
     fn reply_with<NewMethod: crate::Method, Handler: traits::Handler<RootMethod, NewMethod>>(
         self,
         handler: &mut Handler,
@@ -110,9 +121,9 @@ pub trait ReplyHelper<Method: crate::Method, RootMethod>: Sized {
         Method: Branch<RootMethod>,
         RootMethod: Ancestor<NewMethod>;
 
-    fn new_wrapper(&self) -> crate::state::Wrapper<<Method::Res as HasStateWrapper>::State>
+    fn new_wrapper<State: crate::State>(&self) -> crate::state::Wrapper<State>
     where
-        Method::Res: HasStateWrapper,
+        Method::Res: Has<State>,
     {
         crate::state::Wrapper::new_without_check()
     }

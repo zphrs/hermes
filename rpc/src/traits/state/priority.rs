@@ -79,10 +79,10 @@ pub trait Prioritized: State + Sized {
     type Priority: Priority<Self>;
     /// Returns the [`Self::Priority`](Prioritized::Priority) of the client's
     /// transition request.
-    fn client_priority(request: &<Self::ClientMethod as crate::Method>::Req) -> Self::Priority;
+    fn client_priority(request: &<Self::ClientHandles as crate::Method>::Req) -> Self::Priority;
     /// Returns the [`Self::Priority`](Prioritized::Priority) of the server's
     /// transition request.
-    fn server_priority(request: &<Self::ServerMethod as crate::Method>::Req) -> Self::Priority;
+    fn server_priority(request: &<Self::ServerHandles as crate::Method>::Req) -> Self::Priority;
 }
 
 /// Dispatches to [`Prioritized::client_priority`] or [`Prioritized::server_priority`] based on
@@ -112,16 +112,16 @@ pub(crate) trait PrioritizedUnsafeExt: Prioritized {
     ) -> Self::Priority
     where
         RootRequest: 'static,
-        <Self::ServerMethod as crate::Method>::Req: 'static,
-        <Self::ClientMethod as crate::Method>::Req: 'static,
+        <Self::ServerHandles as crate::Method>::Req: 'static,
+        <Self::ClientHandles as crate::Method>::Req: 'static,
     {
         match Role::to_enum() {
             crate::state::role::WhichRole::Client => {
-                assert_same_type_id::<RootRequest, Self::ClientMethod>();
+                assert_same_type_id::<RootRequest, Self::ClientHandles>();
                 Self::client_priority(unsafe { std::mem::transmute(req) })
             }
             crate::state::role::WhichRole::Server => {
-                assert_same_type_id::<RootRequest, Self::ServerMethod>();
+                assert_same_type_id::<RootRequest, Self::ServerHandles>();
                 Self::server_priority(unsafe { std::mem::transmute(req) })
             }
         }
@@ -133,11 +133,11 @@ pub(crate) trait PrioritizedUnsafeExt: Prioritized {
     ) -> Self::Priority {
         match Role::to_enum() {
             crate::state::role::WhichRole::Client => {
-                assert_same_size::<RootRequest, Self::ClientMethod>();
+                assert_same_size::<RootRequest, Self::ClientHandles>();
                 Self::client_priority(unsafe { std::mem::transmute(req) })
             }
             crate::state::role::WhichRole::Server => {
-                assert_same_size::<RootRequest, Self::ServerMethod>();
+                assert_same_size::<RootRequest, Self::ServerHandles>();
                 Self::server_priority(unsafe { std::mem::transmute(req) })
             }
         }
@@ -150,16 +150,16 @@ pub(crate) trait PrioritizedUnsafeExt: Prioritized {
     ) -> Self::Priority
     where
         RootRequest: 'static,
-        <Self::ServerMethod as crate::Method>::Req: 'static,
-        <Self::ClientMethod as crate::Method>::Req: 'static,
+        <Self::ServerHandles as crate::Method>::Req: 'static,
+        <Self::ClientHandles as crate::Method>::Req: 'static,
     {
         match Role::to_enum() {
             crate::state::role::WhichRole::Server => {
-                assert_same_type_id::<RootRequest, Self::ClientMethod>();
+                assert_same_type_id::<RootRequest, Self::ClientHandles>();
                 Self::client_priority(unsafe { std::mem::transmute(req) })
             }
             crate::state::role::WhichRole::Client => {
-                assert_same_type_id::<RootRequest, Self::ServerMethod>();
+                assert_same_type_id::<RootRequest, Self::ServerHandles>();
                 Self::server_priority(unsafe { std::mem::transmute(req) })
             }
         }
@@ -171,11 +171,11 @@ pub(crate) trait PrioritizedUnsafeExt: Prioritized {
     ) -> Self::Priority {
         match Role::to_enum() {
             crate::state::role::WhichRole::Server => {
-                assert_same_size::<RootRequest, Self::ClientMethod>();
+                assert_same_size::<RootRequest, Self::ClientHandles>();
                 Self::client_priority(unsafe { std::mem::transmute(req) })
             }
             crate::state::role::WhichRole::Client => {
-                assert_same_size::<RootRequest, Self::ServerMethod>();
+                assert_same_size::<RootRequest, Self::ServerHandles>();
                 Self::server_priority(unsafe { std::mem::transmute(req) })
             }
         }
@@ -208,13 +208,13 @@ impl<S: crate::traits::State, T: PartialOrd> Priority<S> for T {
 /// Priority type that compares by cloning the request values and comparing them.
 /// Used by the `from_cloned_requests` strategy.
 pub enum SelfPriority<S: State> {
-    Client(<S::ClientMethod as crate::Method>::Req),
-    Server(<S::ServerMethod as crate::Method>::Req),
+    Client(<S::ClientHandles as crate::Method>::Req),
+    Server(<S::ServerHandles as crate::Method>::Req),
 }
 
 impl<S: State> Priority<S> for SelfPriority<S>
 where
-    <S::ClientMethod as crate::Method>::Req: PartialOrd<<S::ServerMethod as crate::Method>::Req>,
+    <S::ClientHandles as crate::Method>::Req: PartialOrd<<S::ServerHandles as crate::Method>::Req>,
 {
     fn choose(client: Self, server: Self) -> r#enum::Priority {
         let Self::Client(client) = client else {
@@ -268,13 +268,13 @@ pub mod server_wins {
     pub type Priority<S> = (bool, PhantomData<S>);
 
     pub fn client_priority<State: crate::State>(
-        _request: &<State::ClientMethod as crate::Method>::Req,
+        _request: &<State::ClientHandles as crate::Method>::Req,
     ) -> Priority<State> {
         (false, PhantomData)
     }
 
     pub fn server_priority<State: crate::State>(
-        _request: &<State::ServerMethod as crate::Method>::Req,
+        _request: &<State::ServerHandles as crate::Method>::Req,
     ) -> Priority<State> {
         (true, PhantomData)
     }
@@ -334,24 +334,24 @@ pub mod from_cloned_requests {
 
     pub type Priority<S> = SelfPriority<S>;
 
-    pub fn client_priority<S>(request: &<S::ClientMethod as crate::Method>::Req) -> Priority<S>
+    pub fn client_priority<S>(request: &<S::ClientHandles as crate::Method>::Req) -> Priority<S>
     where
         S: crate::State,
-        <S::ClientMethod as crate::Method>::Req: Clone,
-        <S::ServerMethod as crate::Method>::Req: Clone,
-        <S::ClientMethod as crate::Method>::Req:
-            PartialOrd<<S::ServerMethod as crate::Method>::Req>,
+        <S::ClientHandles as crate::Method>::Req: Clone,
+        <S::ServerHandles as crate::Method>::Req: Clone,
+        <S::ClientHandles as crate::Method>::Req:
+            PartialOrd<<S::ServerHandles as crate::Method>::Req>,
     {
         SelfPriority::Client(request.clone())
     }
 
-    pub fn server_priority<S>(request: &<S::ServerMethod as crate::Method>::Req) -> Priority<S>
+    pub fn server_priority<S>(request: &<S::ServerHandles as crate::Method>::Req) -> Priority<S>
     where
         S: crate::State,
-        <S::ClientMethod as crate::Method>::Req: Clone,
-        <S::ServerMethod as crate::Method>::Req: Clone,
-        <S::ClientMethod as crate::Method>::Req:
-            PartialOrd<<S::ServerMethod as crate::Method>::Req>,
+        <S::ClientHandles as crate::Method>::Req: Clone,
+        <S::ServerHandles as crate::Method>::Req: Clone,
+        <S::ClientHandles as crate::Method>::Req:
+            PartialOrd<<S::ServerHandles as crate::Method>::Req>,
     {
         SelfPriority::Server(request.clone())
     }
@@ -389,13 +389,13 @@ macro_rules! define_prioritized {
             type Priority = $($StrategyModule)+::Priority<Self>;
 
             fn client_priority(
-                request: &<Self::ClientMethod as $crate::Method>::Req,
+                request: &<Self::ClientHandles as $crate::Method>::Req,
             ) -> Self::Priority {
                 $($StrategyModule)+::client_priority(request)
             }
 
             fn server_priority(
-                request: &<Self::ServerMethod as $crate::Method>::Req,
+                request: &<Self::ServerHandles as $crate::Method>::Req,
             ) -> Self::Priority {
                 $($StrategyModule)+::server_priority(request)
             }
@@ -411,9 +411,9 @@ mod test {
     struct Test;
 
     impl State for Test {
-        type ClientMethod = NotApplicable;
+        type ClientHandles = NotApplicable;
 
-        type ServerMethod = NotApplicable;
+        type ServerHandles = NotApplicable;
     }
 
     // define_prioritized!(Test, self::server_wins);

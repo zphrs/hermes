@@ -80,7 +80,7 @@ impl<
     /// the returned [`SplitReceipt`].
     pub fn split(
         self,
-        sender: machine_cursor::requester::Requester<State, Role, State::ClientMethod, Connection>,
+        sender: machine_cursor::requester::Requester<State, Role, State::ClientHandles, Connection>,
         should_tiebreak: bool,
     ) -> (
         OldMethod::Res,
@@ -90,8 +90,8 @@ impl<
     )
     where
         Connection::SendStream: futures::AsyncWrite + Unpin,
-        State::ClientMethod: Method,
-        State::ServerMethod: Method,
+        State::ClientHandles: Method,
+        State::ServerHandles: Method,
     {
         let (delayed_receipt, _role, handler_conn, _wrapper, priority, send_stream) =
             self.into_parts();

@@ -23,7 +23,7 @@ use crate::{
 pub type Sender<State> = Arc<
     machine_cursor::Requester<
         role::Client,
-        <State as rpc::State>::ServerMethod,
+        <State as rpc::State>::ServerHandles,
         quinn_transport::Connection,
     >,
 >;
@@ -58,8 +58,8 @@ pub enum ConnectError<'a> {
 }
 
 impl<
-    State: rpc::State<ClientMethod = NotApplicable> + Send,
-    LoginState: rpc::State<ClientMethod = NotApplicable>,
+    State: rpc::State<ClientHandles = NotApplicable> + Send,
+    LoginState: rpc::State<ClientHandles = NotApplicable>,
     LoginMethod: rpc::Method,
 > Cache<State, LoginState, LoginMethod>
 where
@@ -67,7 +67,7 @@ where
     ServerReq<LoginState>: rpc::RpcMessage,
     LoginMethod::Req: rpc::RpcMessage + Clone,
     LoginMethod::Res: rpc::RpcMessage + Unpin,
-    api::entrypoint::Request: From<<LoginState::ServerMethod as rpc::Method>::Req>,
+    api::entrypoint::Request: From<<LoginState::ServerHandles as rpc::Method>::Req>,
     LoginMethod: CanTransition,
     ServerReq<LoginState>: From<LoginMethod::Req>,
 {

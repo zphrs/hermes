@@ -1,7 +1,7 @@
-mod has_wrapper;
+mod has;
 pub mod priority;
 pub mod role;
-pub use has_wrapper::HasStateWrapper;
+pub use has::Has;
 
 pub(crate) use priority::PrioritizedUnsafeExt;
 pub use priority::{Prioritized, Priority};
@@ -10,14 +10,14 @@ pub(crate) use role::Role;
 /// It's necessary to divide between what requests the client and the server can
 /// perform as an entrypoint into establishing a symmetric state.
 pub trait State {
-    type ClientMethod: crate::Method;
-    type ServerMethod: crate::Method;
+    type ClientHandles: crate::Method;
+    type ServerHandles: crate::Method;
 }
 
-pub type ServerReq<State> = <<State as self::State>::ServerMethod as crate::Method>::Req;
-pub type ServerRes<State> = <<State as self::State>::ServerMethod as crate::Method>::Res;
-pub type ClientReq<State> = <<State as self::State>::ClientMethod as crate::Method>::Req;
-pub type ClientRes<State> = <<State as self::State>::ClientMethod as crate::Method>::Res;
+pub type ServerReq<State> = <<State as self::State>::ServerHandles as crate::Method>::Req;
+pub type ServerRes<State> = <<State as self::State>::ServerHandles as crate::Method>::Res;
+pub type ClientReq<State> = <<State as self::State>::ClientHandles as crate::Method>::Req;
+pub type ClientRes<State> = <<State as self::State>::ClientHandles as crate::Method>::Res;
 
 use std::marker::PhantomData;
 
@@ -31,7 +31,9 @@ pub struct Wrapper<State: crate::traits::State> {
 
 impl<State: crate::traits::State> std::fmt::Debug for Wrapper<State> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("state::Wrapper").finish()
+        f.debug_tuple("state::Wrapper")
+            .field(&std::any::type_name::<State>())
+            .finish()
     }
 }
 
@@ -71,16 +73,16 @@ pub trait ToHandle<
 
 impl<
     State: crate::traits::State,
-    Handler: crate::traits::Handler<State::ServerMethod, State::ServerMethod>,
-> ToHandle<State::ServerMethod, role::Server, Handler> for Wrapper<State>
+    Handler: crate::traits::Handler<State::ServerHandles, State::ServerHandles>,
+> ToHandle<State::ServerHandles, role::Server, Handler> for Wrapper<State>
 where
-    State::ServerMethod: method::Method,
+    State::ServerHandles: method::Method,
 {
     fn to_handle(
         &self,
         role: &role::Server,
         handler: Handler,
-    ) -> Handle<State::ServerMethod, Handler> {
+    ) -> Handle<State::ServerHandles, Handler> {
         let _ = role;
         Handle {
             _marker: method::Wrapper::new(),
@@ -91,16 +93,16 @@ where
 
 impl<
     State: crate::traits::State,
-    Handler: crate::traits::Handler<State::ClientMethod, State::ClientMethod>,
-> ToHandle<State::ClientMethod, role::Client, Handler> for Wrapper<State>
+    Handler: crate::traits::Handler<State::ClientHandles, State::ClientHandles>,
+> ToHandle<State::ClientHandles, role::Client, Handler> for Wrapper<State>
 where
-    State::ClientMethod: method::Method,
+    State::ClientHandles: method::Method,
 {
     fn to_handle(
         &self,
         role: &role::Client,
         handler: Handler,
-    ) -> Handle<State::ClientMethod, Handler> {
+    ) -> Handle<State::ClientHandles, Handler> {
         let _ = role;
         Handle {
             _marker: method::Wrapper::new(),
@@ -109,21 +111,21 @@ where
     }
 }
 
-impl<State: crate::traits::State> ToQuery<State::ServerMethod, role::Client> for Wrapper<State>
+impl<State: crate::traits::State> ToQuery<State::ServerHandles, role::Client> for Wrapper<State>
 where
-    State::ServerMethod: crate::Method,
+    State::ServerHandles: crate::Method,
 {
-    fn to_query(&self, role: &role::Client) -> method::Wrapper<State::ServerMethod> {
+    fn to_query(&self, role: &role::Client) -> method::Wrapper<State::ServerHandles> {
         let _ = role;
         method::Wrapper::new()
     }
 }
 
-impl<State: crate::traits::State> ToQuery<State::ClientMethod, role::Server> for Wrapper<State>
+impl<State: crate::traits::State> ToQuery<State::ClientHandles, role::Server> for Wrapper<State>
 where
-    State::ClientMethod: crate::Method,
+    State::ClientHandles: crate::Method,
 {
-    fn to_query(&self, role: &role::Server) -> method::Wrapper<State::ClientMethod> {
+    fn to_query(&self, role: &role::Server) -> method::Wrapper<State::ClientHandles> {
         let _ = role;
         method::Wrapper::new()
     }

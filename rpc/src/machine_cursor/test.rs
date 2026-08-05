@@ -1,8 +1,7 @@
 pub mod final_endpoint;
 pub mod from_processor_to_completion;
 mod fuzz_tiebreak;
-mod setup_conn;
-pub use setup_conn::{ConnPair, setup_conn};
+
 pub(self) mod test_states;
 
 use std::{
@@ -11,14 +10,11 @@ use std::{
 };
 
 pub mod prelude {
-    pub use super::{
-        ConnPair, setup_conn,
-        test_states::{
-            Entrypoint, Request,
-            client_endpoint::ClientEndpoint,
-            entrypoint::{client, server},
-            server_endpoint::ServerEndpoint,
-        },
+    pub use super::test_states::{
+        Entrypoint, Request,
+        client_endpoint::ClientEndpoint,
+        entrypoint::{client, server},
+        server_endpoint::ServerEndpoint,
     };
 }
 
@@ -28,7 +24,7 @@ use tracing::{Instrument, Span, debug, info_span};
 
 use crate::{
     Transport,
-    in_memory_transport::Connection,
+    in_memory_transport::{ConnPair, Connection, setup_conn},
     machine_cursor::{
         MachineCursorClient, MachineCursorServer,
         test::waitlist::{TableOffer, WaitingList},
@@ -65,9 +61,9 @@ mod waitlist {
     pub struct HostStand;
 
     impl crate::State for HostStand {
-        type ClientMethod = NotApplicable;
+        type ClientHandles = NotApplicable;
 
-        type ServerMethod = Join;
+        type ServerHandles = Join;
     }
 
     define_prioritized!(HostStand, server_wins);
@@ -107,9 +103,9 @@ mod waitlist {
     pub struct WaitingList;
 
     impl crate::State for WaitingList {
-        type ClientMethod = TableOffer;
+        type ClientHandles = TableOffer;
 
-        type ServerMethod = Leave;
+        type ServerHandles = Leave;
     }
 
     define_prioritized!(WaitingList, server_wins);
@@ -181,9 +177,9 @@ mod waitlist {
     pub struct Seated;
 
     impl crate::State for Seated {
-        type ClientMethod = NotApplicable;
+        type ClientHandles = NotApplicable;
 
-        type ServerMethod = NotApplicable;
+        type ServerHandles = NotApplicable;
     }
 }
 
@@ -194,65 +190,58 @@ async fn join() {
     let network = crate::in_memory_transport::Network::new();
 
     let mut js = JoinSet::new();
-    const SERVER_ADDR: u32 = 0;
+    const SERVER_ADDR: u8 = 0;
+
+    let ConnPair {
+        client_conn,
+        server_conn,
+    } = setup_conn(SERVER_ADDR, 1, &network).await;
     // server
-    {
-        let net = network.clone();
-        js.spawn(async move {
-            let tp = net.new_transport(SERVER_ADDR);
-            let conn = tp
-                .accept()
-                .await
-                .expect("infallible")
-                .accept()
-                .await
-                .expect("successful incoming");
-            let host_stand_cursor = MachineCursorServer::<waitlist::HostStand, _>::new(conn);
 
-            let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
-            // wait for client to join waiting list
-            let transition = processor
-                .handle_transition_request()
-                .await
-                .unwrap()
-                .next_with_requester(requester)
-                .await
-                .unwrap();
-            let (res, transition) = transition.extract_res();
-            let _waiting_list = transition.finish(res);
-
-            debug!("server transitioned to waitlist");
-        });
-    };
-
-    let net = network.clone();
     js.spawn(async move {
-        let tp = net.new_transport(1u32);
-        let conn = tp.connect(&SERVER_ADDR).await.unwrap();
-        let host_stand_cursor = MachineCursorClient::<waitlist::HostStand, _>::new(conn);
+        let host_stand_cursor = MachineCursorServer::<waitlist::HostStand, _>::new(server_conn);
 
-        debug!("client looping");
+        let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
+        // wait for client to join waiting list
+        let transition = processor
+            .handle_transition_request()
+            .await?
+            .next_with_requester(requester)
+            .await?;
+        let (res, transition) = transition.extract_res();
+        let _waiting_list = transition.finish(res);
+
+        debug!("server transitioned to waitlist");
+        anyhow::Ok(())
+    });
+
+    // client
+    js.spawn(async move {
+        let host_stand_cursor = MachineCursorClient::<waitlist::HostStand, _>::new(client_conn);
         let waiting_list_cursor = {
-            // join the list
             let (processor, requester) = host_stand_cursor.into_parts(not_applicable::Handler);
-            let requester_transition = requester
+            let (res, requester_transition) = requester
+                // prime a request to join the list
                 .request_transition::<waitlist::Join>(())
+                // actually commit to sending the transition request
+                // (would be a problem if our processor ever started handling requests)
                 .next()
-                .await
-                .unwrap();
-
-            let transition::requester::Need::Processor(requester_transition) = requester_transition
-            else {
-                panic!("unexpected Need variant")
-            };
-            let (res, requester_transition) = requester_transition.extract_res();
+                .await?
+                // asserts that the remote didn't send off a transition request
+                // (in this case impossible since Method is NotApplicable)
+                .assert_need_processor()
+                // takes Res out of the NeedProcessor type
+                .extract_res();
             requester_transition.finish(processor, res).await.unwrap()
         };
 
         let (_processor, _requester) = waiting_list_cursor.into_parts(waitlist::TableOffer);
+        anyhow::Ok(())
     });
 
-    js.join_all().await;
+    for res in js.join_all().await {
+        res.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -319,7 +308,7 @@ async fn test_tiebreak() {
                     ProcessorTransition<
                         transition::processor::Entrypoint<
                             waitlist::WaitingList,
-                            <WaitingList as crate::State>::ServerMethod,
+                            <WaitingList as crate::State>::ServerHandles,
                             role::Server,
                             Connection<u32>,
                         >,

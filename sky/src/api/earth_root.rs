@@ -77,9 +77,9 @@ impl Method {
 pub struct State;
 
 impl rpc::traits::State for State {
-    type ClientMethod = NotApplicable;
+    type ClientHandles = NotApplicable;
 
-    type ServerMethod = Method;
+    type ServerHandles = Method;
 }
 
 impl rpc::Method for Method {

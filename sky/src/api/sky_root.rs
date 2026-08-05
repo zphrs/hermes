@@ -49,9 +49,9 @@ impl From<Response> for LoopbackState {
 pub struct State;
 
 impl rpc::traits::State for State {
-    type ClientMethod = NotApplicable;
+    type ClientHandles = NotApplicable;
 
-    type ServerMethod = Method;
+    type ServerHandles = Method;
 }
 
 #[derive(Clone)]

@@ -54,6 +54,7 @@ use std::{
     borrow::Cow,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     time::{Duration, SystemTime},
+    usize,
 };
 
 use minicbor::CborLen;

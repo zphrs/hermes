@@ -1,5 +1,9 @@
 //! 100% reliable in-memory transport intended for local testing.
 
+mod setup_conn;
+
+pub use setup_conn::{ConnPair, setup_conn};
+
 use std::{
     collections::HashMap,
     convert::Infallible,

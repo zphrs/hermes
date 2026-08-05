@@ -236,7 +236,9 @@ where
     ) -> EventualTransitionRequest<
         impl Future<
             Output = Result<
-                PendingTransitionReceipt<State, RootMethod, Role, Client>,
+                ProcessorTransition<
+                    super::transition::processor::Entrypoint<State, RootMethod, Role, Client>,
+                >,
                 MultipleRequestsError<Client::Error, LoopbackHandler::Error, H::Error>,
             >,
         >,
@@ -370,14 +372,14 @@ where
             drop(js);
             let priority = unsafe { State::processor_priority::<Role, _>(&root) };
             let replier = DelayedReplier::new();
-            return Ok(PendingTransitionReceipt::new(
+            return Ok(ProcessorTransition::new(PendingTransitionReceipt::new(
                 handler.handle(replier, root).await?,
                 role.clone(),
                 client,
                 state,
                 priority,
                 stream.0,
-            ));
+            )));
         };
         EventualTransitionRequest::new(fut)
     }

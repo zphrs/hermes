@@ -5,19 +5,19 @@ pub mod server;
 pub struct Entrypoint;
 
 impl crate::State for Entrypoint {
-    type ClientMethod = client::Method;
+    type ClientHandles = client::Method;
 
-    type ServerMethod = server::Method;
+    type ServerHandles = server::Method;
 }
 
 impl crate::state::Prioritized for Entrypoint {
     type Priority = super::Priority;
 
-    fn client_priority(request: &<Self::ClientMethod as crate::Method>::Req) -> Self::Priority {
+    fn client_priority(request: &<Self::ClientHandles as crate::Method>::Req) -> Self::Priority {
         request.priority
     }
 
-    fn server_priority(request: &<Self::ServerMethod as crate::Method>::Req) -> Self::Priority {
+    fn server_priority(request: &<Self::ServerHandles as crate::Method>::Req) -> Self::Priority {
         request.priority
     }
 }

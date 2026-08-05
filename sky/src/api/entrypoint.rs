@@ -15,9 +15,9 @@ pub struct EntrypointState;
 pub type Entrypoint = ServerWins<EntrypointState>;
 
 impl rpc::traits::State for EntrypointState {
-    type ClientMethod = NotApplicable;
+    type ClientHandles = NotApplicable;
 
-    type ServerMethod = Method;
+    type ServerHandles = Method;
 }
 
 #[derive(Debug, Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]

@@ -2,6 +2,7 @@ use futures::future::join;
 
 use crate::{Transport as _, in_memory_transport, transport::Incoming as _};
 
+#[must_use]
 pub struct ConnPair {
     pub server_conn: in_memory_transport::Connection<u8>,
     pub client_conn: in_memory_transport::Connection<u8>,

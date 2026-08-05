@@ -83,8 +83,11 @@ impl<
 
 #[derive(Debug, thiserror::Error)]
 pub enum NextWithRequesterError<Client> {
+    #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("minicbor: {0}")]
     Minicbor(#[from] minicbor_io::Error),
+    #[error("client: {0}")]
     Client(Client),
 }
 
@@ -162,6 +165,7 @@ impl<
 }
 
 impl<Conn, Role, Res> ProcessorTransition<NeedWrapper<Conn, Role, Res>> {
+    #[must_use]
     pub fn extract_res(self) -> (Res, ProcessorTransition<NeedWrapper<Conn, Role, ()>>) {
         (
             self.state.res,

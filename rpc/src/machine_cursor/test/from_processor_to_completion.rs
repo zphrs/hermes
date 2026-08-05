@@ -5,7 +5,7 @@ use hegel::TestCase;
 use tracing::{Instrument, info_span};
 
 use crate::{
-    in_memory_transport,
+    in_memory_transport::{self, ConnPair, setup_conn},
     machine_cursor::{MachineCursorClient, MachineCursorServer, transition::tiebreak},
 };
 

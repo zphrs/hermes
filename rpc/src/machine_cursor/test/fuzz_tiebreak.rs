@@ -10,7 +10,7 @@ use hegel::TestCase;
 use tracing::{Instrument, debug, info_span};
 
 use crate::{
-    in_memory_transport,
+    in_memory_transport::{self, ConnPair, setup_conn},
     machine_cursor::{
         MachineCursorClient, MachineCursorServer, Requester,
         transition::{RequestTransition, requester::RequesterTransition, tiebreak},

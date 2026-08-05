@@ -29,7 +29,7 @@ pub struct RequesterTransition<OldState, Stage> {
 }
 
 impl<State, Stage> RequesterTransition<State, Stage> {
-    pub fn into_inner(self) -> Stage {
+    pub(crate) fn into_inner(self) -> Stage {
         self.stage
     }
 }
@@ -55,6 +55,103 @@ pub enum Need<
             NeedIncomingTransitionRequest<TransitionMethod::Res, Role, Caller, State::Priority>,
         >,
     ),
+}
+
+#[expect(private_bounds, reason = "for role")]
+impl<
+    State: crate::state::Prioritized,
+    TransitionMethod: crate::Method,
+    Role: crate::state::Role,
+    Caller: crate::Caller,
+> Need<State, TransitionMethod, Role, Caller>
+{
+    pub fn try_into_need_processor(
+        self,
+    ) -> Result<RequesterTransition<State, NeedProcessor<TransitionMethod::Res, Role, Caller>>, Self>
+    {
+        if let Self::Processor(processor) = self {
+            Ok(processor)
+        } else {
+            Err(self)
+        }
+    }
+    pub fn assert_need_processor(
+        self,
+    ) -> RequesterTransition<State, NeedProcessor<TransitionMethod::Res, Role, Caller>> {
+        self.try_into()
+            .ok()
+            .expect("need variant should be Need::Processor")
+    }
+    #[allow(private_interfaces)]
+    pub fn try_into_need_incoming_transition_request(
+        self,
+    ) -> Result<
+        RequesterTransition<
+            State,
+            NeedIncomingTransitionRequest<TransitionMethod::Res, Role, Caller, State::Priority>,
+        >,
+        Self,
+    > {
+        if let Self::IncomingTransitionRequest(need_incoming) = self {
+            Ok(need_incoming)
+        } else {
+            Err(self)
+        }
+    }
+    #[allow(private_interfaces)]
+    pub fn assert_need_incoming_transition_request(
+        self,
+    ) -> RequesterTransition<
+        State,
+        NeedIncomingTransitionRequest<
+            TransitionMethod::Res,
+            Role,
+            Caller,
+            <State as Prioritized>::Priority,
+        >,
+    > {
+        self.try_into()
+            .ok()
+            .expect("need variant should be Need::IncomingTransitionRequest")
+    }
+}
+
+impl<
+    State: crate::state::Prioritized,
+    TransitionMethod: crate::Method,
+    Role: crate::state::Role,
+    Caller: crate::Caller,
+> TryFrom<Need<State, TransitionMethod, Role, Caller>>
+    for RequesterTransition<State, NeedProcessor<TransitionMethod::Res, Role, Caller>>
+{
+    type Error = Need<State, TransitionMethod, Role, Caller>;
+
+    fn try_from(value: Need<State, TransitionMethod, Role, Caller>) -> Result<Self, Self::Error> {
+        value.try_into_need_processor()
+    }
+}
+
+impl<
+    State: crate::state::Prioritized,
+    TransitionMethod: crate::Method,
+    Role: crate::state::Role,
+    Caller: crate::Caller,
+> TryFrom<Need<State, TransitionMethod, Role, Caller>>
+    for RequesterTransition<
+        State,
+        NeedIncomingTransitionRequest<
+            TransitionMethod::Res,
+            Role,
+            Caller,
+            <State as crate::state::Prioritized>::Priority,
+        >,
+    >
+{
+    type Error = Need<State, TransitionMethod, Role, Caller>;
+
+    fn try_from(value: Need<State, TransitionMethod, Role, Caller>) -> Result<Self, Self::Error> {
+        value.try_into_need_incoming_transition_request()
+    }
 }
 
 #[expect(private_bounds, reason = "for role")]

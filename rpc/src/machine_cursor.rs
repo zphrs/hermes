@@ -70,7 +70,7 @@ impl<State: crate::traits::State, Connection: crate::transport::Connection, Role
         }
     }
 
-    pub fn conn(&self) -> &Connection {
+    pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
 }
@@ -87,8 +87,8 @@ pub struct SplitReceipt<Connection: crate::transport::Connection, Role: state::r
 impl<State: crate::traits::State, Connection: crate::transport::Connection + Clone + CallerExt>
     MachineCursor<State, Connection, state::role::Client>
 where
-    State::ClientMethod: Method,
-    State::ServerMethod: Method,
+    State::ClientHandles: Method,
+    State::ServerHandles: Method,
 {
     pub fn new(conn: Connection) -> Self {
         Self {
@@ -97,12 +97,12 @@ where
             _role: state::role::Client,
         }
     }
-    pub fn into_parts<Handler: traits::Handler<State::ClientMethod, State::ClientMethod>>(
+    pub fn into_parts<Handler: traits::Handler<State::ClientHandles, State::ClientHandles>>(
         self,
         handler: Handler,
     ) -> (
-        Processor<State, state::role::Client, State::ClientMethod, Connection, Handler>,
-        Requester<State, state::role::Client, State::ServerMethod, Connection>,
+        Processor<State, state::role::Client, State::ClientHandles, Connection, Handler>,
+        Requester<State, state::role::Client, State::ServerHandles, Connection>,
     ) {
         let handler = Processor::new(
             self.state_wrapper.duplicate(),
@@ -120,8 +120,8 @@ where
 impl<State: crate::traits::State, Connection: crate::transport::Connection + Clone + CallerExt>
     MachineCursor<State, Connection, state::role::Server>
 where
-    State::ClientMethod: Method,
-    State::ServerMethod: Method,
+    State::ClientHandles: Method,
+    State::ServerHandles: Method,
 {
     pub fn new(conn: Connection) -> Self {
         Self {
@@ -130,12 +130,12 @@ where
             _role: state::role::Server,
         }
     }
-    pub fn into_parts<Handler: traits::Handler<State::ServerMethod, State::ServerMethod>>(
+    pub fn into_parts<Handler: traits::Handler<State::ServerHandles, State::ServerHandles>>(
         self,
         handler: Handler,
     ) -> (
-        Processor<State, state::role::Server, State::ServerMethod, Connection, Handler>,
-        Requester<State, state::role::Server, State::ClientMethod, Connection>,
+        Processor<State, state::role::Server, State::ServerHandles, Connection, Handler>,
+        Requester<State, state::role::Server, State::ClientHandles, Connection>,
     ) {
         let handler = Processor::new(
             self.state_wrapper.duplicate(),

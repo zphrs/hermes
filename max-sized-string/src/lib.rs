@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use maxlen::MaxLen;
 use minicbor::{self, CborLen};
 
@@ -12,7 +14,7 @@ impl<const N: usize> MaxSizedString<N> {
     /// # Errors
     ///
     /// If the length of the string is greater than the max length
-    pub fn try_from_inner(inner: String) -> Result<Self, String> {
+    pub fn try_from_string(inner: String) -> Result<Self, String> {
         if inner.len() < N {
             Ok(MaxSizedString(inner))
         } else {
@@ -22,6 +24,14 @@ impl<const N: usize> MaxSizedString<N> {
 
     pub fn into_inner(self) -> String {
         self.0
+    }
+}
+
+impl<const N: usize> Deref for MaxSizedString<N> {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -61,5 +71,13 @@ impl<Ctx, const N: usize> minicbor::Encode<Ctx> for MaxSizedString<N> {
     ) -> Result<(), minicbor::encode::Error<W::Error>> {
         e.str(&self.0)?;
         Ok(())
+    }
+}
+
+impl<const N: usize> TryFrom<&str> for MaxSizedString<N> {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::try_from_string(value.into())
     }
 }
