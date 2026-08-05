@@ -292,16 +292,6 @@ impl<'a, T: MaxLen + Clone> MaxLen for Cow<'a, T> {
     }
 }
 
-/// MaxLen implementation for String.
-///
-/// Returns an empty string as strings are dynamically sized.
-/// For fixed-size strings, use arrays or custom types.
-impl MaxLen for String {
-    fn biggest_instantiation() -> Self {
-        String::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

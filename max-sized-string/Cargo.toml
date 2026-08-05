@@ -1,0 +1,8 @@
+[package]
+name = "max-sized-string"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+maxlen = { version = "0.1.0", path = "../maxlen" }
+minicbor = "2.2.1"
