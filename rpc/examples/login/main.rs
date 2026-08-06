@@ -11,6 +11,7 @@ use rpc::{
     state::{self, Has},
 };
 use tokio::task::JoinSet;
+use tracing::{Instrument, info_span};
 
 use crate::states::{
     entrypoint::{self, login},
@@ -69,20 +70,7 @@ where
     let (processor, requester) = logged_in_cursor.into_parts(not_applicable::Handler);
 
     let requester_arc = Arc::new(requester);
-    let requester_clone = requester_arc.clone();
-    let req1_jh = tokio::spawn(async move {
-        requester_clone
-            .request_loopback::<logged_in::ping::Method>(())
-            .await
-    });
-    let requester_clone = requester_arc.clone();
-    let req2_jh = tokio::spawn(async move {
-        requester_clone
-            .request_loopback::<logged_in::ping::Method>(())
-            .await
-    });
-    req1_jh.await??;
-    req2_jh.await??;
+
     let (res, transition) = Arc::try_unwrap(requester_arc)
         .ok()
         .expect(
@@ -133,15 +121,18 @@ where
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    use tracing_subscriber;
+
+    tracing_subscriber::fmt::init();
     let net = Network::new();
     let ConnPair {
         server_conn,
         client_conn,
     } = setup_conn(0, 1, &net).await;
 
-    let server_jh = tokio::spawn(server::server(server_conn));
+    let server_jh = tokio::spawn(server::server(server_conn).instrument(info_span!("server")));
 
-    let client_jh = tokio::spawn(client(client_conn));
+    let client_jh = tokio::spawn(client(client_conn).instrument(info_span!("client")));
 
     let res = client_jh.await.unwrap();
     if let Err(err) = res {

@@ -24,6 +24,29 @@ pub struct ServerMethod;
 impl rpc::method::Ancestor<logout::Method> for ServerMethod {}
 impl rpc::method::Ancestor<ping::Method> for ServerMethod {}
 
+impl rpc::method::FromDescendant<logout::Method> for ServerMethod {
+    fn from_descendant_req(
+        request: <logout::Method as rpc::Method>::Req,
+    ) -> <Self as rpc::Method>::Req {
+        RootReq::Logout(request)
+    }
+
+    fn from_descendant_res(
+        request: <logout::Method as rpc::Method>::Res,
+    ) -> <Self as rpc::Method>::Res {
+        RootRes::Logout(request)
+    }
+
+    fn try_into_descendant_req(
+        request: Self::Req,
+    ) -> Result<<logout::Method as rpc::Method>::Req, Self::Req> {
+        match request {
+            RootReq::Logout(request) => Ok(request),
+            other => Err(other),
+        }
+    }
+}
+
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
 #[cbor(flat)]
 pub enum RootReq {
@@ -44,21 +67,9 @@ impl TryFrom<RootReq> for ping::Req {
     }
 }
 
-impl From<ping::Req> for RootReq {
-    fn from(value: ping::Res) -> Self {
-        RootReq::Ping(value)
-    }
-}
-
 pub enum RootRes {
     Logout(<logout::Method as rpc::Method>::Res),
     Ping(<ping::Method as rpc::Method>::Res),
-}
-
-impl From<ping::Res> for RootRes {
-    fn from(value: ping::Res) -> Self {
-        RootRes::Ping(value)
-    }
 }
 
 impl rpc::Method for ServerMethod {
