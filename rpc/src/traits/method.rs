@@ -1,4 +1,7 @@
 pub mod ancestor;
+mod from_descendant;
+
+pub use from_descendant::FromDescendant;
 
 pub use ancestor::Ancestor;
 

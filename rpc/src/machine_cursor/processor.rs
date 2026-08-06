@@ -1,5 +1,5 @@
 use crate::machine_cursor::transition::processor::ProcessorTransition;
-use crate::method::Ancestor;
+use crate::method::{Ancestor, FromDescendant, is_leaf};
 use crate::{Handler, ImmediateReplier, machine_cursor::PendingTransitionReceipt};
 mod concurrent_request_handler;
 
@@ -10,10 +10,11 @@ use crate::state::{PrioritizedUnsafeExt, Wrapper};
 
 use crate::{traits::Prioritized, transport::ReplyHelper};
 
-use futures::future::FusedFuture;
-use futures::{FutureExt as _, StreamExt as _, select, stream::FuturesUnordered};
+use futures::{
+    FutureExt as _, StreamExt as _, future::FusedFuture, select, stream::FuturesUnordered,
+};
 use maxlen::MaxLen;
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::{
     HandleOneRequestError, Method,
@@ -246,12 +247,11 @@ where
     where
         RootMethod::Req: crate::RpcMessage,
         LoopbackHandler: traits::Handler<RootMethod, LoopbackMethod> + Clone,
-        LoopbackMethod::Req: TryFrom<RootMethod::Req, Error = RootMethod::Req>,
         <LoopbackMethod as Method>::Req: crate::RpcMessage,
         H: crate::traits::Handler<RootMethod, RootMethod>,
-        <RootMethod as Method>::Res: From<<LoopbackMethod as Method>::Res>,
         State: Prioritized,
         RootMethod: Ancestor<LoopbackMethod>,
+        RootMethod: FromDescendant<LoopbackMethod, IsLeaf = is_leaf::False>,
     {
         let fut = async move {
             let Self {
@@ -324,6 +324,7 @@ where
                                 // got to non-concurrent value, break out of
                                 // concurrent loop so we stop handling new
                                 // requests
+                                debug!("breaking out of loop");
                                 break (root, stream);
                             }
                             (Err(HandleOneRequestError::App(ConcurrentRequestHandlerError::ParallelHandler(e))), _) => Err(HandleOneRequestError::App(e))?,
@@ -370,16 +371,16 @@ where
             }
             debug_assert!(js.is_empty());
             drop(js);
-            let priority = unsafe { State::processor_priority::<Role, _>(&root) };
+            let mut with_priority = WithPriority::new(&mut handler, role, state);
             let replier = DelayedReplier::new();
-            return Ok(ProcessorTransition::new(PendingTransitionReceipt::new(
-                handler.handle(replier, root).await?,
-                role.clone(),
-                client,
-                state,
-                priority,
-                stream.0,
-            )));
+            let receipt = with_priority.handle(replier, root).await?;
+            let (priority, state) = with_priority
+                .into_parts()
+                .expect("priority is set during handle");
+
+            Ok(ProcessorTransition::new(PendingTransitionReceipt::new(
+                receipt, self.role, client, state, priority, stream.0,
+            )))
         };
         EventualTransitionRequest::new(fut)
     }

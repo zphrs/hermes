@@ -185,7 +185,7 @@ pub async fn between_processor_and_requester_transition<
     'a,
     State: crate::state::Prioritized,
     ProcessorMethod: crate::Method,
-    RootReq,
+    RootMethod: crate::Method,
     TransitionMethod: crate::Method,
     Role: crate::state::Role,
     Conn: crate::transport::Connection,
@@ -195,7 +195,7 @@ pub async fn between_processor_and_requester_transition<
     >,
     requester_transition: RequesterTransition<
         State,
-        RequestTransition<RootReq, TransitionMethod, Role, Conn>,
+        RequestTransition<RootMethod, TransitionMethod, Role, Conn>,
     >,
 ) -> Result<
     TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
@@ -203,7 +203,7 @@ pub async fn between_processor_and_requester_transition<
 >
 where
     TransitionMethod::Res: crate::RpcMessage,
-    RootReq: crate::RpcMessage + From<TransitionMethod::Req>,
+    RootMethod::Req: crate::RpcMessage,
 {
     let request_transition = requester_transition.into_inner();
 
@@ -270,7 +270,7 @@ pub async fn between_potential_processor_and_known_requester_transition<
     State: crate::state::Prioritized,
     ProcessorMethod: crate::Method,
     TransitionMethod: crate::Method,
-    RootReq,
+    RootMethod: crate::Method,
     Role: crate::state::Role,
     Conn: crate::transport::Connection,
     HError,
@@ -291,7 +291,7 @@ pub async fn between_potential_processor_and_known_requester_transition<
     mut to_processor_transition: EventualTransitionRequest<ToProcessorTransition>,
     requester_transition: RequesterTransition<
         State,
-        RequestTransition<RootReq, TransitionMethod, Role, Conn>,
+        RequestTransition<RootMethod, TransitionMethod, Role, Conn>,
     >,
 ) -> Result<
     TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
@@ -301,7 +301,7 @@ where
     <Conn as crate::transport::Client>::Error: std::fmt::Debug,
     HError: std::fmt::Debug,
     TransitionMethod::Res: crate::RpcMessage,
-    RootReq: crate::RpcMessage + From<TransitionMethod::Req>,
+    RootMethod::Req: crate::RpcMessage,
     <Conn as crate::Caller>::Error: std::fmt::Debug,
 {
     let mut request_transition = requester_transition.into_inner();

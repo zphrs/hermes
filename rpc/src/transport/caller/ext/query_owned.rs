@@ -33,10 +33,7 @@ pub struct PendingQueryOwned<C: Caller, M: crate::Method, RootReq> {
 }
 
 impl<C: Caller, M: crate::Method, RootReq> PendingQueryOwned<C, M, RootReq> {
-    pub fn new(caller: C, req: M::Req) -> Self
-    where
-        RootReq: From<M::Req>,
-    {
+    pub fn new(caller: C, req: RootReq) -> Self {
         Self {
             caller: caller.into(),
             req: Some(req.into()),

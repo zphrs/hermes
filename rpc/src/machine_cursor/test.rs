@@ -201,7 +201,7 @@ async fn join() {
     js.spawn(async move {
         let host_stand_cursor = MachineCursorServer::<waitlist::HostStand, _>::new(server_conn);
 
-        let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
+        let (processor, requester) = host_stand_cursor.into_children_with_handler(waitlist::Join);
         // wait for client to join waiting list
         let transition = processor
             .handle_transition_request()
@@ -261,7 +261,8 @@ async fn test_tiebreak() {
         let mut host_stand_cursor = MachineCursorServer::<waitlist::HostStand, _>::new(conn);
         let _seated_cursor = loop {
             debug!("looping");
-            let (processor, requester) = host_stand_cursor.into_parts(waitlist::Join);
+            let (processor, requester) =
+                host_stand_cursor.into_children_with_handler(waitlist::Join);
             // wait for client to join waiting list
             let transition = processor.handle_transition_request();
             let transition = transition.await.unwrap();
@@ -271,7 +272,7 @@ async fn test_tiebreak() {
 
             debug!("transitioned to waitlist");
 
-            let (processor, requester) = waiting_list.into_parts(waitlist::Leave);
+            let (processor, requester) = waiting_list.into_children_with_handler(waitlist::Leave);
 
             let wrapped_requester = Arc::new(Mutex::new(Some(requester)));
 
@@ -319,7 +320,7 @@ async fn test_tiebreak() {
                         RequesterTransition<
                             waitlist::WaitingList,
                             RequestTransition<
-                                (),
+                                waitlist::TableOffer,
                                 waitlist::TableOffer,
                                 role::Server,
                                 Connection<u32>,

@@ -47,6 +47,29 @@ impl rpc::method::FromDescendant<logout::Method> for ServerMethod {
     }
 }
 
+impl rpc::method::FromDescendant<ping::Method> for ServerMethod {
+    fn from_descendant_req(
+        request: <ping::Method as rpc::Method>::Req,
+    ) -> <Self as rpc::Method>::Req {
+        RootReq::Ping(request)
+    }
+
+    fn from_descendant_res(
+        result: <ping::Method as rpc::Method>::Res,
+    ) -> <Self as rpc::Method>::Res {
+        RootRes::Ping(result)
+    }
+
+    fn try_into_descendant_req(
+        request: Self::Req,
+    ) -> Result<<ping::Method as rpc::Method>::Req, Self::Req> {
+        match request {
+            RootReq::Ping(request) => Ok(request),
+            other => Err(other),
+        }
+    }
+}
+
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
 #[cbor(flat)]
 pub enum RootReq {

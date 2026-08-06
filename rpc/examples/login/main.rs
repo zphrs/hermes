@@ -3,14 +3,12 @@
 
 use std::sync::Arc;
 
-use futures::future::join;
 use rpc::{
     in_memory_transport::{ConnPair, Network, setup_conn},
     machine_cursor::MachineCursorClient,
-    method::not_applicable::{self, NotApplicable},
+    method::not_applicable::{self},
     state::{self, Has},
 };
-use tokio::task::JoinSet;
 use tracing::{Instrument, info_span};
 
 use crate::states::{
@@ -69,13 +67,7 @@ where
     // login succeeded
     let (processor, requester) = logged_in_cursor.into_parts(not_applicable::Handler);
 
-    let requester_arc = Arc::new(requester);
-
-    let (res, transition) = Arc::try_unwrap(requester_arc)
-        .ok()
-        .expect(
-            "since req1 and req2 are awaited above, there is only the requester_arc reference left",
-        )
+    let (res, transition) = requester
         .request_transition::<logged_in::logout::Method>(())
         .next()
         .await?

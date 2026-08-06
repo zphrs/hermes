@@ -69,10 +69,6 @@ impl<State: crate::traits::State, Connection: crate::transport::Connection, Role
             _role: role,
         }
     }
-
-    pub(crate) fn conn(&self) -> &Connection {
-        &self.conn
-    }
 }
 
 #[expect(
@@ -130,7 +126,9 @@ where
             _role: state::role::Server,
         }
     }
-    pub fn into_parts<Handler: traits::Handler<State::ServerHandles, State::ServerHandles>>(
+    pub fn into_children_with_handler<
+        Handler: traits::Handler<State::ServerHandles, State::ServerHandles>,
+    >(
         self,
         handler: Handler,
     ) -> (

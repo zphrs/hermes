@@ -8,8 +8,9 @@ use crate::{
         requester::ToSacrifice,
         transition_request_method::{self, TransitionRequestMethod},
     },
+    method::{FromDescendant, is_leaf},
     traits::method::can_transition,
-    transport::{CallerExt, PendingQueryOwned},
+    transport::{CallerExt, PendingQueryOwned, ext::PrivateCallerExt},
 };
 
 #[expect(
@@ -67,17 +68,21 @@ impl<Res, Role: crate::state::Role, Caller: crate::transport::Caller>
     reason = "role trait is private to force role to be either Server or Client"
 )]
 pub struct RequestTransition<
-    RootReq,
+    RootMethod: crate::Method,
     M: crate::Method,
     Role: crate::state::Role,
     Caller: crate::transport::Caller,
 > {
-    query_req: PendingQueryOwned<Caller, TransitionRequestMethod<M>, RootReq>,
+    query_req: PendingQueryOwned<Caller, TransitionRequestMethod<M>, RootMethod::Req>,
     role: Role,
 }
 
-impl<RootReq, M: crate::Method, Role: crate::state::Role, Caller: crate::transport::Caller> Unpin
-    for RequestTransition<RootReq, M, Role, Caller>
+impl<
+    RootMethod: crate::Method,
+    M: crate::Method,
+    Role: crate::state::Role,
+    Caller: crate::transport::Caller,
+> Unpin for RequestTransition<RootMethod, M, Role, Caller>
 {
 }
 
@@ -86,20 +91,23 @@ impl<RootReq, M: crate::Method, Role: crate::state::Role, Caller: crate::transpo
     reason = "role trait is private to force role to be either Server or Client"
 )]
 impl<
-    RootReq: From<M::Req> + crate::RpcMessage,
+    RootMethod: crate::method::FromDescendant<M>,
     M: crate::Method<CanTransition = can_transition::True>,
     Role: crate::state::Role,
     Caller: crate::transport::Caller,
-> RequestTransition<RootReq, M, Role, Caller>
+> RequestTransition<RootMethod, M, Role, Caller>
 where
     M::Res: crate::RpcMessage,
 {
     pub fn new(req: M::Req, role: Role, caller: Caller) -> Self
     where
-        M::Res: crate::RpcMessage,
+        M: crate::Method<IsLeaf = is_leaf::True>,
+        RootMethod: FromDescendant<M>,
     {
         Self {
-            query_req: caller.query_owned(req),
+            query_req: caller.query_owned_from_root::<TransitionRequestMethod<M>, RootMethod::Req>(
+                RootMethod::from_descendant_req(req),
+            ),
             role,
         }
     }
@@ -109,26 +117,35 @@ where
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-impl<RootReq, M: crate::Method, Role: crate::state::Role, Caller: crate::transport::Caller>
-    RequestTransition<RootReq, M, Role, Caller>
+impl<
+    RootMethod: crate::Method,
+    M: crate::Method,
+    Role: crate::state::Role,
+    Caller: crate::transport::Caller,
+> RequestTransition<RootMethod, M, Role, Caller>
 {
-    pub fn query_req(&self) -> &PendingQueryOwned<Caller, TransitionRequestMethod<M>, RootReq> {
+    pub fn query_req(
+        &self,
+    ) -> &PendingQueryOwned<Caller, TransitionRequestMethod<M>, RootMethod::Req> {
         &self.query_req
     }
-    pub fn into_inner(self) -> PendingQueryOwned<Caller, TransitionRequestMethod<M>, RootReq> {
+    pub fn into_inner(
+        self,
+    ) -> PendingQueryOwned<Caller, TransitionRequestMethod<M>, RootMethod::Req> {
         self.query_req
     }
 }
 
 impl<
-    RootReq,
+    RootMethod,
     M: crate::Method,
     Role: crate::state::Role,
     Caller: crate::transport::Caller + CallerExt,
-> FusedFuture for RequestTransition<RootReq, M, Role, Caller>
+> FusedFuture for RequestTransition<RootMethod, M, Role, Caller>
 where
     M::Res: crate::RpcMessage,
-    RootReq: crate::RpcMessage + From<<M as crate::Method>::Req>,
+    RootMethod: crate::Method,
+    RootMethod::Req: crate::RpcMessage,
 {
     fn is_terminated(&self) -> bool {
         self.query_req.is_terminated()
@@ -136,21 +153,21 @@ where
 }
 
 impl<
-    RootReq,
+    RootMethod: crate::Method,
     M: crate::Method,
     Role: crate::state::Role,
     Caller: crate::transport::Caller + CallerExt,
-> Future for RequestTransition<RootReq, M, Role, Caller>
+> Future for RequestTransition<RootMethod, M, Role, Caller>
 where
     M::Res: crate::RpcMessage,
-    RootReq: crate::RpcMessage + From<<M as crate::Method>::Req>,
+    RootMethod::Req: crate::RpcMessage,
 {
     type Output = Result<
         (
-            RootReq,
+            RootMethod::Req,
             TransitionReceipt<transition_request_method::Res, Role, Caller>,
         ),
-        crate::transport::ext::query_owned::Error<Caller::Error, Caller, RootReq>,
+        crate::transport::ext::query_owned::Error<Caller::Error, Caller, RootMethod::Req>,
     >;
 
     fn poll(

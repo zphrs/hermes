@@ -1,6 +1,6 @@
 use rpc::state;
 
-use crate::states::{Entrypoint, entrypoint::login, logged_in::LoggedIn};
+use crate::states::{Entrypoint, logged_in::LoggedIn};
 
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
 #[cbor(flat)]

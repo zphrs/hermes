@@ -12,7 +12,8 @@ where
     loop {
         let logged_in_cursor = authenticate(entrypoint_cursor).await?;
 
-        let (processor, requester) = logged_in_cursor.into_parts(states::logged_in::ServerMethod);
+        let (processor, requester) =
+            logged_in_cursor.into_children_with_handler(states::logged_in::ServerMethod);
 
         let (res, processor_transition) = processor
             .handle_requests(logged_in::ping::Method)
@@ -41,7 +42,7 @@ where
 {
     let logged_in_cursor = loop {
         let (processor, requester) =
-            entrypoint_cursor.into_parts(states::entrypoint::login::Method);
+            entrypoint_cursor.into_children_with_handler(states::entrypoint::login::Method);
 
         let (res, processor_transition) = processor
             .handle_transition_request()

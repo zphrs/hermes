@@ -23,15 +23,20 @@ pub trait CallerExt: Caller {
         PendingQuery::<Self, M, RootReq>::new(self, req)
     }
 
-    fn query_owned<M: Method<IsLeaf = is_leaf::True>, RootReq: RpcMessage>(
+    fn query_owned<
+        M: Method<IsLeaf = is_leaf::True>,
+        RootMethod: crate::method::FromDescendant<M>,
+    >(
         self,
         req: M::Req,
-    ) -> PendingQueryOwned<Self, M, RootReq>
+    ) -> PendingQueryOwned<Self, M, RootMethod::Req>
     where
-        RootReq: From<M::Req>,
         M::Res: RpcMessage,
     {
-        PendingQueryOwned::<Self, M, RootReq>::new(self, req)
+        PendingQueryOwned::<Self, M, RootMethod::Req>::new(
+            self,
+            RootMethod::from_descendant_req(req),
+        )
     }
 
     fn notify<M: Method<Res = NotApplicable>, RootReq: RpcMessage>(
@@ -57,5 +62,16 @@ pub trait CallerExt: Caller {
         }
     }
 }
+
+pub(crate) trait PrivateCallerExt: Caller {
+    fn query_owned_from_root<M: Method<IsLeaf = is_leaf::True>, RootReq>(
+        self,
+        root_req: RootReq,
+    ) -> PendingQueryOwned<Self, M, RootReq> {
+        PendingQueryOwned::new(self, root_req)
+    }
+}
+
+impl<T: BiStream + Caller> PrivateCallerExt for T {}
 
 impl<T: BiStream + Caller> CallerExt for T {}

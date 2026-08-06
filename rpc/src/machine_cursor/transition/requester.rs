@@ -182,13 +182,13 @@ pub type RequesterTransitionEntrypoint<State, RootReq, TransitionMethod, Role, C
 #[expect(private_bounds, reason = "for role")]
 impl<
     State,
-    RootReq,
+    RootMethod: crate::Method,
     TransitionMethod: crate::Method,
     Role: crate::state::Role,
     Caller: crate::transport::Caller,
-> RequesterTransition<State, RequestTransition<RootReq, TransitionMethod, Role, Caller>>
+> RequesterTransition<State, RequestTransition<RootMethod, TransitionMethod, Role, Caller>>
 {
-    pub fn new(transition: RequestTransition<RootReq, TransitionMethod, Role, Caller>) -> Self {
+    pub fn new(transition: RequestTransition<RootMethod, TransitionMethod, Role, Caller>) -> Self {
         Self {
             stage: transition,
             _marker: PhantomData,
@@ -204,7 +204,8 @@ impl<
     where
         <TransitionMethod as crate::Method>::Res: crate::RpcMessage,
         State: Prioritized,
-        RootReq: From<<TransitionMethod as crate::Method>::Req> + crate::RpcMessage,
+        TransitionMethod::Res: crate::RpcMessage,
+        RootMethod::Req: crate::RpcMessage,
     {
         let (req, receipt) = self
             .stage

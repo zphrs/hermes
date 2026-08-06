@@ -109,9 +109,10 @@ where
     pub fn request_transition<M: CanTransition>(
         self,
         req: M::Req,
-    ) -> RequesterTransition<State, RequestTransition<RootMethod::Req, M, Role, Caller>>
+    ) -> RequesterTransition<State, RequestTransition<RootMethod, M, Role, Caller>>
     where
-        RootMethod::Req: crate::RpcMessage + From<M::Req>,
+        RootMethod::Req: crate::RpcMessage,
+        RootMethod: crate::method::FromDescendant<M>,
         M::Res: crate::RpcMessage,
         M: Leaf<RootMethod>,
     {

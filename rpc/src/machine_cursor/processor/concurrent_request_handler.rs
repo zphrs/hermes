@@ -1,8 +1,11 @@
-use crate::method::{Ancestor, is_leaf};
-use crate::traits::HandleError;
-use crate::traits::method::can_transition;
-use crate::traits::{self, method::Loopback};
-use crate::transport::ReplyHelper;
+use crate::{
+    method::{FromDescendant, is_leaf},
+    traits::{
+        self, HandleError,
+        method::{Loopback, can_transition},
+    },
+    transport::ReplyHelper,
+};
 use std::marker::PhantomData;
 
 #[derive(Clone)]
@@ -16,37 +19,20 @@ pub struct ConcurrentRequestHandler<
 }
 
 impl<
-    ParentMethod: crate::Method,
+    ParentMethod: FromDescendant<LoopbackMethod, IsLeaf = is_leaf::False>,
     LoopbackMethod: Loopback,
     LoopbackHandler: traits::Handler<ParentMethod, LoopbackMethod>,
-> Ancestor<ConcurrentRequestHandler<ParentMethod, LoopbackMethod, LoopbackHandler>>
-    for ParentMethod
-{
-}
-
-impl<
-    ParentMethod: crate::Method + Ancestor<LoopbackMethod>,
-    LoopbackMethod: Loopback,
-    LoopbackHandler: traits::Handler<ParentMethod, LoopbackMethod>,
-> crate::Handler<ParentMethod>
+> crate::Handler<ParentMethod, ParentMethod>
     for ConcurrentRequestHandler<ParentMethod, LoopbackMethod, LoopbackHandler>
-where
-    LoopbackMethod::Req: TryFrom<ParentMethod::Req, Error = ParentMethod::Req>,
 {
     type Error = ConcurrentRequestHandlerError<LoopbackHandler::Error, ParentMethod::Req>;
 
-    async fn handle<Replier: ReplyHelper<Self, ParentMethod>>(
+    async fn handle<Replier: ReplyHelper<ParentMethod, ParentMethod>>(
         &mut self,
         replier: Replier,
-        value: <Self as crate::Method>::Req,
-    ) -> Result<
-        <Replier as ReplyHelper<Self, ParentMethod>>::Receipt<Self>,
-        HandleError<
-            <Replier as ReplyHelper<Self, ParentMethod>>::Error,
-            <Self as crate::Handler<ParentMethod, Self>>::Error,
-        >,
-    > {
-        let parallel_req = match LoopbackMethod::Req::try_from(value) {
+        value: <ParentMethod as crate::Method>::Req,
+    ) -> Result<Replier::Receipt<ParentMethod>, HandleError<Replier::Error, Self::Error>> {
+        let parallel_req = match ParentMethod::try_into_descendant_req(value) {
             Ok(v) => v,
             Err(root) => {
                 return Err(ConcurrentRequestHandlerError::FailedConversion(root))?;
@@ -54,7 +40,9 @@ where
         };
 
         let res = replier
-            .reply_with::<LoopbackMethod, LoopbackHandler>(&mut self.handler, parallel_req, |v| v)
+            .reply_with::<LoopbackMethod, LoopbackHandler>(&mut self.handler, parallel_req, |v| {
+                ParentMethod::from_descendant_res(v)
+            })
             .await;
         let res = res.map_err(|e| match e {
             HandleError::Replier(r) => HandleError::Replier(r),
