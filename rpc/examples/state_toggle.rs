@@ -40,12 +40,11 @@ pub mod states {
         {
             type Error = Infallible;
 
-            async fn handle<Replier: rpc::transport::ReplyHelper<Self, RootMethod>>(
+            async fn handle<Replier: rpc::ReplyHelper<RootMethod, Self>>(
                 &mut self,
                 replier: Replier,
-                _value: <Self as rpc::Method>::Req,
-            ) -> Result<Replier::Receipt<Self>, rpc::traits::HandleError<Replier::Error, Self::Error>>
-            {
+                (): rpc::ReqOf<Self>,
+            ) -> rpc::traits::HandlerResult<RootMethod, Self, Replier, Self::Error> {
                 let res = replier.new_wrapper();
                 replier.reply(res).await
             }
@@ -82,8 +81,8 @@ where
     let mut entrypoint_cursor =
         rpc::machine_cursor::MachineCursorServer::<states::Entrypoint, _>::new(conn);
     loop {
-        let (processor, requester) =
-            entrypoint_cursor.into_children_with_handler(states::transition::Method::new());
+        let mut handler = states::transition::Method::new();
+        let (processor, requester) = entrypoint_cursor.into_children_with_handler(&mut handler);
 
         let (res, transition) = processor
             .handle_transition_request()
@@ -94,8 +93,9 @@ where
 
         let b_cursor = transition.finish(res);
 
-        let (processor, requester) =
-            b_cursor.into_children_with_handler(states::transition::Method::new());
+        let mut handler = states::transition::Method::new();
+
+        let (processor, requester) = b_cursor.into_children_with_handler(&mut handler);
 
         let (res, transition) = processor
             .handle_transition_request()
@@ -118,6 +118,7 @@ where
     let b_cursor = from_a_to_b(entrypoint_cursor).await?;
     let a_cursor = from_b_to_a(b_cursor).await?;
     let b_cursor = from_a_to_b(a_cursor).await?;
+    // we could keep going back and forth indefinitely
     // close cursor & connection by dropping
     drop(b_cursor);
     Ok(())
@@ -130,8 +131,8 @@ async fn from_b_to_a<Conn: rpc::transport::Connection + Clone>(
 where
     <Conn as rpc::transport::Caller>::Error: Send + Sync + Debug + Display + 'static,
 {
-    let (processor, requester) =
-        b_cursor.into_children_with_handler(rpc::method::not_applicable::Handler);
+    let mut handler = rpc::method::not_applicable::Handler;
+    let (processor, requester) = b_cursor.into_children_with_handler(&mut handler);
     let (res, transition) = requester
         .request_transition(())
         .next()
@@ -149,8 +150,8 @@ async fn from_a_to_b<Conn: rpc::transport::Connection + Clone>(
 where
     <Conn as rpc::transport::Caller>::Error: Send + Sync + Debug + Display + 'static,
 {
-    let (processor, requester) =
-        entrypoint_cursor.into_children_with_handler(rpc::method::not_applicable::Handler);
+    let mut handler = rpc::method::not_applicable::Handler;
+    let (processor, requester) = entrypoint_cursor.into_children_with_handler(&mut handler);
     let (res, transition) = requester
         .request_transition(())
         .next()

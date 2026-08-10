@@ -26,17 +26,11 @@ where
 {
     type Error = Infallible;
 
-    async fn handle<Replier: crate::transport::ReplyHelper<Self, RootMethod>>(
+    async fn handle<Replier: crate::ReplyHelper<RootMethod, Self>>(
         &mut self,
         replier: Replier,
-        value: <Self as crate::Method>::Req,
-    ) -> Result<
-        <Replier as crate::transport::ReplyHelper<Self, RootMethod>>::Receipt<Self>,
-        crate::traits::HandleError<
-            <Replier as crate::transport::ReplyHelper<Self, RootMethod>>::Error,
-            <Self as crate::Handler<RootMethod, Self>>::Error,
-        >,
-    > {
+        value: crate::ReqOf<Self>,
+    ) -> crate::traits::HandlerResult<RootMethod, Self, Replier, Self::Error> {
         if let Some(sleep) = value.sleep {
             tokio::time::sleep(sleep).await;
         }

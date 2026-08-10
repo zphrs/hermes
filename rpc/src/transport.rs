@@ -84,7 +84,7 @@ pub(crate) trait ClientExt: Client {
     #[allow(unused)]
     fn handle_one_request_with_handler<
         'a,
-        Replier: ReplyHelper<Method, RootMethod> + 'a,
+        Replier: ReplyHelper<RootMethod, Method> + 'a,
         Method: crate::Method,
         RootMethod,
         Rh: crate::Handler<RootMethod, Method>,
@@ -96,7 +96,7 @@ pub(crate) trait ClientExt: Client {
     ) -> impl Future<
         Output = Result<
             Replier::Receipt<Method>,
-            HandleOneRequestError<<Replier as ReplyHelper<Method, RootMethod>>::Error, Rh::Error>,
+            HandleOneRequestError<<Replier as ReplyHelper<RootMethod, Method>>::Error, Rh::Error>,
         >,
     > + 'a
     where
@@ -138,7 +138,7 @@ pub(crate) trait ClientExt: Client {
         Output = Result<
             Method::Res,
             HandleOneRequestError<
-                <ImmediateReplier<Self::SendStream, Method> as ReplyHelper<Method, RootMethod>>::Error,
+                <ImmediateReplier<Self::SendStream, Method> as ReplyHelper<RootMethod, Method>>::Error,
                 Rh::Error,
             >,
         >,

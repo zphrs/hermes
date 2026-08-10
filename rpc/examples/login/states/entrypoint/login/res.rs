@@ -13,13 +13,13 @@ pub enum Error {
 
 impl Error {
     pub fn user_not_found<RootMethod>(
-        replier: &impl rpc::transport::ReplyHelper<super::Method, RootMethod>,
+        replier: &impl rpc::transport::ReplyHelper<RootMethod, super::Method>,
     ) -> Self {
         Self::UserNotFound(replier.new_wrapper())
     }
 
     pub fn password_incorrect<RootMethod>(
-        replier: &impl rpc::transport::ReplyHelper<super::Method, RootMethod>,
+        replier: &impl rpc::transport::ReplyHelper<RootMethod, super::Method>,
     ) -> Self {
         Self::PasswordIncorrect(replier.new_wrapper())
     }

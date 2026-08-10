@@ -25,11 +25,12 @@ impl<RootMethod: rpc::method::Ancestor<Method>> rpc::Handler<RootMethod> for Met
     // no reason not to reply & propagate error up to the processor Result.
     type Error = Infallible;
 
-    async fn handle<Replier: rpc::transport::ReplyHelper<Self, RootMethod>>(
+    fn handle<Replier: rpc::ReplyHelper<RootMethod, Self>>(
         &mut self,
         replier: Replier,
-        Req { username, password }: <Self as rpc::Method>::Req,
-    ) -> Result<Replier::Receipt<Self>, rpc::traits::HandleError<Replier::Error, Self::Error>> {
+        Req { username, password }: rpc::ReqOf<Self>,
+    ) -> impl Future<Output = rpc::traits::HandlerResult<RootMethod, Self, Replier, Self::Error>>
+    {
         match (username.as_str(), password.as_str()) {
             ("admin", "password") => {
                 let wrapper = replier.new_wrapper();
@@ -44,6 +45,5 @@ impl<RootMethod: rpc::method::Ancestor<Method>> rpc::Handler<RootMethod> for Met
                 replier.reply(user_not_found.into())
             }
         }
-        .await
     }
 }

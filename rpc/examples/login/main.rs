@@ -33,10 +33,11 @@ where
 {
     let entrypoint_cursor = MachineCursorClient::<states::Entrypoint, R>::new(conn);
 
+    let mut handler = not_applicable::Handler;
+
     // try to login with incorrect_username, password
     // will result in a UserNotFoundError
-    let (processor, requester) =
-        entrypoint_cursor.into_children_with_handler(not_applicable::Handler);
+    let (processor, requester) = entrypoint_cursor.into_children_with_handler(&mut handler);
     let (res, requester_transition) = login(requester, "incorrect_username", "password").await?;
     let res = res.expect_err("incorrect_username should result in a UserNotFound response");
     assert!(matches!(
@@ -49,8 +50,7 @@ where
 
     // try to login with "admin", "incorrect_password"
     // will result in a PasswordIncorrect error
-    let (processor, requester) =
-        entrypoint_cursor.into_children_with_handler(not_applicable::Handler);
+    let (processor, requester) = entrypoint_cursor.into_children_with_handler(&mut handler);
     let (res, requester_transition) = login(requester, "admin", "incorrect_password").await?;
 
     let res = res.expect_err("incorrect_password should result in a PasswordIncorrect response");
@@ -62,14 +62,12 @@ where
         .await?;
     // try to login with "admin", "password"
     // will result in a successful login
-    let (processor, requester) =
-        entrypoint_cursor.into_children_with_handler(not_applicable::Handler);
+    let (processor, requester) = entrypoint_cursor.into_children_with_handler(&mut handler);
     let (res, requester_transition) = login(requester, "admin", "password").await?;
     let res = res.expect("login should succeed");
     let logged_in_cursor = requester_transition.finish(processor, res).await?;
     // login succeeded
-    let (processor, requester) =
-        logged_in_cursor.into_children_with_handler(not_applicable::Handler);
+    let (processor, requester) = logged_in_cursor.into_children_with_handler(&mut handler);
 
     let requester_arc = Arc::new(requester);
 

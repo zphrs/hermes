@@ -67,12 +67,11 @@ pub mod ping {
     impl crate::Handler<super::RootHandler> for Method {
         type Error = Infallible;
 
-        async fn handle<Replier: crate::transport::ReplyHelper<Self, super::RootHandler>>(
+        async fn handle<Replier: crate::ReplyHelper<super::RootHandler, Self>>(
             &mut self,
             replier: Replier,
-            _value: <Self as crate::Method>::Req,
-        ) -> Result<Replier::Receipt<Self>, crate::traits::HandleError<Replier::Error, Self::Error>>
-        {
+            Request: crate::ReqOf<Self>,
+        ) -> crate::traits::HandlerResult<super::RootHandler, Self, Replier, Self::Error> {
             replier.reply(Response).await
         }
     }
@@ -118,13 +117,14 @@ pub mod other_ping {
     impl crate::Handler<super::RootHandler> for Method {
         type Error = std::convert::Infallible;
 
-        async fn handle<Replier: crate::transport::ReplyHelper<Self, super::RootHandler>>(
+        fn handle<Replier: crate::ReplyHelper<super::RootHandler, Self>>(
             &mut self,
             replier: Replier,
-            _value: <Self as crate::Method>::Req,
-        ) -> Result<Replier::Receipt<Self>, crate::traits::HandleError<Replier::Error, Self::Error>>
-        {
-            replier.reply(Response).await
+            Request: crate::ReqOf<Self>,
+        ) -> impl Future<
+            Output = crate::traits::HandlerResult<super::RootHandler, Self, Replier, Self::Error>,
+        > {
+            replier.reply(Response)
         }
     }
 }

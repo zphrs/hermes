@@ -276,12 +276,13 @@ impl<State, Role: crate::state::Role, Conn: crate::transport::Connection>
         }
     }
     pub async fn finish<
+        'h,
         NewState: crate::State,
         ProcessorMethod: crate::Method,
         H: Handler<ProcessorMethod, ProcessorMethod>,
     >(
         self,
-        processor: Processor<State, Role, ProcessorMethod, Conn, H>,
+        processor: Processor<'h, State, Role, ProcessorMethod, Conn, H>,
         wrapper: state::Wrapper<NewState>,
     ) -> Result<MachineCursor<NewState, Conn, Role>, CallerError<<Conn as crate::Caller>::Error>>
     where

@@ -137,7 +137,7 @@ impl<Sender: futures::AsyncWrite + Unpin> Future for FinalizeFuture<Sender> {
     }
 }
 
-impl<Method: crate::Method, RootMethod> ReplyHelper<Method, RootMethod> for DelayedReplier<Method> {
+impl<Method: crate::Method, RootMethod> ReplyHelper<RootMethod, Method> for DelayedReplier<Method> {
     type Error = minicbor::encode::Error<Infallible>;
     type Receipt<M: crate::Method> = DelayedReceipt<M>;
 

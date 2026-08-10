@@ -71,12 +71,13 @@ impl<
 impl<Fut> ProcessorSacrifice for EventualTransitionRequest<Fut> {}
 
 impl<
+    'h,
     State: crate::State,
     Role: crate::state::Role,
     RootMethod: crate::Method,
     Client: crate::transport::Client,
     H: crate::Handler<RootMethod, RootMethod>,
-> ProcessorSacrifice for Processor<State, Role, RootMethod, Client, H>
+> ProcessorSacrifice for Processor<'h, State, Role, RootMethod, Client, H>
 {
 }
 

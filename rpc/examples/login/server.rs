@@ -12,8 +12,9 @@ where
     loop {
         let logged_in_cursor = authenticate(entrypoint_cursor).await?;
 
-        let (processor, requester) =
-            logged_in_cursor.into_children_with_handler(states::logged_in::ServerMethod);
+        let mut handler = states::logged_in::ServerMethod;
+
+        let (processor, requester) = logged_in_cursor.into_children_with_handler(&mut handler);
 
         let (res, processor_transition) = processor
             .handle_requests(logged_in::ping::Method)
@@ -41,8 +42,8 @@ where
         Send + Sync + std::fmt::Debug + std::fmt::Display + 'static,
 {
     let logged_in_cursor = loop {
-        let (processor, requester) =
-            entrypoint_cursor.into_children_with_handler(states::entrypoint::login::Method);
+        let mut handler = states::entrypoint::login::Method;
+        let (processor, requester) = entrypoint_cursor.into_children_with_handler(&mut handler);
 
         let (res, processor_transition) = processor
             .handle_transition_request()

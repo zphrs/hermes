@@ -4,6 +4,7 @@ mod from_descendant;
 pub use from_descendant::FromDescendant;
 
 pub use ancestor::Ancestor;
+pub use ancestor::ancestors;
 
 use std::marker::PhantomData;
 
@@ -65,6 +66,9 @@ pub trait Method {
     type IsLeaf: is_leaf::IsLeaf;
 }
 
+pub type ReqOf<M> = <M as Method>::Req;
+pub type ResOf<M> = <M as Method>::Res;
+
 pub mod not_applicable {
     use crate::{method::is_leaf, traits::method::can_transition};
     use std::convert::Infallible;
@@ -106,18 +110,12 @@ pub mod not_applicable {
     impl<RootMethod> crate::Handler<RootMethod, Method> for Handler {
         type Error = Infallible;
 
-        async fn handle<Replier: crate::transport::ReplyHelper<Method, RootMethod>>(
+        async fn handle<Replier: crate::ReplyHelper<RootMethod, Method>>(
             &mut self,
             _replier: Replier,
-            _value: <Method as super::Method>::Req,
-        ) -> Result<
-            <Replier as crate::transport::ReplyHelper<Method, RootMethod>>::Receipt<Method>,
-            crate::traits::HandleError<
-                <Replier as crate::transport::ReplyHelper<Method, RootMethod>>::Error,
-                <Self as crate::Handler<RootMethod, Method>>::Error,
-            >,
-        > {
-            unimplemented!("no point in implementing since the request can't be constructed")
+            value: super::ReqOf<Method>,
+        ) -> crate::traits::HandlerResult<RootMethod, Method, Replier, Self::Error> {
+            match value {}
         }
     }
 }

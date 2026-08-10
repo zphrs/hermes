@@ -19,11 +19,12 @@ impl rpc::Method for Method {
 impl<RootMethod: rpc::method::Ancestor<Method>> rpc::Handler<RootMethod> for Method {
     type Error = Infallible;
 
-    async fn handle<Replier: rpc::transport::ReplyHelper<Self, RootMethod>>(
+    fn handle<Replier: rpc::ReplyHelper<RootMethod, Self>>(
         &mut self,
         replier: Replier,
-        _value: <Self as rpc::Method>::Req,
-    ) -> Result<Replier::Receipt<Self>, rpc::traits::HandleError<Replier::Error, Self::Error>> {
-        replier.reply(()).await
+        (): rpc::ReqOf<Self>,
+    ) -> impl Future<Output = rpc::traits::HandlerResult<RootMethod, Self, Replier, Self::Error>>
+    {
+        replier.reply(())
     }
 }

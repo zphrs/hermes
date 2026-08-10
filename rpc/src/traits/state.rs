@@ -45,15 +45,15 @@ pub trait ToQuery<Method: crate::traits::Method, Role: crate::traits::state::Rol
     fn to_query(&self, role: &Role) -> method::Wrapper<Method>;
 }
 
-pub struct Handle<Method: crate::traits::Method, Handler: traits::Handler<Method, Method>> {
+pub struct Handle<'h, Method: crate::traits::Method, Handler: traits::Handler<Method, Method>> {
     _marker: method::Wrapper<Method>,
-    handler: Handler,
+    handler: &'h mut Handler,
 }
 
-impl<Method: crate::traits::Method, Handler: traits::Handler<Method, Method>>
-    Handle<Method, Handler>
+impl<'h, Method: crate::traits::Method, Handler: traits::Handler<Method, Method>>
+    Handle<'h, Method, Handler>
 {
-    pub(crate) fn into_parts(self) -> (method::Wrapper<Method>, Handler) {
+    pub(crate) fn into_parts(self) -> (method::Wrapper<Method>, &'h mut Handler) {
         (self._marker, self.handler)
     }
 }
@@ -63,26 +63,37 @@ impl<Method: crate::traits::Method, Handler: traits::Handler<Method, Method>>
     reason = "role trait is private to force role to be either Server or Client"
 )]
 pub trait ToHandle<
+    'h,
     Method: crate::traits::Method,
     Role: crate::traits::state::Role,
     Handler: crate::traits::Handler<Method, Method>,
 >
 {
-    fn to_handle(&self, role: &Role, handler: Handler) -> Handle<Method, Handler>;
+    fn to_handle<'s>(
+        &'s self,
+        role: &Role,
+        handler: &'h mut Handler,
+    ) -> Handle<'h, Method, Handler>
+    where
+        'h: 's;
 }
 
 impl<
+    'h,
     State: crate::traits::State,
     Handler: crate::traits::Handler<State::ServerHandles, State::ServerHandles>,
-> ToHandle<State::ServerHandles, role::Server, Handler> for Wrapper<State>
+> ToHandle<'h, State::ServerHandles, role::Server, Handler> for Wrapper<State>
 where
     State::ServerHandles: method::Method,
 {
-    fn to_handle(
-        &self,
+    fn to_handle<'s>(
+        &'s self,
         role: &role::Server,
-        handler: Handler,
-    ) -> Handle<State::ServerHandles, Handler> {
+        handler: &'h mut Handler,
+    ) -> Handle<'h, State::ServerHandles, Handler>
+    where
+        'h: 's,
+    {
         let _ = role;
         Handle {
             _marker: method::Wrapper::new(),
@@ -92,17 +103,21 @@ where
 }
 
 impl<
+    'h,
     State: crate::traits::State,
     Handler: crate::traits::Handler<State::ClientHandles, State::ClientHandles>,
-> ToHandle<State::ClientHandles, role::Client, Handler> for Wrapper<State>
+> ToHandle<'h, State::ClientHandles, role::Client, Handler> for Wrapper<State>
 where
     State::ClientHandles: method::Method,
 {
-    fn to_handle(
-        &self,
+    fn to_handle<'s>(
+        &'s self,
         role: &role::Client,
-        handler: Handler,
-    ) -> Handle<State::ClientHandles, Handler> {
+        handler: &'h mut Handler,
+    ) -> Handle<'h, State::ClientHandles, Handler>
+    where
+        'h: 's,
+    {
         let _ = role;
         Handle {
             _marker: method::Wrapper::new(),

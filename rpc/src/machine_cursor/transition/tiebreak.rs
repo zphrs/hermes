@@ -1,5 +1,3 @@
-use std::convert::Infallible;
-
 use futures::select;
 use tracing::debug;
 
@@ -8,20 +6,17 @@ use crate::machine_cursor::processor::EventualTransitionRequest;
 use crate::machine_cursor::transition::requester::processor_sacrifice::ProcessorSacrifice;
 use crate::{
     CallerError, MachineCursor,
-    machine_cursor::{
-        TransitionRequestError,
-        transition::{
-            RequestTransition,
-            processor::{DelayedReplier, Entrypoint, FinalizeFuture, ProcessorTransition},
-            requester::{
-                AssertSacrificeError, RequesterTransition, ToSacrifice, TransitionReceipt,
-                assert_remote_sacrifice,
-            },
-            transition_request_method,
+    machine_cursor::transition::{
+        RequestTransition,
+        processor::{Entrypoint, FinalizeFuture, ProcessorTransition},
+        requester::{
+            AssertSacrificeError, RequesterTransition, ToSacrifice, TransitionReceipt,
+            assert_remote_sacrifice,
         },
+        transition_request_method,
     },
     state::{self, PrioritizedUnsafeExt},
-    transport::{ReplyHelper, ext::query_owned},
+    transport::ext::query_owned,
 };
 
 #[expect(private_bounds, reason = "for role")]
@@ -113,20 +108,13 @@ impl<Role: crate::state::Role, Conn: crate::transport::Connection>
 }
 
 #[derive(thiserror::Error)]
-pub enum TiebreakError<Conn: crate::transport::Connection, HandlerError> {
+pub enum TiebreakError<Conn: crate::transport::Connection, TError> {
     #[error("minicbor: {0}")]
-    Minicbor(#[from] minicbor_io::Error),
+    Minicbor(minicbor_io::Error),
     #[error("caller: {0}")]
-    Caller(#[from] CallerError<<Conn as crate::Caller>::Error>),
+    Caller(CallerError<<Conn as crate::Caller>::Error>),
     #[error("transition request error: {0}")]
-    TransitionRequest(
-        #[from]
-        TransitionRequestError<
-            <Conn as crate::transport::Client>::Error,
-            HandlerError,
-            minicbor::encode::Error<Infallible>,
-        >,
-    ),
+    TransitionRequest(#[from] TError),
 }
 
 impl<Conn: crate::transport::Connection, HandlerError: std::fmt::Debug> std::fmt::Debug
@@ -247,7 +235,7 @@ where
                 debug!("requester won");
                 let res = request_transition
                     .await
-                    .map_err(|e| CallerError::try_from(e).unwrap())?
+                    .map_err(|e| TiebreakError::Caller(CallerError::try_from(e).unwrap()))?
                     .1;
                 let (res, receipt) = res.extract_result();
                 let (in_transition, res) = res.into_parts();
@@ -273,18 +261,11 @@ pub async fn between_potential_processor_and_known_requester_transition<
     RootMethod: crate::Method,
     Role: crate::state::Role,
     Conn: crate::transport::Connection,
-    HError,
+    TError,
     ToProcessorTransition: Future<
         Output = Result<
             ProcessorTransition<super::processor::Entrypoint<State, ProcessorMethod, Role, Conn>>,
-            TransitionRequestError<
-                <Conn as crate::transport::Client>::Error,
-                HError,
-                <DelayedReplier<ProcessorMethod> as ReplyHelper<
-                    ProcessorMethod,
-                    ProcessorMethod,
-                >>::Error,
-            >,
+            TError,
         >,
     >,
 >(
@@ -295,11 +276,11 @@ pub async fn between_potential_processor_and_known_requester_transition<
     >,
 ) -> Result<
     TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
-    TiebreakError<Conn, HError>,
+    TiebreakError<Conn, TError>,
 >
 where
     <Conn as crate::transport::Client>::Error: std::fmt::Debug,
-    HError: std::fmt::Debug,
+    TError: std::fmt::Debug,
     TransitionMethod::Res: crate::RpcMessage,
     RootMethod::Req: crate::RpcMessage,
     <Conn as crate::Caller>::Error: std::fmt::Debug,
@@ -336,7 +317,7 @@ where
             Select::Processor(processor_transition)
         },
         tuple = request_transition => {
-            Select::Requester(tuple.map_err(|e| CallerError::try_from(e).unwrap())?)
+            Select::Requester(tuple.map_err(|e| TiebreakError::Caller(CallerError::try_from(e).unwrap()))?)
         },
     };
     let out = match result {
@@ -376,7 +357,7 @@ where
                     debug!("requester won tiebreak");
                     let (_root_req, receipt) = request_transition
                         .await
-                        .map_err(|e| CallerError::try_from(e).unwrap())?;
+                        .map_err(|e| TiebreakError::Caller(CallerError::try_from(e).unwrap()))?;
                     let (res, receipt) = receipt.extract_result();
                     let (in_tiebreak, res): (_, TransitionMethod::Res) = res.into_parts();
                     assert!(in_tiebreak);
@@ -422,6 +403,7 @@ where
                 })
             } else {
                 debug!("not in tiebreak");
+
                 TiebreakResult::RequesterWon(FinalizeRequesterTransition {
                     receipt,
                     to_sacrifice: to_processor_transition.sacrifice(),

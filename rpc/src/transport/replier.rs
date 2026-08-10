@@ -82,7 +82,7 @@ where
     }
 }
 
-pub trait ReplyHelper<Method: crate::Method, RootMethod>: Sized {
+pub trait ReplyHelper<RootMethod, Method: crate::Method>: Sized {
     type Error;
     type Receipt<M: crate::Method>;
 
@@ -129,7 +129,7 @@ pub trait ReplyHelper<Method: crate::Method, RootMethod>: Sized {
     }
 }
 
-impl<T, Method: crate::Method, RootMethod> ReplyHelper<Method, RootMethod>
+impl<T, RootMethod, Method: crate::Method> ReplyHelper<RootMethod, Method>
     for ImmediateReplier<T, Method>
 where
     T: AsyncWrite + Unpin,

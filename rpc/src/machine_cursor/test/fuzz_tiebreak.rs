@@ -26,7 +26,8 @@ async fn server(
     conn: in_memory_transport::Connection<u8>,
 ) -> FinalEndpoint<crate::state::role::Server> {
     let cursor = MachineCursorServer::<Entrypoint, _>::new(conn);
-    let (processor, requester) = cursor.into_children_with_handler(server::Method);
+    let mut handler = server::Method;
+    let (processor, requester) = cursor.into_children_with_handler(&mut handler);
     let mut to_processor_transition = processor.handle_transition_request();
 
     enum RequesterState {
@@ -154,7 +155,8 @@ async fn client(
     conn: in_memory_transport::Connection<u8>,
 ) -> FinalEndpoint<crate::state::role::Client> {
     let cursor = MachineCursorClient::<Entrypoint, _>::new(conn);
-    let (processor, requester) = cursor.into_children_with_handler(client::Method);
+    let mut handler = client::Method;
+    let (processor, requester) = cursor.into_children_with_handler(&mut handler);
     let mut to_processor_transition = processor.handle_transition_request();
 
     enum RequesterState {

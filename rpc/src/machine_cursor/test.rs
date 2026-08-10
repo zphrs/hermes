@@ -82,19 +82,12 @@ mod waitlist {
     impl<RootMethod: Ancestor<Join>> Handler<RootMethod> for Join {
         type Error = Infallible;
 
-        fn handle<Replier: crate::transport::ReplyHelper<Self, RootMethod>>(
+        fn handle<Replier: crate::ReplyHelper<RootMethod, Self>>(
             &mut self,
             replier: Replier,
-            _value: <Self as Method>::Req,
-        ) -> impl Future<
-            Output = Result<
-                <Replier as crate::transport::ReplyHelper<Self, RootMethod>>::Receipt<Self>,
-                crate::traits::HandleError<
-                    <Replier as crate::transport::ReplyHelper<Self, RootMethod>>::Error,
-                    <Self as Handler<RootMethod, Self>>::Error,
-                >,
-            >,
-        > {
+            (): crate::ReqOf<Self>,
+        ) -> impl Future<Output = crate::traits::HandlerResult<RootMethod, Self, Replier, Self::Error>>
+        {
             let res = replier.new_wrapper();
             replier.reply(res)
         }
@@ -201,7 +194,10 @@ async fn join() {
     js.spawn(async move {
         let host_stand_cursor = MachineCursorServer::<waitlist::HostStand, _>::new(server_conn);
 
-        let (processor, requester) = host_stand_cursor.into_children_with_handler(waitlist::Join);
+        let mut join_handler = waitlist::Join;
+
+        let (processor, requester) =
+            host_stand_cursor.into_children_with_handler(&mut join_handler);
         // wait for client to join waiting list
         let transition = processor
             .handle_transition_request()
@@ -219,8 +215,8 @@ async fn join() {
     js.spawn(async move {
         let host_stand_cursor = MachineCursorClient::<waitlist::HostStand, _>::new(client_conn);
         let waiting_list_cursor = {
-            let (processor, requester) =
-                host_stand_cursor.into_children_with_handler(not_applicable::Handler);
+            let mut handler = not_applicable::Handler;
+            let (processor, requester) = host_stand_cursor.into_children_with_handler(&mut handler);
             let (res, requester_transition) = requester
                 // prime a request to join the list
                 .request_transition::<waitlist::Join>(())
@@ -236,8 +232,9 @@ async fn join() {
             requester_transition.finish(processor, res).await.unwrap()
         };
 
-        let (_processor, _requester) =
-            waiting_list_cursor.into_children_with_handler(waitlist::TableOffer);
+        let mut handler = waitlist::TableOffer;
+
+        let (_processor, _requester) = waiting_list_cursor.into_children_with_handler(&mut handler);
         anyhow::Ok(())
     });
 
@@ -263,8 +260,8 @@ async fn test_tiebreak() {
         let mut host_stand_cursor = MachineCursorServer::<waitlist::HostStand, _>::new(conn);
         let _seated_cursor = loop {
             debug!("looping");
-            let (processor, requester) =
-                host_stand_cursor.into_children_with_handler(waitlist::Join);
+            let mut handler = waitlist::Join;
+            let (processor, requester) = host_stand_cursor.into_children_with_handler(&mut handler);
             // wait for client to join waiting list
             let transition = processor.handle_transition_request();
             let transition = transition.await.unwrap();
@@ -273,8 +270,8 @@ async fn test_tiebreak() {
             let waiting_list = transition.finish(res);
 
             debug!("transitioned to waitlist");
-
-            let (processor, requester) = waiting_list.into_children_with_handler(waitlist::Leave);
+            let mut handler = waitlist::Leave;
+            let (processor, requester) = waiting_list.into_children_with_handler(&mut handler);
 
             let wrapped_requester = Arc::new(Mutex::new(Some(requester)));
 
@@ -413,8 +410,9 @@ async fn test_tiebreak() {
             debug!("looping");
             let waiting_list_cursor = {
                 // join the list
+                let mut handler = not_applicable::Handler;
                 let (processor, requester) =
-                    host_stand_cursor.into_children_with_handler(not_applicable::Handler);
+                    host_stand_cursor.into_children_with_handler(&mut handler);
                 let requester_transition = requester.request_transition::<waitlist::Join>(());
                 let requester_transition = requester_transition.next().await.unwrap();
 
@@ -429,8 +427,9 @@ async fn test_tiebreak() {
             debug!("joined waitlist");
 
             const SHOULD_LEAVE: bool = false;
-
-            let (processor, requester) = waiting_list_cursor.into_children_with_handler(TableOffer);
+            let mut handler = TableOffer;
+            let (processor, requester) =
+                waiting_list_cursor.into_children_with_handler(&mut handler);
 
             if SHOULD_LEAVE {
                 tokio::time::sleep(Duration::from_millis(4)).await;

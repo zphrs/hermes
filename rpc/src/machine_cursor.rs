@@ -7,7 +7,7 @@
 //! all requests sent alongside how received messages are handled.
 
 // mod concurrent_request_handler;
-mod processor;
+pub mod processor;
 mod requester;
 
 #[cfg(test)]
@@ -94,14 +94,18 @@ where
         }
     }
     pub fn into_children_with_handler<
+        'h,
         Handler: traits::Handler<State::ClientHandles, State::ClientHandles>,
     >(
         self,
-        handler: Handler,
+        handler: &'h mut Handler,
     ) -> (
-        Processor<State, state::role::Client, State::ClientHandles, Connection, Handler>,
+        Processor<'h, State, state::role::Client, State::ClientHandles, Connection, Handler>,
         Requester<State, state::role::Client, State::ServerHandles, Connection>,
-    ) {
+    )
+    where
+        State: 'h,
+    {
         let handler = Processor::new(
             self.state_wrapper.duplicate(),
             state::role::Client,
@@ -129,14 +133,18 @@ where
         }
     }
     pub fn into_children_with_handler<
+        'h,
         Handler: traits::Handler<State::ServerHandles, State::ServerHandles>,
     >(
         self,
-        handler: Handler,
+        handler: &'h mut Handler,
     ) -> (
-        Processor<State, state::role::Server, State::ServerHandles, Connection, Handler>,
+        Processor<'h, State, state::role::Server, State::ServerHandles, Connection, Handler>,
         Requester<State, state::role::Server, State::ClientHandles, Connection>,
-    ) {
+    )
+    where
+        State: 'h,
+    {
         let handler = Processor::new(
             self.state_wrapper.duplicate(),
             state::role::Server,

@@ -3,7 +3,7 @@ use std::ops::Deref;
 use maxlen::MaxLen;
 use minicbor::{self, CborLen};
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 pub struct MaxSizedString<const N: usize>(String);
 
 impl<const N: usize> MaxSizedString<N> {

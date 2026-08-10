@@ -16,23 +16,17 @@ impl crate::Method for Method {
     type IsLeaf = is_leaf::True;
 }
 
-impl<RootMethod> crate::Handler<RootMethod> for Method
+impl<RM> crate::Handler<RM> for Method
 where
-    Method: crate::method::ancestor::Leaf<RootMethod>,
+    Method: crate::method::ancestor::Leaf<RM>,
 {
     type Error = Infallible;
 
-    async fn handle<Replier: crate::transport::ReplyHelper<Self, RootMethod>>(
+    async fn handle<Replier: crate::ReplyHelper<RM, Self>>(
         &mut self,
         replier: Replier,
-        value: <Self as crate::Method>::Req,
-    ) -> Result<
-        <Replier as crate::transport::ReplyHelper<Self, RootMethod>>::Receipt<Self>,
-        crate::traits::HandleError<
-            <Replier as crate::transport::ReplyHelper<Self, RootMethod>>::Error,
-            <Self as crate::Handler<RootMethod, Self>>::Error,
-        >,
-    > {
+        value: crate::ReqOf<Self>,
+    ) -> crate::traits::HandlerResult<RM, Self, Replier, Self::Error> {
         if let Some(sleep) = value.sleep {
             tokio::time::sleep(sleep).await;
         }

@@ -88,7 +88,7 @@ where
                         Ok(Some(out)) => Ok(out),
                         Ok(None) => Err(CallerError::Closed),
                     };
-                    debug!("received message");
+                    debug!("received response");
                     return Poll::Ready(out);
                 }
             };

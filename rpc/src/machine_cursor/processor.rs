@@ -34,7 +34,7 @@ use super::transition::processor::DelayedReplier;
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-pub struct Processor<State, Role, RootMethod, Client, H>
+pub struct Processor<'h, State, Role, RootMethod, Client, H>
 where
     State: traits::State,
     Role: state::Role,
@@ -43,7 +43,7 @@ where
     H: traits::Handler<RootMethod, RootMethod>,
 {
     _state: traits::state::Wrapper<State>,
-    handler: H,
+    handler: &'h mut H,
     _root_method: method::Wrapper<RootMethod>,
     role: Role,
     client: Client,
@@ -79,6 +79,7 @@ impl<Fut: Future> Future for EventualTransitionRequest<Fut> {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         let out = self.fut.as_mut().poll(cx);
+        trace!("polled EventualTransitionRequest");
 
         if out.is_ready() {
             self.done = true;
@@ -114,7 +115,7 @@ pub enum MultipleRequestsError<ClientError, LoopbackHandlerError, RootHandlerErr
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-impl<State, Role, RootMethod, Client, H> Processor<State, Role, RootMethod, Client, H>
+impl<'h, State, Role, RootMethod, Client, H> Processor<'h, State, Role, RootMethod, Client, H>
 where
     State: traits::State,
     Role: state::Role,
@@ -122,10 +123,12 @@ where
     RootMethod: crate::Method,
     H: traits::Handler<RootMethod, RootMethod>,
 {
-    pub fn new<Wrapper: ToHandle<RootMethod, Role, H> + Into<traits::state::Wrapper<State>>>(
+    pub fn new<
+        Wrapper: ToHandle<'h, RootMethod, Role, H> + Into<traits::state::Wrapper<State>> + 'h,
+    >(
         state_wrapper: Wrapper,
         role: Role,
-        handler: H,
+        handler: &'h mut H,
         conn: Client,
     ) -> Self {
         let (root_method, handler) = state_wrapper.to_handle(&role, handler).into_parts();
@@ -242,7 +245,7 @@ where
                 >,
                 MultipleRequestsError<Client::Error, LoopbackHandler::Error, H::Error>,
             >,
-        >,
+        > + use<'h, LoopbackMethod, LoopbackHandler, State, Role, RootMethod, Client, H>,
     >
     where
         RootMethod::Req: crate::RpcMessage,
@@ -256,7 +259,7 @@ where
         let fut = async move {
             let Self {
                 _state: state,
-                mut handler,
+                handler,
                 _root_method,
                 role,
                 client,
@@ -266,6 +269,7 @@ where
             let (root, stream) = loop {
                 select! {
                     maybe_stream = client.accept_stream().fuse() => {
+                        trace!("accepted stream");
                         let mut stream = maybe_stream.map_err(MultipleRequestsError::Client)?;
                         let handler = loopback_handler.clone();
 
@@ -296,6 +300,8 @@ where
                                             ErrorKind::ConnectionAborted.into(),
                                         )));
                                     };
+                                    trace!("received request");
+
                                     let out = match handler.handle(write, root).await {
                                         Ok(v) => v,
                                         Err(traits::HandleError::Handler(e)) => {
@@ -305,6 +311,7 @@ where
                                             return Err(HandleOneRequestError::Replier(e));
                                         }
                                     };
+                                    trace!("handled request");
                                     Ok(out)
                                 }
                             }
@@ -371,7 +378,7 @@ where
             }
             debug_assert!(js.is_empty());
             drop(js);
-            let mut with_priority = WithPriority::new(&mut handler, role, state);
+            let mut with_priority = WithPriority::new(handler, role, state);
             let replier = DelayedReplier::new();
             let receipt = with_priority.handle(replier, root).await?;
             let (priority, state) = with_priority

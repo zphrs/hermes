@@ -20,3 +20,31 @@ impl<RootMethod: Ancestor<T>, T: crate::Method<IsLeaf = super::is_leaf::False> +
     Branch<RootMethod> for T
 {
 }
+
+pub mod ancestors {
+    macro_rules! define_ancestors {
+        ($name:ident; $($t:ident),+) => {
+            pub trait $name<$($t: crate::Method),+>: $(super::Ancestor<$t> +)+ {}
+
+            impl<RootMethod, $($t: crate::Method),+> $name<$($t),+> for RootMethod
+            where
+                RootMethod: $(super::Ancestor<$t> +)+
+            {}
+        };
+    }
+
+    define_ancestors!(One; A);
+    define_ancestors!(Two; A, B);
+    define_ancestors!(Three; A, B, C);
+    define_ancestors!(Four; A, B, C, D);
+    define_ancestors!(Five; A, B, C, D, E);
+    define_ancestors!(Six; A, B, C, D, E, F);
+    define_ancestors!(Seven; A, B, C, D, E, F, G);
+    define_ancestors!(Eight; A, B, C, D, E, F, G, H);
+    define_ancestors!(Sixteen; A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q);
+    define_ancestors!(ThrityTwo; A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+        AA, AB, AC, AD, AE, AF, AG);
+    define_ancestors!(SixtyFour; A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+        AA, AB, AC, AD, AE, AF, AG, AH, AI, AJ, AK, AL, AM, AN, AO, AP, AQ, AR, AS, AT, AU, AV, AW, AX, AY, AZ,
+        BA, BB, BC, BD, BE, BF, BG, BH, BI, BJ, BK, BL);
+}
