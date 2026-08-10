@@ -13,7 +13,6 @@ pub use conn::Connection;
 pub use caller::{Caller, CallerExt};
 
 use maxlen::MaxLen;
-use minicbor_io::AsyncWriter;
 
 pub use bi_stream::BiStream;
 pub use replier::{ImmediateReplier, ReplyHelper, ReplyReceipt};
@@ -77,8 +76,12 @@ pub trait Client: BiStream {
     type AcceptStreamFut: ::core::future::Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>>
         + Unpin;
     fn accept_stream(&self) -> Self::AcceptStreamFut;
+}
+
+pub(crate) trait ClientExt: Client {
     // uses an associated type to make it obvious that self is not captured in the
     // returned future.
+    #[allow(unused)]
     fn handle_one_request_with_handler<
         'a,
         Replier: ReplyHelper<Method, RootMethod> + 'a,
@@ -126,7 +129,7 @@ pub trait Client: BiStream {
             Ok(out)
         }
     }
-
+    #[allow(unused)]
     fn handle_one_request<'b, 'a, Method: crate::Method + 'a, Rh: crate::Handler<RootMethod, Method>, RootMethod>(
         &'b self,
         stream: &'a mut (Self::SendStream, Self::RecvStream),
@@ -178,17 +181,9 @@ pub trait Client: BiStream {
             Ok(root)
         }
     }
-
-    fn reply<T: futures::AsyncWrite + Unpin, TransportError, M: crate::Method>(
-        sender: &mut AsyncWriter<T>,
-        res: M::Res,
-    ) -> impl Future<Output = Result<ReplyReceipt<M>, minicbor_io::Error>>
-    where
-        M::Res: minicbor::Encode<()>,
-    {
-        async move { sender.write(&res).await.map(|_| ReplyReceipt::new(res)) }
-    }
 }
+
+impl<T: Client> ClientExt for T {}
 
 pub trait Transport {
     /// how to dial a server, e.x. a SocketAddr

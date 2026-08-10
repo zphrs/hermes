@@ -7,7 +7,7 @@ use crate::{
     in_memory_transport::{self, MemoryTransport},
     method::Ancestor,
     traits::method::{can_transition::False, is_leaf},
-    transport::{self, CallerExt as _, Client, Incoming},
+    transport::{self, CallerExt as _, Client, ClientExt as _, Incoming},
 };
 
 #[derive(
@@ -139,13 +139,13 @@ impl crate::method::FromDescendant<ping::Method> for RootHandler {
     }
 
     fn from_descendant_res(
-        result: <ping::Method as crate::Method>::Res,
+        _result: <ping::Method as crate::Method>::Res,
     ) -> <Self as crate::Method>::Res {
         unimplemented!()
     }
 
     fn try_into_descendant_req(
-        request: Self::Req,
+        _request: Self::Req,
     ) -> Result<<ping::Method as crate::Method>::Req, Self::Req> {
         unimplemented!()
     }
