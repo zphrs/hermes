@@ -8,6 +8,7 @@ pub struct ConnPair {
     pub client_conn: in_memory_transport::Connection<u8>,
 }
 
+#[inline(never)]
 pub async fn setup_conn(
     server_address: u8,
     client_address: u8,

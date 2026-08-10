@@ -80,7 +80,7 @@ where
     type Address = Address;
     type Error = Infallible;
     type Caller = Connection<Address>;
-
+    #[inline(never)]
     fn connect(
         &self,
         to: &Self::Address,
@@ -152,7 +152,7 @@ impl<Address> crate::transport::BiStream for Connection<Address> {
 impl<Address> crate::transport::Client for Connection<Address> {
     type Error = std::io::Error;
     type AcceptStreamFut = AcceptStreamFut;
-
+    #[inline(never)]
     fn accept_stream(&self) -> AcceptStreamFut {
         AcceptStreamFut {
             state: AcceptStreamFutState::Locking(self.stream_rx.clone()),
@@ -172,7 +172,7 @@ enum AcceptStreamFutState {
 
 impl Future for AcceptStreamFut {
     type Output = Result<(SendStream, RecvStream), std::io::Error>;
-
+    #[inline(never)]
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -250,7 +250,7 @@ impl Future for OpenStreamFut {
 impl<Address> crate::transport::Caller for Connection<Address> {
     type Error = Infallible;
     type OpenStreamFut = OpenStreamFut;
-
+    #[inline(never)]
     fn open_stream(&self) -> OpenStreamFut {
         OpenStreamFut::new(self.stream_tx.clone())
     }
@@ -262,6 +262,7 @@ pub struct RecvStream {
 }
 
 impl AsyncRead for RecvStream {
+    #[inline(never)]
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -290,6 +291,7 @@ pub struct SendStream {
 }
 
 impl futures::AsyncWrite for SendStream {
+    #[inline(never)]
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
@@ -302,14 +304,14 @@ impl futures::AsyncWrite for SendStream {
             Poll::Ready(Ok(buf.len()))
         }
     }
-
+    #[inline(never)]
     fn poll_flush(
         self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<std::io::Result<()>> {
         Poll::Ready(Ok(()))
     }
-
+    #[inline(never)]
     fn poll_close(
         self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
@@ -331,6 +333,7 @@ impl<Address> crate::transport::Incoming for Incoming<Address> {
     type Client = Connection<Address>;
     type Error = std::io::Error;
 
+    #[inline(never)]
     async fn accept(self) -> Result<Self::Client, Self::Error> {
         let (remote_addr, stream_rx, stream_tx) = self
             .rx
