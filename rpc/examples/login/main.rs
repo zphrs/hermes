@@ -160,5 +160,8 @@ async fn main() {
         panic!()
     }
 
-    server_jh.abort();
+    server_jh
+        .await
+        .unwrap()
+        .expect_err("server should have errored out");
 }
