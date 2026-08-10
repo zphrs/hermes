@@ -79,17 +79,6 @@ pub enum RootReq {
     Ping(#[n(0)] <ping::Method as rpc::Method>::Req),
 }
 
-impl TryFrom<RootReq> for ping::Req {
-    type Error = RootReq;
-
-    fn try_from(value: RootReq) -> Result<Self, Self::Error> {
-        match value {
-            RootReq::Ping(req) => Ok(req),
-            other => Err(other),
-        }
-    }
-}
-
 pub enum RootRes {
     Logout(<logout::Method as rpc::Method>::Res),
     Ping(<ping::Method as rpc::Method>::Res),

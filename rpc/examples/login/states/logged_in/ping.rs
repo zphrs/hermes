@@ -2,17 +2,14 @@ use std::convert::Infallible;
 
 use rpc::method::{can_transition, is_leaf};
 
-pub type Req = ();
-pub type Res = ();
-
 /// Ping Method
 #[derive(Clone, Copy)]
 pub struct Method;
 
 impl rpc::Method for Method {
-    type Req = Req;
+    type Req = ();
 
-    type Res = Res;
+    type Res = ();
 
     type CanTransition = can_transition::False;
 
