@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use crate::{
     CallerError,
     machine_cursor::transition::{RequestTransition, requester::RequesterTransition},
-    method::{ancestor::Leaf, is_leaf},
+    method::{FromDescendant, ancestor::Leaf, is_leaf},
     traits::{
         method::{self, CanTransition, Loopback},
         state::{self, ToQuery},
@@ -70,10 +70,11 @@ where
         req: M::Req,
     ) -> Result<M::Res, CallerError<Caller::Error>>
     where
-        RootMethod::Req: crate::RpcMessage + From<M::Req>,
+        RootMethod::Req: crate::RpcMessage,
         M::Res: crate::RpcMessage,
+        RootMethod: FromDescendant<M>,
     {
-        let res = self.caller.query::<M, RootMethod::Req>(req).await?;
+        let res = self.caller.query::<M, RootMethod>(req).await?;
 
         Ok(res)
     }

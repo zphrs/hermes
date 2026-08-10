@@ -154,7 +154,7 @@ async fn client(
     conn: in_memory_transport::Connection<u8>,
 ) -> FinalEndpoint<crate::state::role::Client> {
     let cursor = MachineCursorClient::<Entrypoint, _>::new(conn);
-    let (processor, requester) = cursor.into_parts(client::Method);
+    let (processor, requester) = cursor.into_children_with_handler(client::Method);
     let mut to_processor_transition = processor.handle_transition_request();
 
     enum RequesterState {

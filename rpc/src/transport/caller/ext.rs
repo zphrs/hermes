@@ -4,23 +4,24 @@ pub mod query_owned;
 use tracing::debug;
 
 use crate::{
-    Caller, CallerError, Method, RpcMessage, method::is_leaf,
-    traits::method::not_applicable::NotApplicable, transport::BiStream,
+    Caller, CallerError, Method, RpcMessage,
+    method::{FromDescendant, is_leaf},
+    traits::method::not_applicable::NotApplicable,
+    transport::BiStream,
 };
 
 pub use query::PendingQuery;
 pub use query_owned::PendingQueryOwned;
 
 pub trait CallerExt: Caller {
-    fn query<M: Method<IsLeaf = is_leaf::True>, RootReq: RpcMessage>(
+    fn query<M: Method<IsLeaf = is_leaf::True>, RootMethod: FromDescendant<M>>(
         &self,
         req: M::Req,
-    ) -> PendingQuery<Self, M, RootReq>
+    ) -> PendingQuery<Self, M, RootMethod::Req>
     where
-        RootReq: From<M::Req>,
         M::Res: RpcMessage,
     {
-        PendingQuery::<Self, M, RootReq>::new(self, req)
+        PendingQuery::<Self, M, RootMethod::Req>::new(self, RootMethod::from_descendant_req(req))
     }
 
     fn query_owned<

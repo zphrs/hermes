@@ -28,11 +28,8 @@ pub struct PendingQuery<C: Caller, M: crate::Method, RootReq> {
     _marker: PhantomData<M>,
 }
 
-impl<C: Caller, M: crate::Method, RootReq> PendingQuery<C, M, RootReq>
-where
-    RootReq: From<M::Req>,
-{
-    pub fn new(caller: &C, req: M::Req) -> Self {
+impl<C: Caller, M: crate::Method, RootReq> PendingQuery<C, M, RootReq> {
+    pub fn new(caller: &C, req: RootReq) -> Self {
         let stream_fut = caller.open_stream();
         Self {
             req: req.into(),

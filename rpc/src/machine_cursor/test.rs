@@ -219,7 +219,8 @@ async fn join() {
     js.spawn(async move {
         let host_stand_cursor = MachineCursorClient::<waitlist::HostStand, _>::new(client_conn);
         let waiting_list_cursor = {
-            let (processor, requester) = host_stand_cursor.into_parts(not_applicable::Handler);
+            let (processor, requester) =
+                host_stand_cursor.into_children_with_handler(not_applicable::Handler);
             let (res, requester_transition) = requester
                 // prime a request to join the list
                 .request_transition::<waitlist::Join>(())
@@ -235,7 +236,8 @@ async fn join() {
             requester_transition.finish(processor, res).await.unwrap()
         };
 
-        let (_processor, _requester) = waiting_list_cursor.into_parts(waitlist::TableOffer);
+        let (_processor, _requester) =
+            waiting_list_cursor.into_children_with_handler(waitlist::TableOffer);
         anyhow::Ok(())
     });
 
@@ -411,7 +413,8 @@ async fn test_tiebreak() {
             debug!("looping");
             let waiting_list_cursor = {
                 // join the list
-                let (processor, requester) = host_stand_cursor.into_parts(not_applicable::Handler);
+                let (processor, requester) =
+                    host_stand_cursor.into_children_with_handler(not_applicable::Handler);
                 let requester_transition = requester.request_transition::<waitlist::Join>(());
                 let requester_transition = requester_transition.next().await.unwrap();
 
@@ -427,7 +430,7 @@ async fn test_tiebreak() {
 
             const SHOULD_LEAVE: bool = false;
 
-            let (processor, requester) = waiting_list_cursor.into_parts(TableOffer);
+            let (processor, requester) = waiting_list_cursor.into_children_with_handler(TableOffer);
 
             if SHOULD_LEAVE {
                 tokio::time::sleep(Duration::from_millis(4)).await;

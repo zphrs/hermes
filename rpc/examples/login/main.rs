@@ -35,7 +35,8 @@ where
 
     // try to login with incorrect_username, password
     // will result in a UserNotFoundError
-    let (processor, requester) = entrypoint_cursor.into_parts(not_applicable::Handler);
+    let (processor, requester) =
+        entrypoint_cursor.into_children_with_handler(not_applicable::Handler);
     let (res, requester_transition) = login(requester, "incorrect_username", "password").await?;
     let res = res.expect_err("incorrect_username should result in a UserNotFound response");
     assert!(matches!(
@@ -48,7 +49,8 @@ where
 
     // try to login with "admin", "incorrect_password"
     // will result in a PasswordIncorrect error
-    let (processor, requester) = entrypoint_cursor.into_parts(not_applicable::Handler);
+    let (processor, requester) =
+        entrypoint_cursor.into_children_with_handler(not_applicable::Handler);
     let (res, requester_transition) = login(requester, "admin", "incorrect_password").await?;
 
     let res = res.expect_err("incorrect_password should result in a PasswordIncorrect response");
@@ -60,14 +62,40 @@ where
         .await?;
     // try to login with "admin", "password"
     // will result in a successful login
-    let (processor, requester) = entrypoint_cursor.into_parts(not_applicable::Handler);
+    let (processor, requester) =
+        entrypoint_cursor.into_children_with_handler(not_applicable::Handler);
     let (res, requester_transition) = login(requester, "admin", "password").await?;
     let res = res.expect("login should succeed");
     let logged_in_cursor = requester_transition.finish(processor, res).await?;
     // login succeeded
-    let (processor, requester) = logged_in_cursor.into_parts(not_applicable::Handler);
+    let (processor, requester) =
+        logged_in_cursor.into_children_with_handler(not_applicable::Handler);
 
-    let (res, transition) = requester
+    let requester_arc = Arc::new(requester);
+
+    let requester = requester_arc.clone();
+
+    let jh1 = tokio::spawn(async move {
+        requester
+            .request_loopback::<states::logged_in::ping::Method>(())
+            .await
+    });
+
+    let requester = requester_arc.clone();
+    let jh2 = tokio::spawn(async move {
+        requester
+            .request_loopback::<states::logged_in::ping::Method>(())
+            .await
+    });
+
+    jh1.await.unwrap()?;
+    jh2.await.unwrap()?;
+
+    let (res, transition) = Arc::try_unwrap(requester_arc)
+        .ok()
+        .expect(
+            "since req1 and req2 are awaited above, there is only the requester_arc reference left",
+        )
         .request_transition::<logged_in::logout::Method>(())
         .next()
         .await?

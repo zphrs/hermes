@@ -90,7 +90,7 @@ impl<Fut: Future> Future for EventualTransitionRequest<Fut> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransitionRequestError<ClientError, HandlerError, ReplierError> {
-    #[error("Inner client error: {0}")]
+    #[error("inner client error: {0}")]
     Client(ClientError),
     #[error("from request handler: {0}")]
     Handler(#[from] traits::HandleError<Infallible, HandlerError>),
@@ -102,7 +102,7 @@ pub enum TransitionRequestError<ClientError, HandlerError, ReplierError> {
 pub enum MultipleRequestsError<ClientError, LoopbackHandlerError, RootHandlerError> {
     #[error("client sent multiple requests that could transition at the same time")]
     MultipleActivePotentialTransitions(),
-    #[error("Inner client error: {0}")]
+    #[error("inner client error: {0}")]
     Client(ClientError),
     #[error("handle one request error: {0}")]
     HandleOneRequest(#[from] HandleOneRequestError<minicbor_io::Error, LoopbackHandlerError>),

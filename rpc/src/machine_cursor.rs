@@ -93,7 +93,9 @@ where
             _role: state::role::Client,
         }
     }
-    pub fn into_parts<Handler: traits::Handler<State::ClientHandles, State::ClientHandles>>(
+    pub fn into_children_with_handler<
+        Handler: traits::Handler<State::ClientHandles, State::ClientHandles>,
+    >(
         self,
         handler: Handler,
     ) -> (

@@ -131,6 +131,26 @@ pub mod other_ping {
 
 struct RootHandler;
 
+impl crate::method::FromDescendant<ping::Method> for RootHandler {
+    fn from_descendant_req(
+        request: <ping::Method as crate::Method>::Req,
+    ) -> <Self as crate::Method>::Req {
+        Root::Ping(request)
+    }
+
+    fn from_descendant_res(
+        result: <ping::Method as crate::Method>::Res,
+    ) -> <Self as crate::Method>::Res {
+        unimplemented!()
+    }
+
+    fn try_into_descendant_req(
+        request: Self::Req,
+    ) -> Result<<ping::Method as crate::Method>::Req, Self::Req> {
+        unimplemented!()
+    }
+}
+
 impl crate::Method for RootHandler {
     type Req = Root;
 
@@ -199,7 +219,7 @@ async fn test() {
         let tp = MemoryTransport::new(network, 2u64);
         let conn = tp.connect(&server_addr).await.unwrap();
         let _res = conn
-            .query::<ping::Method, Root>(ping::Request)
+            .query::<ping::Method, RootHandler>(ping::Request)
             .await
             .unwrap();
     });
