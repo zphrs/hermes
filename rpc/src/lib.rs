@@ -1,3 +1,4 @@
+#![warn(clippy::all, clippy::pedantic)]
 use std::fmt::Debug;
 
 pub mod machine_cursor;

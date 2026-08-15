@@ -3,7 +3,7 @@
 //!
 //! # Overview
 //!
-//! This crate provides a derive macro for the [`MaxLen`](maxlen::MaxLen) trait from the `maxlen` crate.
+//! This crate provides a derive macro for the [`MaxLen`] trait from the `maxlen` crate.
 //! The trait creates instances with the maximum possible CBOR encoding size. This is useful for:
 //!
 //! - Pre-allocating buffers for CBOR encoding

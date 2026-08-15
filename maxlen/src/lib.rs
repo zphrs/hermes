@@ -54,7 +54,6 @@ use std::{
     borrow::Cow,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     time::{Duration, SystemTime},
-    usize,
 };
 
 use minicbor::CborLen;
@@ -134,9 +133,9 @@ where
 
 // Standard library implementations
 
-/// MaxLen implementation for Option<T>.
+/// MaxLen implementation for `Option<T>`.
 ///
-/// Always returns Some(T::biggest_instantiation()) as that produces the largest encoding.
+/// Always returns `Some(T::biggest_instantiation())` as that produces the largest encoding.
 impl<T: MaxLen> MaxLen for Option<T> {
     fn biggest_instantiation() -> Self {
         Some(T::biggest_instantiation())

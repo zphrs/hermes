@@ -45,7 +45,7 @@ impl<const N: usize> MaxLen for MaxSizedString<N> {
     fn biggest_instantiation() -> Self {
         Self(
             // SAFETY: an array of tilde ASCII characters is valid UTF-8
-            unsafe { String::from_utf8_unchecked((0..N).into_iter().map(|_| b'~').collect()) },
+            unsafe { String::from_utf8_unchecked((0..N).map(|_| b'~').collect()) },
         )
     }
 }

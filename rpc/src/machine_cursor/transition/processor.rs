@@ -13,7 +13,7 @@
 pub(self) mod delayed_replier;
 mod incoming_transition_request;
 pub(super) use delayed_replier::FinalizeFuture;
-pub use incoming_transition_request::PendingTransitionReceipt;
+pub(crate) use incoming_transition_request::PendingTransitionReceipt;
 
 pub use delayed_replier::{DelayedReceipt, DelayedReplier};
 
@@ -120,7 +120,7 @@ impl<
     Conn: crate::transport::Client,
 > ProcessorTransition<Entrypoint<State, ProcessorMethod, Role, Conn>>
 {
-    pub fn new(
+    pub(crate) fn new(
         incoming_transition_receipt: PendingTransitionReceipt<State, ProcessorMethod, Role, Conn>,
     ) -> Self {
         ProcessorTransition {

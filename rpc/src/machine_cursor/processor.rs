@@ -136,7 +136,7 @@ where
             _state: state_wrapper.into(),
             handler,
             _root_method: root_method,
-            role: role,
+            role,
             client: conn,
         }
     }

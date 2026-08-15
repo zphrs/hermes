@@ -12,7 +12,7 @@ pub mod can_transition {
     //! Marker for a given method to declare whether or not the method might
     //! result in a transition or not. Primarily used by
     //! [`State`](crate::traits::State) and the
-    //! [`MachineWalker`](crate::MachineWalker) to determine which
+    //! [`MachineCursor`](crate::MachineCursor) to determine which
     //! [`Method`](super::Method)s can be passed into various transitioning and
     //! non-transitioning functions.
 

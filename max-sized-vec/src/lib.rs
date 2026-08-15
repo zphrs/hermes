@@ -34,7 +34,7 @@ impl<C, T: CborLen<C>, const N: usize> CborLen<C> for MaxSizedVec<T, N> {
 impl<T: CborLen<()> + MaxLen, const N: usize> MaxLen for MaxSizedVec<T, N> {
     fn biggest_instantiation() -> Self {
         Self(ArrayVec::from_iter(
-            (0..N).into_iter().map(|_| T::biggest_instantiation()),
+            (0..N).map(|_| T::biggest_instantiation()),
         ))
     }
 }

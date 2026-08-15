@@ -17,17 +17,18 @@ use crate::{
     },
 };
 
-/// Returned when you call [`reply`](Call::reply) on a [Method] that implements
-/// [Call].
+/// Returned when you call [`reply`](ReplyHelper::reply) within a
+/// [Handler](crate::Handler) implementation.
 ///
-/// Used to enforce calling [`reply`](Call::reply) at some point within the
-/// [`handle`](RootHandler::handle) function as all possible request types
+/// Used to enforce calling [`reply`](ReplyHelper::reply) at some point within the
+/// [`handle`](crate::Handler::handle) function as all possible request types
 /// should be replied to.
-// Can only construct within the transport module
+//
+// Can only construct within the transport module.
 pub struct ReplyReceipt<M: crate::Method>(method::Wrapper<M>, pub(super) M::Res);
 
 impl<M: crate::Method> ReplyReceipt<M> {
-    pub(crate) fn new(t: M::Res) -> Self {
+    pub(super) fn new(t: M::Res) -> Self {
         Self(method::Wrapper::new(), t)
     }
 

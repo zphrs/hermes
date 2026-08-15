@@ -13,6 +13,10 @@ pub type HandlerResult<RootMethod, Method, Replier, Error> = Result<
     HandleError<<Replier as crate::ReplyHelper<RootMethod, Method>>::Error, Error>,
 >;
 
+/// Marks a struct as capable of handling a given [`Method`](crate::Method).
+///
+/// For example, a key-value store might have a struct containing a map that
+/// can handle Get and Put [`Method`](crate::Method)s.
 pub trait Handler<RM, Method: crate::Method = Self> {
     /// used to abort a reply midway through handling a request
     type Error;

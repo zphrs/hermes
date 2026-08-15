@@ -1,6 +1,7 @@
 //! Defines the [`Prioritized`] trait (alongside the [`Priority`] helper trait)
 //! that is used to tiebreak between concurrent server and client state machine
-//! transitions. See [`MachineCursor`] for where [`Prioritized`] is required.
+//! transitions. See [`MachineCursor`](crate::MachineCursor) for where
+//! [`Prioritized`] is required.
 //!
 //! To better illustrate why a Priority is necessary, consider the following
 //! execution where the possible states are A, B, and C, A is the entrypoint
@@ -41,8 +42,8 @@ pub use r#enum::Priority::{Client, Server};
 /// made concurrently by both the client and the server.
 ///
 /// To avoid undefined behavior where the Client and the Server end up
-/// out-of-sync with one another, any implementation MUST have [`choose`] be
-/// deterministic.
+/// out-of-sync with one another, any implementation MUST have
+/// [`choose`](Priority::choose) be deterministic.
 ///
 /// # Comparison with [`PartialOrd`]/[`Ord`]
 ///
@@ -53,6 +54,8 @@ pub trait Priority<State: crate::traits::State>: Sized {
     /// Either returns [`Client`] or [`Server`], depending on which request
     /// should be kept and which should be discarded. Used to tiebreak between
     /// two transitioning requests that are pending simultaneously.
+    ///
+    /// Any implementation MUST be deterministic.
     ///
     /// # Default Implementation
     ///
@@ -72,8 +75,8 @@ pub trait Priority<State: crate::traits::State>: Sized {
 /// [`Priority`](Prioritized::Priority) be deterministic.
 ///
 /// Super-trait of [`State`] because any [`State`] should only have one possible
-/// way to prioritize between its associated [`Client`](State::ClientMethod) and
-/// [`Server`](State::ServerMethod) methods.
+/// way to prioritize between its associated [`Client`](State::ClientHandles) and
+/// [`Server`](State::ServerHandles) methods.
 pub trait Prioritized: State + Sized {
     /// The type used to prioritize one transition request over another.
     type Priority: Priority<Self>;

@@ -1,10 +1,10 @@
 //! Walks the state machine starting at a given entrypoint
 //! [`State`](crate::traits::State)s. Correct usage of a walker requires
-//! wrapping a [Connection](crate::transport::Connection) immediately after the
-//! Connection is established. From then on, the methods defined on the
-//! [MachineWalker] will ensure that both the client and the server stay in sync
-//! in their walk across the various [State](crate::traits::State)s and dictate
-//! all requests sent alongside how received messages are handled.
+//! wrapping a [`Connection`](crate::transport::Connection) immediately after
+//! the Connection is established. From then on, the methods defined on the
+//! [`MachineCursor`] will ensure that both the client and the server stay in
+//! sync in their walk across the various [State](crate::traits::State)s and
+//! dictate all requests sent alongside how received messages are handled.
 
 // mod concurrent_request_handler;
 pub mod processor;
@@ -14,7 +14,7 @@ mod requester;
 mod test;
 pub mod transition;
 
-pub use transition::PendingTransitionReceipt;
+pub(crate) use transition::PendingTransitionReceipt;
 
 pub use processor::{EventualTransitionRequest, Processor};
 pub use requester::Requester;
