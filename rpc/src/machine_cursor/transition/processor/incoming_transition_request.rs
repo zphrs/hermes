@@ -58,6 +58,7 @@ impl<
     Client: crate::transport::Client,
 > PendingTransitionReceipt<State, OldMethod, Role, Client>
 {
+    #[allow(clippy::type_complexity)]
     pub(crate) fn into_parts(
         self,
     ) -> (

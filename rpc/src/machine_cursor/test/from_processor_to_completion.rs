@@ -100,7 +100,7 @@ fn generate_request(tc: TestCase) -> Option<Request> {
     } else {
         let ms = tc
             .draw(gs::optional(gs::integers().max_value(10000)))
-            .map(|v| Duration::from_millis(v));
+            .map(Duration::from_millis);
         Some(Request {
             priority: tc.draw(gs::booleans()),
             sleep: ms,

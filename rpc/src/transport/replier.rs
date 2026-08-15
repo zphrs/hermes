@@ -138,22 +138,18 @@ where
     type Error = minicbor_io::Error;
     type Receipt<M: crate::Method> = ReplyReceipt<M>;
 
-    fn reply<Error>(
+    async fn reply<Error>(
         mut self,
         res: Method::Res,
-    ) -> impl Future<
-        Output = Result<Self::Receipt<Method>, crate::traits::HandleError<Self::Error, Error>>,
-    >
+    ) -> Result<Self::Receipt<Method>, crate::traits::HandleError<Self::Error, Error>>
     where
         Method::Res: RpcMessage,
     {
-        async move {
-            assert!(res.cbor_len(&mut ()) <= Method::Res::max_len());
-            let written = self.client.write(&res).await;
-            written
-                .map(move |_| ReplyReceipt::new(res))
-                .map_err(crate::traits::HandleError::Replier)
-        }
+        assert!(res.cbor_len(&mut ()) <= Method::Res::max_len());
+        let written = self.client.write(&res).await;
+        written
+            .map(move |_| ReplyReceipt::new(res))
+            .map_err(crate::traits::HandleError::Replier)
     }
 
     async fn reply_with<

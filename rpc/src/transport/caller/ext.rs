@@ -40,19 +40,19 @@ pub trait CallerExt: Caller {
         )
     }
 
-    fn notify<M: Method<Res = NotApplicable>, RootReq: RpcMessage>(
+    fn notify<RootMethod: FromDescendant<M>, M: Method<Res = NotApplicable>>(
         &self,
         req: M::Req,
     ) -> impl Future<Output = Result<(), CallerError<Self::Error>>>
     where
-        RootReq: From<M::Req>,
+        crate::ReqOf<RootMethod>: RpcMessage,
     {
         async {
             let (write, _read) = self.open_stream().await.map_err(CallerError::Transport)?;
             debug!("sending notification");
 
             {
-                let root: RootReq = req.into();
+                let root = RootMethod::from_descendant_req(req);
                 let mut sender = minicbor_io::AsyncWriter::new(write);
                 sender.write(root).await.map_err(CallerError::Minicbor)?;
                 // drops write here to indicate no more writes will occur

@@ -145,6 +145,7 @@ where
         &self.client
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn handle_transition_request<'a>(
         self,
     ) -> EventualTransitionRequest<
@@ -168,7 +169,7 @@ where
     {
         let fut = async move {
             let Self {
-                mut handler,
+                handler,
                 role,
                 ref client,
                 _state,
@@ -182,7 +183,7 @@ where
             };
 
             let mut with_priority =
-                WithPriority::<RootMethod, H, State, Role>::new(&mut handler, role, _state);
+                WithPriority::<RootMethod, H, State, Role>::new(handler, role, _state);
             let receipt = {
                 let replier = DelayedReplier::<RootMethod>::new();
                 // inlined `client.handle_one_request_with_handler(replier, stream, handler)`
@@ -234,6 +235,7 @@ where
     }
 
     /// handles requests in parallel until a method called is not a loopback.
+    #[allow(clippy::type_complexity)]
     pub fn handle_requests<LoopbackMethod: Loopback, LoopbackHandler>(
         self,
         loopback_handler: LoopbackHandler,
@@ -286,6 +288,7 @@ where
                             let handler = &mut concurrent_handler;
                             let (write, read) = stream;
                             let replier = ImmediateReplier::from(write);
+                            #[allow(clippy::let_and_return)]
                             let out = {
                                 async move {
                                     let write = replier;

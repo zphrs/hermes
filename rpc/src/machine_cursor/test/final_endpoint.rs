@@ -20,11 +20,11 @@ impl<Role1: crate::state::Role, Role2: crate::state::Role> PartialEq<FinalEndpoi
     for FinalEndpoint<Role2>
 {
     fn eq(&self, other: &FinalEndpoint<Role1>) -> bool {
-        match (self, other) {
-            (Self::Client(_), FinalEndpoint::Client(_)) => true,
-            (Self::Server(_), FinalEndpoint::Server(_)) => true,
-            _ => false,
-        }
+        matches!(
+            (self, other),
+            (Self::Client(_), FinalEndpoint::Client(_))
+                | (Self::Server(_), FinalEndpoint::Server(_))
+        )
     }
 }
 

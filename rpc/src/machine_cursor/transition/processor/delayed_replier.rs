@@ -20,7 +20,7 @@ impl<Method: crate::Method, Sender> From<&mut Sender> for DelayedReplier<Method>
 }
 
 impl<Method: crate::Method> DelayedReplier<Method> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             _marker: method::Wrapper::new(),
         }

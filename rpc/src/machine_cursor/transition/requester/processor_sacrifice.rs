@@ -91,6 +91,6 @@ impl ToSacrifice {
     where
         Self: Sized,
     {
-        conn.notify::<Method, Notification>(Notification)
+        conn.notify::<Method, Method>(Notification)
     }
 }

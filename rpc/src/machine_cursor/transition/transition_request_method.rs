@@ -9,7 +9,7 @@ pub struct TransitionRequestMethod<M: crate::Method> {
     marker: PhantomData<M>,
 }
 
-impl<'a, M: crate::Method> crate::Method for TransitionRequestMethod<M> {
+impl<M: crate::Method> crate::Method for TransitionRequestMethod<M> {
     type Req = M::Req;
 
     type Res = Res;
@@ -51,8 +51,8 @@ impl MaxLen for Res {
 }
 
 impl Res {
-    pub fn new<'b, Inner: RpcMessage>(
-        res: &'b Inner,
+    pub fn new<Inner: RpcMessage>(
+        res: &Inner,
         in_tiebreak: bool,
     ) -> Result<Self, minicbor::encode::Error<Infallible>> {
         let max_len = Self::max_len::<Inner>();
@@ -60,7 +60,7 @@ impl Res {
         let mut bytes_mut = Vec::with_capacity(max_len + 4);
         let mut writer = minicbor_io::Writer::new(&mut bytes_mut);
         writer.set_max_len(max_len as u32);
-        writer.write(&res).expect("write should succeed");
+        writer.write(res).expect("write should succeed");
         Ok(Self {
             in_tiebreak,
             res: minicbor::to_vec(res)?.into(),
@@ -76,7 +76,7 @@ impl Res {
     }
 
     pub fn into_parts<Inner: RpcMessage>(self) -> (bool, Inner) {
-        (self.in_tiebreak, minicbor::decode(&*self.res).unwrap())
+        (self.in_tiebreak, minicbor::decode(&self.res).unwrap())
     }
 
     pub(crate) fn set_in_tiebreak(&mut self, in_tiebreak: bool) {

@@ -56,11 +56,8 @@ async fn server(
     impl RequesterState {
         pub fn request_transition(&mut self, request: Request) {
             let curr = mem::replace(self, Self::Taken);
-            match curr {
-                RequesterState::Requester(requester) => {
-                    *self = Self::Transition(requester.request_transition(request));
-                }
-                _ => return,
+            if let RequesterState::Requester(requester) = curr {
+                *self = Self::Transition(requester.request_transition(request));
             }
         }
 
@@ -94,8 +91,9 @@ async fn server(
         };
 
         abort_handle.abort();
+        let requester_state = { requester.lock().unwrap().take() };
 
-        match requester.lock().unwrap().take() {
+        match requester_state {
             RequesterState::Requester(requester) => {
                 let transition = match processor_transition {
                     Some(pt) => pt,
@@ -185,11 +183,8 @@ async fn client(
     impl RequesterState {
         pub fn request_transition(&mut self, request: Request) {
             let curr = mem::replace(self, Self::Taken);
-            match curr {
-                RequesterState::Requester(requester) => {
-                    *self = Self::Transition(requester.request_transition(request));
-                }
-                _ => return,
+            if let RequesterState::Requester(requester) = curr {
+                *self = Self::Transition(requester.request_transition(request));
             }
         }
 
@@ -224,7 +219,9 @@ async fn client(
 
         abort_handle.abort();
 
-        match requester.lock().unwrap().take() {
+        let requester_state = { requester.lock().unwrap().take() };
+
+        match requester_state {
             RequesterState::Requester(requester) => {
                 let transition = match processor_transition {
                     Some(pt) => pt,
@@ -288,7 +285,7 @@ fn generate_request(tc: TestCase) -> Option<Request> {
     } else {
         let ms = tc
             .draw(gs::optional(gs::integers().max_value(10000)))
-            .map(|v| Duration::from_millis(v));
+            .map(Duration::from_millis);
         Some(Request {
             priority: tc.draw(gs::booleans()),
             sleep: ms,

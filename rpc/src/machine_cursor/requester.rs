@@ -107,7 +107,7 @@ where
     ///
     /// The point of all of this is to minimize the number of bytes that need to
     /// be sent and parsed.
-    pub fn request_transition<M: CanTransition>(
+    pub fn request_transition<M: CanTransition + Leaf<RootMethod>>(
         self,
         req: M::Req,
     ) -> RequesterTransition<State, RequestTransition<RootMethod, M, Role, Caller>>
@@ -115,7 +115,6 @@ where
         RootMethod::Req: crate::RpcMessage,
         RootMethod: crate::method::FromDescendant<M>,
         M::Res: crate::RpcMessage,
-        M: Leaf<RootMethod>,
     {
         let Self { role, caller, .. } = self;
         RequesterTransition::new(RequestTransition::<_, M, _, _>::new(req, role, caller))

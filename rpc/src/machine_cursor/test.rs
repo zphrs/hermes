@@ -2,7 +2,7 @@ pub mod final_endpoint;
 pub mod from_processor_to_completion;
 mod fuzz_tiebreak;
 
-pub(self) mod test_states;
+mod test_states;
 
 use std::{
     sync::{Arc, Mutex},
@@ -315,6 +315,7 @@ async fn test_tiebreak() {
                     >,
                 ),
                 Requester(
+                    #[allow(clippy::type_complexity)]
                     Option<
                         RequesterTransition<
                             waitlist::WaitingList,

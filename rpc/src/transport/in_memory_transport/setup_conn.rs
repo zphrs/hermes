@@ -14,20 +14,18 @@ pub async fn setup_conn(
     client_address: u8,
     net: &in_memory_transport::Network<u8>,
 ) -> ConnPair {
-    let server = async {
+    let server_conn = async {
         let tp = net.new_transport(server_address);
         let incoming = tp.accept().await.expect("infallible");
-        let conn = incoming.accept().await.expect("successful incoming");
-        conn
+        incoming.accept().await.expect("successful incoming")
     };
 
-    let client = async {
+    let client_conn = async {
         let tp = net.new_transport(client_address);
-        let conn = tp.connect(&server_address).await.expect("infallible");
-        conn
+        tp.connect(&server_address).await.expect("infallible")
     };
 
-    let (server_conn, client_conn) = join(server, client).await;
+    let (server_conn, client_conn) = join(server_conn, client_conn).await;
 
     ConnPair {
         server_conn,

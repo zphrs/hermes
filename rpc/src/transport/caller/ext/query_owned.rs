@@ -36,7 +36,7 @@ impl<C: Caller, M: crate::Method, RootReq> PendingQueryOwned<C, M, RootReq> {
     pub fn new(caller: C, req: RootReq) -> Self {
         Self {
             caller: caller.into(),
-            req: Some(req.into()),
+            req: Some(req),
             state: QueryState::Entrypoint(),
             _marker: PhantomData,
             cancel: false,
@@ -47,10 +47,9 @@ impl<C: Caller, M: crate::Method, RootReq> PendingQueryOwned<C, M, RootReq> {
     pub fn caller(&self) -> Option<&'_ C> {
         self.caller.as_ref()
     }
-    /// Ensures we abort after the receiverfut finishes
+    /// Ensures we abort after we finish
     pub fn abort_early(mut self) -> Self {
-        assert_eq!(self.cancel, false);
-        if matches!(self.state, QueryState::ReceiverFut(_)) {}
+        assert!(!self.cancel);
         self.cancel = true;
         if let Some(waker) = self.waker.take() {
             waker.wake();
@@ -126,9 +125,8 @@ where
             }
             QueryState::SenderFut(sender, read) => {
                 let sync_fut = sender.sync();
-                match ready!(pin!(sync_fut).poll_unpin(cx)) {
-                    Err(e) => return Poll::Ready(Err(Error::Minicbor(e))),
-                    Ok(_) => (),
+                if let Err(e) = ready!(pin!(sync_fut).poll_unpin(cx)) {
+                    return Poll::Ready(Err(Error::Minicbor(e)));
                 };
                 debug!("sent query");
                 let mut receiver = minicbor_io::AsyncReader::new(read.take().expect(

@@ -82,6 +82,7 @@ pub(crate) trait ClientExt: Client {
     // uses an associated type to make it obvious that self is not captured in the
     // returned future.
     #[allow(unused)]
+    #[allow(clippy::type_complexity)]
     fn handle_one_request_with_handler<
         'a,
         Replier: ReplyHelper<RootMethod, Method> + 'a,
@@ -130,6 +131,7 @@ pub(crate) trait ClientExt: Client {
         }
     }
     #[allow(unused)]
+    #[allow(clippy::type_complexity)]
     fn handle_one_request<'b, 'a, Method: crate::Method + 'a, Rh: crate::Handler<RootMethod, Method>, RootMethod>(
         &'b self,
         stream: &'a mut (Self::SendStream, Self::RecvStream),
@@ -150,10 +152,9 @@ pub(crate) trait ClientExt: Client {
     {
         let (write, read) = stream;
         let replier = ImmediateReplier::from(write);
-        let out = self
-            .handle_one_request_with_handler::<_, _, RootMethod, _>(replier, read, handler)
-            .map(|v| v.map(|v| v.into_inner()));
-        out
+
+        self.handle_one_request_with_handler::<_, _, RootMethod, _>(replier, read, handler)
+            .map(|v| v.map(|v| v.into_inner()))
     }
 
     fn handle_one_notification<

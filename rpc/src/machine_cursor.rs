@@ -93,6 +93,7 @@ where
             _role: state::role::Client,
         }
     }
+    #[allow(clippy::type_complexity)]
     pub fn into_children_with_handler<
         'h,
         Handler: traits::Handler<State::ClientHandles, State::ClientHandles>,
@@ -132,6 +133,7 @@ where
             _role: state::role::Server,
         }
     }
+    #[allow(clippy::type_complexity)]
     pub fn into_children_with_handler<
         'h,
         Handler: traits::Handler<State::ServerHandles, State::ServerHandles>,

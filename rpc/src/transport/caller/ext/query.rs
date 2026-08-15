@@ -11,12 +11,12 @@ use tracing::debug;
 use crate::{Caller, CallerError, transport::BiStream};
 
 enum QueryState<C: Caller> {
-    StreamFut(C::OpenStreamFut),
-    SenderFut(
+    Stream(C::OpenStreamFut),
+    Sender(
         minicbor_io::AsyncWriter<<C as BiStream>::SendStream>,
         Option<<C as BiStream>::RecvStream>,
     ),
-    ReceiverFut(minicbor_io::AsyncReader<<C as BiStream>::RecvStream>),
+    Receiver(minicbor_io::AsyncReader<<C as BiStream>::RecvStream>),
 }
 impl<C: Caller, M: crate::Method, RootReq> Unpin for PendingQuery<C, M, RootReq> {}
 
@@ -32,8 +32,8 @@ impl<C: Caller, M: crate::Method, RootReq> PendingQuery<C, M, RootReq> {
     pub fn new(caller: &C, req: RootReq) -> Self {
         let stream_fut = caller.open_stream();
         Self {
-            req: req.into(),
-            state: QueryState::StreamFut(stream_fut),
+            req,
+            state: QueryState::Stream(stream_fut),
             _marker: PhantomData,
         }
     }
@@ -53,7 +53,7 @@ where
         let this = &mut *self;
         loop {
             match &mut this.state {
-                QueryState::StreamFut(stream_fut) => {
+                QueryState::Stream(stream_fut) => {
                     let res = ready!(pin!(stream_fut).poll_unpin(cx));
                     let (write, read) = match res {
                         Ok(v) => v,
@@ -63,15 +63,14 @@ where
                     {
                         let mut sender = minicbor_io::AsyncWriter::new(write);
                         let _ = pin!(sender.write(&this.req)).poll_unpin(cx);
-                        let sender_future = QueryState::SenderFut(sender, Some(read));
+                        let sender_future = QueryState::Sender(sender, Some(read));
                         this.state = sender_future;
                     }
                 }
-                QueryState::SenderFut(sender, read) => {
+                QueryState::Sender(sender, read) => {
                     let sync_fut = sender.sync();
-                    match ready!(pin!(sync_fut).poll_unpin(cx)) {
-                        Err(e) => return Poll::Ready(Err(CallerError::Minicbor(e))),
-                        Ok(_) => (),
+                    if let Err(e) = ready!(pin!(sync_fut).poll_unpin(cx)) {
+                        return Poll::Ready(Err(CallerError::Minicbor(e)));
                     };
                     debug!("sent query");
                     let mut receiver = minicbor_io::AsyncReader::new(read.take().expect(
@@ -79,10 +78,10 @@ where
                     ));
 
                     receiver.set_max_len(<M::Res as MaxLen>::max_len() as u32);
-                    this.state = QueryState::ReceiverFut(receiver);
+                    this.state = QueryState::Receiver(receiver);
                     // drops write here to indicate no more writes will occur
                 }
-                QueryState::ReceiverFut(receiver) => {
+                QueryState::Receiver(receiver) => {
                     let out = match ready!(pin!(receiver.read::<M::Res>()).poll_unpin(cx)) {
                         Err(e) => Err(CallerError::Minicbor(e)),
                         Ok(Some(out)) => Ok(out),

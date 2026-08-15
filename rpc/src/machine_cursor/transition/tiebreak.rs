@@ -170,7 +170,6 @@ fn tiebreak_choice<Role: crate::state::Role, State: crate::state::Prioritized>(
 
 #[expect(private_bounds, reason = "for role")]
 pub async fn between_processor_and_requester_transition<
-    'a,
     State: crate::state::Prioritized,
     ProcessorMethod: crate::Method,
     RootMethod: crate::Method,

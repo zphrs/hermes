@@ -52,6 +52,15 @@ where
     }
 }
 
+impl<Address> Default for Network<Address>
+where
+    Address: Eq + Hash + Copy,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 100% reliable in-memory transport intended for local testing.
 #[derive(Clone)]
 pub struct MemoryTransport<Address = [u8; 16]> {
@@ -243,7 +252,7 @@ impl Future for OpenStreamFut {
                 Err(_e) => return Poll::Pending,
             };
         permit.send(this.client.take().unwrap());
-        return Poll::Ready(Ok(this.caller.take().unwrap()));
+        Poll::Ready(Ok(this.caller.take().unwrap()))
     }
 }
 
@@ -269,10 +278,10 @@ impl AsyncRead for RecvStream {
         buf: &mut [u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
         let Some(bytes) = ({
-            if self.leftover_bytes.len() > 0 {
-                Some(self.leftover_bytes.clone())
-            } else {
+            if self.leftover_bytes.is_empty() {
                 ready!(self.inner.poll_recv(cx))
+            } else {
+                Some(self.leftover_bytes.clone())
             }
         }) else {
             return Poll::Ready(Err(std::io::ErrorKind::BrokenPipe)?);
@@ -281,7 +290,7 @@ impl AsyncRead for RecvStream {
         let copied_len = buf.len().min(bytes.len());
         buf[..copied_len].copy_from_slice(&bytes[..copied_len]);
         self.leftover_bytes = bytes.slice(copied_len..bytes.len());
-        return Poll::Ready(Ok(copied_len));
+        Poll::Ready(Ok(copied_len))
     }
 }
 
@@ -298,7 +307,7 @@ impl futures::AsyncWrite for SendStream {
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         let owned_buf = bytes::BytesMut::from(buf).freeze();
-        if let Err(_) = self.inner.try_send(owned_buf) {
+        if self.inner.try_send(owned_buf).is_err() {
             Poll::Pending
         } else {
             Poll::Ready(Ok(buf.len()))
@@ -343,7 +352,7 @@ impl<Address> crate::transport::Incoming for Incoming<Address> {
             .await
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))?;
         Ok(Connection {
-            stream_tx: stream_tx,
+            stream_tx,
             stream_rx: Arc::new(tokio::sync::Mutex::new(stream_rx)),
             remote_addr,
             local_addr: self.local_addr,

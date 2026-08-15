@@ -10,7 +10,7 @@
 //!         1. send off the IncomingTransitionRequest with the tiebreak flag set
 //! 4. wait for the notification that the remote requester has fully transitioned
 
-pub(self) mod delayed_replier;
+mod delayed_replier;
 mod incoming_transition_request;
 pub(super) use delayed_replier::FinalizeFuture;
 pub(crate) use incoming_transition_request::PendingTransitionReceipt;
@@ -50,13 +50,13 @@ pub struct Entrypoint<
 >(PendingTransitionReceipt<State, OldMethod, Role, Client>);
 #[expect(private_bounds, reason = "for role")]
 impl<
-    'a,
     State: traits::Prioritized,
     OldMethod: traits::Method,
     Role: traits::state::Role,
     Client: crate::transport::Client,
 > Entrypoint<State, OldMethod, Role, Client>
 {
+    #[allow(clippy::type_complexity)]
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -113,7 +113,6 @@ impl<Conn, Role> NeedWrapper<Conn, Role, ()> {
 
 #[expect(private_bounds, reason = "for role")]
 impl<
-    'a,
     State: traits::Prioritized,
     ProcessorMethod: traits::Method,
     Role: traits::state::Role,
@@ -131,7 +130,6 @@ impl<
 
 #[expect(private_bounds, reason = "for role")]
 impl<
-    'a,
     State: traits::Prioritized,
     ProcessorMethod: traits::Method,
     Role: traits::state::Role,

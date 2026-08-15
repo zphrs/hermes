@@ -15,6 +15,7 @@
 //! While waiting for the transition request to turn into a receipt, also wait
 //! for the processor to receive a transition request. If the processor does receive a transition request then it will tiebreak. If our request wins then continue waiting for the transition request to turn into a receipt.
 
+use crate::traits::state::priority::PrioritizedUnsafeExt;
 pub(super) mod processor_sacrifice;
 use std::marker::PhantomData;
 
@@ -65,6 +66,7 @@ impl<
     Caller: crate::Caller,
 > Need<State, TransitionMethod, Role, Caller>
 {
+    #[allow(clippy::type_complexity)]
     pub fn try_into_need_processor(
         self,
     ) -> Result<RequesterTransition<State, NeedProcessor<TransitionMethod::Res, Role, Caller>>, Self>
@@ -82,7 +84,7 @@ impl<
             .ok()
             .expect("need variant should be Need::Processor")
     }
-    #[allow(private_interfaces)]
+    #[allow(private_interfaces, clippy::type_complexity)]
     pub fn try_into_need_incoming_transition_request(
         self,
     ) -> Result<
@@ -217,14 +219,7 @@ impl<
         let receipt = receipt.insert_result(res);
 
         Ok(if in_transition {
-            let priority = match Role::to_enum() {
-                state::role::WhichRole::Client => {
-                    State::server_priority(unsafe { core::mem::transmute(&req) })
-                }
-                state::role::WhichRole::Server => {
-                    State::client_priority(unsafe { core::mem::transmute(&req) })
-                }
-            };
+            let priority = unsafe { State::requester_priority::<Role, _>(&req) };
 
             Need::IncomingTransitionRequest(RequesterTransition::from(
                 NeedIncomingTransitionRequest {

@@ -26,7 +26,7 @@
 
 use std::any::TypeId;
 
-use crate::traits::State;
+use crate::{ReqOf, traits::State};
 
 mod r#enum {
     #[repr(u8)]
@@ -95,7 +95,7 @@ pub trait Prioritized: State + Sized {
 ///
 /// - **Processor** roles map directly: client→client, server→server.
 /// - **Requester** roles are swapped (e.g. server→client) because it owns both
-/// sides but receives callbacks from the *other* side.
+///   sides but receives callbacks from the *other* side.
 /// - `_static` variants assert [`TypeId`] equality (`'static` required).
 /// - Non-`_static` variants assert [`size_of`] equality (no `'static` bound).
 ///
@@ -121,11 +121,18 @@ pub(crate) trait PrioritizedUnsafeExt: Prioritized {
         match Role::to_enum() {
             crate::state::role::WhichRole::Client => {
                 assert_same_type_id::<RootRequest, Self::ClientHandles>();
-                Self::client_priority(unsafe { std::mem::transmute(req) })
+                Self::client_priority(
+                    // SAFETY: function specifies requirement to call this function
+                    unsafe {
+                        std::mem::transmute::<&RootRequest, &ReqOf<Self::ClientHandles>>(req)
+                    },
+                )
             }
             crate::state::role::WhichRole::Server => {
                 assert_same_type_id::<RootRequest, Self::ServerHandles>();
-                Self::server_priority(unsafe { std::mem::transmute(req) })
+                Self::server_priority(unsafe {
+                    std::mem::transmute::<&RootRequest, &ReqOf<Self::ServerHandles>>(req)
+                })
             }
         }
     }
@@ -137,11 +144,15 @@ pub(crate) trait PrioritizedUnsafeExt: Prioritized {
         match Role::to_enum() {
             crate::state::role::WhichRole::Client => {
                 assert_same_size::<RootRequest, Self::ClientHandles>();
-                Self::client_priority(unsafe { std::mem::transmute(req) })
+                Self::client_priority(unsafe {
+                    std::mem::transmute::<&RootRequest, &ReqOf<Self::ClientHandles>>(req)
+                })
             }
             crate::state::role::WhichRole::Server => {
                 assert_same_size::<RootRequest, Self::ServerHandles>();
-                Self::server_priority(unsafe { std::mem::transmute(req) })
+                Self::server_priority(unsafe {
+                    std::mem::transmute::<&RootRequest, &ReqOf<Self::ServerHandles>>(req)
+                })
             }
         }
     }
@@ -159,11 +170,15 @@ pub(crate) trait PrioritizedUnsafeExt: Prioritized {
         match Role::to_enum() {
             crate::state::role::WhichRole::Server => {
                 assert_same_type_id::<RootRequest, Self::ClientHandles>();
-                Self::client_priority(unsafe { std::mem::transmute(req) })
+                Self::client_priority(unsafe {
+                    std::mem::transmute::<&RootRequest, &ReqOf<Self::ClientHandles>>(req)
+                })
             }
             crate::state::role::WhichRole::Client => {
                 assert_same_type_id::<RootRequest, Self::ServerHandles>();
-                Self::server_priority(unsafe { std::mem::transmute(req) })
+                Self::server_priority(unsafe {
+                    std::mem::transmute::<&RootRequest, &ReqOf<Self::ServerHandles>>(req)
+                })
             }
         }
     }
@@ -175,11 +190,15 @@ pub(crate) trait PrioritizedUnsafeExt: Prioritized {
         match Role::to_enum() {
             crate::state::role::WhichRole::Server => {
                 assert_same_size::<RootRequest, Self::ClientHandles>();
-                Self::client_priority(unsafe { std::mem::transmute(req) })
+                Self::client_priority(unsafe {
+                    std::mem::transmute::<&RootRequest, &ReqOf<Self::ClientHandles>>(req)
+                })
             }
             crate::state::role::WhichRole::Client => {
                 assert_same_size::<RootRequest, Self::ServerHandles>();
-                Self::server_priority(unsafe { std::mem::transmute(req) })
+                Self::server_priority(unsafe {
+                    std::mem::transmute::<&RootRequest, &ReqOf<Self::ServerHandles>>(req)
+                })
             }
         }
     }
