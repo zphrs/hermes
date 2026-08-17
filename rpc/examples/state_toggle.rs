@@ -25,6 +25,12 @@ pub mod states {
             }
         }
 
+        impl<To: rpc::State> Default for Method<To> {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl<To: rpc::State> rpc::Method for Method<To> {
             type Req = ();
 

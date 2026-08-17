@@ -38,7 +38,7 @@ impl<C, const MAX_LEN: usize> minicbor::Encode<C> for MaxLenStr<MAX_LEN> {
         e: &mut minicbor::Encoder<W>,
         _ctx: &mut C,
     ) -> Result<(), minicbor::encode::Error<W::Error>> {
-        e.str(&*self.0)?;
+        e.str(&self.0)?;
         Ok(())
     }
 }
@@ -75,6 +75,6 @@ impl<const MAX_LEN: usize> Deref for MaxLenStr<MAX_LEN> {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &self.0
     }
 }

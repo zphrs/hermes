@@ -693,6 +693,7 @@ mod server {
             in_memory_transport::Connection<&'static str>,
         >,
         subscriptions: subscribe::Flags,
+        #[allow(clippy::type_complexity)]
         room_closing_notification: tokio::sync::oneshot::Sender<
             machine_cursor::transition::requester::RequesterTransition<
                 in_room::InRoom,
@@ -707,6 +708,7 @@ mod server {
     }
 
     impl User {
+        #[allow(clippy::type_complexity)]
         pub fn new(
             name: Username,
             requester: rpc::machine_cursor::Requester<
@@ -890,12 +892,12 @@ mod server {
                 }
 
                 for username in to_remove.iter() {
-                    self.users.remove(&username);
+                    self.users.remove(username);
                 }
 
                 let to_remove_notifications = to_remove
                     .into_iter()
-                    .map(|v| Notification::Left(v))
+                    .map(Notification::Left)
                     .collect::<ArrayVec<_, 10>>();
                 Box::pin(self.notify(to_remove_notifications)).await;
             }
@@ -1016,7 +1018,7 @@ mod server {
             username: Username,
         ) -> Self {
             {
-                debug_assert!(rooms.lock().unwrap().contains_key(&room_id));
+                debug_assert!(rooms.lock().unwrap().contains_key(room_id));
             }
             Self {
                 rooms,
@@ -1093,7 +1095,7 @@ mod server {
                         let mut room_lock = self.room.lock().await;
                         let room = room_lock.as_mut().ok_or(Error::RoomClosed)?;
                         replier
-                            .reply_with::<post::Method, _>(room, post, |v| loopback::Res::Post(v))
+                            .reply_with::<post::Method, _>(room, post, loopback::Res::Post)
                             .await
                             .map_err(|e| match e {
                                 rpc::traits::HandleError::Replier(r) => {
@@ -1128,7 +1130,7 @@ mod server {
             self.rooms.lock().unwrap().remove(&room.id);
             room.close().await;
             let wrapper = replier.new_wrapper();
-            return replier.reply(wrapper).await;
+            replier.reply(wrapper).await
         }
     }
 
@@ -1173,7 +1175,7 @@ mod server {
                         .reply_with::<loopback::Method, FromClientLoopbackHandler>(
                             &mut loopback_handler,
                             request,
-                            |v| from_client::Res::Loopback(v),
+                            from_client::Res::Loopback,
                         )
                         .await
                 }
@@ -1308,6 +1310,7 @@ mod server {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     async fn handle_processor_transition(
         processor_transition_result: Result<
             ProcessorTransition<
