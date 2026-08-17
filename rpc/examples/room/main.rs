@@ -1,22 +1,16 @@
 mod max_len_str;
 
-use futures::future::select;
+use futures::future::join;
 use max_len_str::MaxLenStr;
 
-use rpc::{
-    in_memory_transport::Network,
-    machine_cursor::{MachineCursorClient, transition::tiebreak},
-};
+use rpc::in_memory_transport::Network;
 use tracing::{Instrument, debug, info_span};
 
 use crate::{
-    client::ClientHandler,
-    states::{
-        Entrypoint,
-        in_room::{
-            self, Message,
-            from_client::{leave, post, subscribe},
-        },
+    client::{ClientHandler, run_in_room},
+    states::in_room::{
+        Message,
+        from_client::{leave, post, subscribe},
     },
 };
 
@@ -24,622 +18,9 @@ pub type Username = MaxLenStr<256>;
 
 pub type RoomId = MaxLenStr<256>;
 
-pub mod states {
-    use rpc::{define_prioritized, method::not_applicable::NotApplicable, state::priority};
+pub mod states;
 
-    pub struct Entrypoint;
-
-    impl rpc::State for Entrypoint {
-        type ClientHandles = NotApplicable;
-
-        type ServerHandles = entrypoint::join_room::JoinRoom;
-    }
-
-    define_prioritized!(Entrypoint, priority::server_wins);
-
-    pub mod entrypoint {
-
-        pub mod join_room {
-            use rpc::{
-                method::{can_transition, is_leaf},
-                state,
-            };
-
-            use crate::{RoomId, Username, states::in_room::InRoom};
-
-            use max_sized_vec::MaxSizedVec;
-
-            pub struct JoinRoom;
-
-            #[derive(
-                minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen, Clone,
-            )]
-            pub struct Req {
-                #[n(0)]
-                pub room_id: RoomId,
-                #[n(1)]
-                pub username: Username,
-            }
-
-            #[derive(
-                Debug,
-                thiserror::Error,
-                minicbor::Encode,
-                minicbor::Decode,
-                minicbor::CborLen,
-                maxlen::MaxLen,
-            )]
-            #[repr(u8)]
-            pub enum Error {
-                #[n(0)]
-                #[error("room full")]
-                RoomFull = 0,
-                #[n(1)]
-                #[error("username taken")]
-                UsernameTaken = 1,
-            }
-
-            impl rpc::Method for JoinRoom {
-                type Req = Req;
-
-                type Res = Result<
-                    (
-                        MaxSizedVec<Username, 10>,
-                        state::Wrapper<crate::states::in_room::InRoom>,
-                    ),
-                    Error,
-                >;
-
-                type CanTransition = can_transition::True;
-
-                type IsLeaf = is_leaf::True;
-            }
-
-            impl state::Has<crate::states::in_room::InRoom>
-                for Result<(MaxSizedVec<Username, 10>, rpc::state::Wrapper<InRoom>), Error>
-            {
-                fn extract_wrapper(self) -> rpc::state::Wrapper<crate::states::in_room::InRoom> {
-                    self.ok().unwrap().1
-                }
-            }
-        }
-    }
-
-    pub mod in_room {
-        use rpc::{
-            method::{Ancestor, FromDescendant, can_transition, is_leaf},
-            state::Prioritized,
-        };
-
-        use crate::{Username, max_len_str::MaxLenStr, states::in_room::from_client::subscribe};
-
-        #[derive(
-            Debug, Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen,
-        )]
-        pub struct Message {
-            #[n(0)]
-            pub from: Username,
-            #[n(1)]
-            pub body: MaxLenStr<1024>,
-        }
-
-        impl std::fmt::Display for Message {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                writeln!(f, "from {}: {}", self.from, self.body)
-            }
-        }
-
-        #[derive(
-            Debug, Clone, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen,
-        )]
-        pub enum Notification {
-            #[n(0)]
-            Join(#[n(0)] Username),
-            #[n(1)]
-            Left(#[n(0)] Username),
-            #[n(2)]
-            Mesg(#[n(0)] Message),
-        }
-
-        impl Notification {
-            pub fn flag(&self) -> u8 {
-                match self {
-                    Notification::Join(_) => subscribe::Flags::JOIN,
-                    Notification::Left(_) => subscribe::Flags::LEFT,
-                    Notification::Mesg(_) => subscribe::Flags::MESG,
-                }
-            }
-        }
-
-        pub mod close {
-            use rpc::{
-                method::{can_transition, is_leaf},
-                state,
-            };
-
-            use crate::states::Entrypoint;
-
-            pub struct Method;
-
-            impl rpc::Method for Method {
-                type Req = ();
-
-                type Res = state::Wrapper<Entrypoint>;
-
-                type CanTransition = can_transition::True;
-
-                type IsLeaf = is_leaf::True;
-            }
-        }
-
-        #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
-        pub enum ToClientReq {
-            #[n(0)]
-            Notif(#[n(0)] <Notify as rpc::Method>::Req),
-            #[n(1)]
-            Close(#[n(0)] <close::Method as rpc::Method>::Req),
-        }
-
-        pub enum ToClientRes {
-            Notif(<Notify as rpc::Method>::Res),
-            Close(<close::Method as rpc::Method>::Res),
-        }
-
-        pub struct Notify;
-
-        impl rpc::Method for Notify {
-            type Req = Notification;
-
-            type Res = ();
-
-            type CanTransition = can_transition::False;
-
-            type IsLeaf = is_leaf::True;
-        }
-
-        pub struct ToClient;
-
-        impl Ancestor<Notify> for ToClient {}
-        impl Ancestor<close::Method> for ToClient {}
-
-        impl FromDescendant<close::Method> for ToClient {
-            fn from_descendant_req(
-                request: <close::Method as rpc::Method>::Req,
-            ) -> <Self as rpc::Method>::Req {
-                ToClientReq::Close(request)
-            }
-
-            fn from_descendant_res(
-                result: <close::Method as rpc::Method>::Res,
-            ) -> <Self as rpc::Method>::Res {
-                ToClientRes::Close(result)
-            }
-
-            fn try_into_descendant_req(
-                request: Self::Req,
-            ) -> Result<<close::Method as rpc::Method>::Req, Self::Req> {
-                match request {
-                    ToClientReq::Close(child) => Ok(child),
-                    other => Err(other),
-                }
-            }
-        }
-
-        impl FromDescendant<Notify> for ToClient {
-            fn from_descendant_req(
-                request: <Notify as rpc::Method>::Req,
-            ) -> <Self as rpc::Method>::Req {
-                ToClientReq::Notif(request)
-            }
-
-            fn from_descendant_res(
-                result: <Notify as rpc::Method>::Res,
-            ) -> <Self as rpc::Method>::Res {
-                ToClientRes::Notif(result)
-            }
-
-            fn try_into_descendant_req(
-                request: Self::Req,
-            ) -> Result<<Notify as rpc::Method>::Req, Self::Req> {
-                match request {
-                    ToClientReq::Notif(child) => Ok(child),
-                    other => Err(other),
-                }
-            }
-        }
-
-        impl rpc::Method for ToClient {
-            type Req = ToClientReq;
-
-            type Res = ToClientRes;
-
-            type CanTransition = can_transition::True;
-
-            type IsLeaf = is_leaf::False;
-        }
-
-        pub mod from_client {
-            use rpc::{
-                method::{Ancestor, FromDescendant, can_transition, is_leaf},
-                state,
-            };
-
-            use crate::states::in_room::{close, from_client};
-
-            pub mod subscribe {
-                use rpc::method::{can_transition, is_leaf};
-
-                #[derive(
-                    Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen,
-                )]
-                pub struct Flags {
-                    #[n(0)]
-                    flags: u8,
-                }
-
-                impl Flags {
-                    pub const JOIN: u8 = 0b00000001;
-                    pub const LEFT: u8 = 0b00000010;
-                    pub const MESG: u8 = 0b00000100;
-
-                    pub fn empty() -> Self {
-                        Self { flags: 0 }
-                    }
-
-                    pub fn all() -> Self {
-                        Self {
-                            flags: Self::JOIN | Self::LEFT | Self::MESG,
-                        }
-                    }
-
-                    pub fn set(&mut self, flag: u8) -> &mut Self {
-                        self.flags |= flag;
-                        self
-                    }
-
-                    pub fn unset(&mut self, flag: u8) -> &mut Self {
-                        self.flags &= !flag;
-                        self
-                    }
-
-                    pub fn check(&self, flag: u8) -> bool {
-                        (self.flags & flag) != 0
-                    }
-                }
-
-                pub struct Method;
-
-                impl rpc::Method for Method {
-                    type Req = Flags;
-
-                    type Res = ();
-
-                    type CanTransition = can_transition::False;
-
-                    type IsLeaf = is_leaf::True;
-                }
-            }
-            pub mod post {
-                use rpc::method::{can_transition, is_leaf};
-
-                use super::super::Message;
-
-                pub struct Method;
-
-                impl rpc::Method for Method {
-                    type Req = Message;
-
-                    type Res = ();
-
-                    type CanTransition = can_transition::False;
-
-                    type IsLeaf = is_leaf::True;
-                }
-            }
-            pub mod loopback {
-                use rpc::method::{Ancestor, FromDescendant, can_transition, is_leaf};
-
-                use super::{post, subscribe};
-
-                #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
-                pub enum Req {
-                    /// set which events client is subscribed to
-                    #[n(0)]
-                    Subscribe(#[n(0)] <super::subscribe::Method as rpc::Method>::Req),
-                    /// send a message
-                    #[n(1)]
-                    Post(#[n(0)] <post::Method as rpc::Method>::Req),
-                }
-
-                #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
-                pub enum Res {
-                    #[n(0)]
-                    Subscribe(#[n(0)] <super::subscribe::Method as rpc::Method>::Res),
-                    #[n(1)]
-                    Post(#[n(0)] <post::Method as rpc::Method>::Res),
-                }
-
-                pub struct Method;
-
-                impl rpc::Method for Method {
-                    type Req = Req;
-
-                    type Res = Res;
-
-                    type CanTransition = can_transition::False;
-
-                    type IsLeaf = is_leaf::False;
-                }
-
-                impl Ancestor<subscribe::Method> for Method {}
-                impl Ancestor<post::Method> for Method {}
-
-                impl FromDescendant<subscribe::Method> for Method {
-                    fn from_descendant_req(
-                        request: <subscribe::Method as rpc::Method>::Req,
-                    ) -> <Self as rpc::Method>::Req {
-                        Req::Subscribe(request)
-                    }
-
-                    fn from_descendant_res(
-                        result: <subscribe::Method as rpc::Method>::Res,
-                    ) -> <Self as rpc::Method>::Res {
-                        Res::Subscribe(result)
-                    }
-
-                    fn try_into_descendant_req(
-                        request: Self::Req,
-                    ) -> Result<<subscribe::Method as rpc::Method>::Req, Self::Req>
-                    {
-                        match request {
-                            Req::Subscribe(child) => Ok(child),
-                            other => Err(other),
-                        }
-                    }
-                }
-
-                impl FromDescendant<post::Method> for Method {
-                    fn from_descendant_req(
-                        request: <post::Method as rpc::Method>::Req,
-                    ) -> <Self as rpc::Method>::Req {
-                        Req::Post(request)
-                    }
-
-                    fn from_descendant_res(
-                        result: <post::Method as rpc::Method>::Res,
-                    ) -> <Self as rpc::Method>::Res {
-                        Res::Post(result)
-                    }
-
-                    fn try_into_descendant_req(
-                        request: Self::Req,
-                    ) -> Result<<post::Method as rpc::Method>::Req, Self::Req> {
-                        match request {
-                            Req::Post(child) => Ok(child),
-                            other => Err(other),
-                        }
-                    }
-                }
-            }
-            pub mod leave {
-                use rpc::{
-                    method::{can_transition, is_leaf},
-                    state,
-                };
-
-                use crate::states::Entrypoint;
-
-                pub struct Method;
-                impl rpc::Method for Method {
-                    type Req = ();
-
-                    type Res = state::Wrapper<Entrypoint>;
-
-                    type CanTransition = can_transition::True;
-
-                    type IsLeaf = is_leaf::True;
-                }
-            }
-            #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, maxlen::MaxLen)]
-            pub enum Req {
-                /// set which events client is subscribed to
-                #[n(0)]
-                Loopback(#[n(0)] <loopback::Method as rpc::Method>::Req),
-                /// close room
-                #[n(1)]
-                Close(#[n(0)] <close::Method as rpc::Method>::Req),
-                // leave room
-                #[n(2)]
-                Leave,
-            }
-
-            pub enum Res {
-                Loopback(<loopback::Method as rpc::Method>::Res),
-                Close(state::Wrapper<crate::states::Entrypoint>),
-                Leave(state::Wrapper<crate::states::Entrypoint>),
-            }
-
-            impl state::Has<crate::states::Entrypoint> for Res {
-                fn extract_wrapper(self) -> state::Wrapper<crate::states::Entrypoint> {
-                    match self {
-                        Res::Loopback(_) => unreachable!(),
-                        Res::Close(wrapper) => wrapper,
-                        Res::Leave(wrapper) => wrapper,
-                    }
-                }
-            }
-
-            pub struct Method;
-
-            impl rpc::Method for Method {
-                type Req = Req;
-
-                type Res = Res;
-
-                type CanTransition = can_transition::True;
-
-                type IsLeaf = is_leaf::False;
-            }
-
-            impl Ancestor<subscribe::Method> for Method {}
-            impl Ancestor<post::Method> for Method {}
-            impl Ancestor<loopback::Method> for Method {}
-            impl Ancestor<close::Method> for Method {}
-            impl Ancestor<leave::Method> for Method {}
-
-            impl FromDescendant<loopback::Method> for Method {
-                fn from_descendant_req(
-                    request: <loopback::Method as rpc::Method>::Req,
-                ) -> <Self as rpc::Method>::Req {
-                    Req::Loopback(request)
-                }
-
-                fn from_descendant_res(
-                    result: <loopback::Method as rpc::Method>::Res,
-                ) -> <Self as rpc::Method>::Res {
-                    Res::Loopback(result)
-                }
-
-                fn try_into_descendant_req(
-                    request: Self::Req,
-                ) -> Result<<loopback::Method as rpc::Method>::Req, Self::Req> {
-                    match request {
-                        Req::Loopback(subscribe_flags) => Ok(subscribe_flags),
-                        other => Err(other),
-                    }
-                }
-            }
-
-            impl FromDescendant<leave::Method> for Method {
-                fn from_descendant_req(
-                    _request: <leave::Method as rpc::Method>::Req,
-                ) -> <Self as rpc::Method>::Req {
-                    Req::Leave
-                }
-
-                fn from_descendant_res(
-                    result: <leave::Method as rpc::Method>::Res,
-                ) -> <Self as rpc::Method>::Res {
-                    Res::Leave(result)
-                }
-
-                fn try_into_descendant_req(
-                    request: Self::Req,
-                ) -> Result<<leave::Method as rpc::Method>::Req, Self::Req> {
-                    match request {
-                        Req::Leave => Ok(()),
-                        other => Err(other),
-                    }
-                }
-            }
-
-            impl FromDescendant<close::Method> for Method {
-                fn from_descendant_req(
-                    request: <close::Method as rpc::Method>::Req,
-                ) -> <Self as rpc::Method>::Req {
-                    Req::Close(request)
-                }
-
-                fn from_descendant_res(
-                    result: <close::Method as rpc::Method>::Res,
-                ) -> <Self as rpc::Method>::Res {
-                    Res::Close(result)
-                }
-
-                fn try_into_descendant_req(
-                    request: Self::Req,
-                ) -> Result<<close::Method as rpc::Method>::Req, Self::Req> {
-                    match request {
-                        Req::Close(child) => Ok(child),
-                        other => Err(other),
-                    }
-                }
-            }
-
-            impl FromDescendant<from_client::post::Method> for Method {
-                fn from_descendant_req(
-                    request: <from_client::post::Method as rpc::Method>::Req,
-                ) -> <Self as rpc::Method>::Req {
-                    Req::Loopback(loopback::Req::Post(request))
-                }
-
-                fn from_descendant_res(
-                    result: <from_client::post::Method as rpc::Method>::Res,
-                ) -> <Self as rpc::Method>::Res {
-                    Res::Loopback(loopback::Res::Post(result))
-                }
-
-                fn try_into_descendant_req(
-                    request: Self::Req,
-                ) -> Result<<from_client::post::Method as rpc::Method>::Req, Self::Req>
-                {
-                    match request {
-                        Req::Loopback(loopback::Req::Post(child)) => Ok(child),
-                        other => Err(other),
-                    }
-                }
-            }
-
-            impl FromDescendant<subscribe::Method> for Method {
-                fn from_descendant_req(
-                    request: <subscribe::Method as rpc::Method>::Req,
-                ) -> <Self as rpc::Method>::Req {
-                    Req::Loopback(loopback::Req::Subscribe(request))
-                }
-
-                fn from_descendant_res(
-                    result: <subscribe::Method as rpc::Method>::Res,
-                ) -> <Self as rpc::Method>::Res {
-                    Res::Loopback(loopback::Res::Subscribe(result))
-                }
-
-                fn try_into_descendant_req(
-                    request: Self::Req,
-                ) -> Result<<subscribe::Method as rpc::Method>::Req, Self::Req> {
-                    match request {
-                        Req::Loopback(loopback::Req::Subscribe(child)) => Ok(child),
-                        other => Err(other),
-                    }
-                }
-            }
-        }
-
-        pub struct InRoom;
-
-        impl rpc::State for InRoom {
-            type ClientHandles = ToClient;
-
-            type ServerHandles = from_client::Method;
-        }
-
-        impl Prioritized for InRoom {
-            type Priority = u8;
-
-            fn client_priority(
-                request: &<Self::ClientHandles as rpc::Method>::Req,
-            ) -> Self::Priority {
-                use ToClientReq::*;
-                match request {
-                    Notif(_) => 0,
-                    Close(_) => 2,
-                }
-            }
-
-            fn server_priority(
-                request: &<Self::ServerHandles as rpc::Method>::Req,
-            ) -> Self::Priority {
-                use from_client::Req::*;
-                match request {
-                    Loopback(_) => 0,
-                    Close(_) => 1,
-                    Leave => 1,
-                }
-            }
-        }
-    }
-}
-
-mod server {
+pub mod server {
     use futures::{FutureExt, select};
     use max_sized_vec::MaxSizedVec;
 
@@ -663,7 +44,7 @@ mod server {
         future::pending,
         sync::{Arc, Mutex},
     };
-    use tracing::{debug, trace, warn};
+    use tracing::{Instrument, debug, span, trace, warn};
 
     use crate::{
         RoomId, Username,
@@ -871,7 +252,7 @@ mod server {
                         }
 
                         set.try_collect::<()>().await.map_err(|_e| &user.name)?;
-                        trace!("finished notifying");
+                        trace!("finished notifying {}", user.name);
                         Ok::<(), &Username>(())
                     });
                 }
@@ -1204,10 +585,9 @@ mod server {
     }
 
     pub async fn handle_incoming(
-        incoming: in_memory_transport::Incoming<&'static str>,
+        conn: in_memory_transport::Connection<&'static str>,
         rooms: Rooms,
     ) -> anyhow::Result<()> {
-        let conn = incoming.accept().await?;
         let mut cursor = MachineCursorServer::<Entrypoint, _>::new(conn);
         loop {
             let rooms = rooms.clone();
@@ -1350,26 +730,42 @@ mod server {
         let rooms: Rooms = Rooms::default();
         loop {
             let Ok(incoming) = transport.accept().await;
-            if let Err(err) = handle_incoming(incoming, rooms.clone()).await {
-                warn!("error while handling client: {err}");
-            }
+            let conn = incoming.accept().await.unwrap();
+            let rooms = rooms.clone();
+
+            warn!("value");
+
+            tokio::spawn(
+                async move {
+                    if let Err(err) = handle_incoming(conn, rooms.clone()).await {
+                        warn!("error while handling client: {err}");
+                    };
+                }
+                .instrument(span::Span::current()),
+            );
         }
     }
 }
 
-mod client {
+pub mod client {
     use std::convert::Infallible;
 
+    use futures::future::select;
     use rpc::{
-        ReqOf, Transport, in_memory_transport,
-        machine_cursor::MachineCursorClient,
+        MachineCursor, ReqOf, Transport, in_memory_transport,
+        machine_cursor::{
+            MachineCursorClient,
+            transition::{RequestTransition, requester::RequesterTransition, tiebreak},
+        },
         method::{Ancestor, not_applicable},
+        state::role,
     };
     use tracing::debug;
 
     use crate::{
         Username,
         states::{
+            self,
             entrypoint::join_room,
             in_room::{self, InRoom, ToClient, ToClientRes},
         },
@@ -1478,54 +874,43 @@ mod client {
             username,
             res.0.inner()
         );
-        assert!(res.0.inner().is_empty());
         let in_room = requester_transition.finish(processor, res.1).await?;
         Ok(in_room)
     }
-}
-
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
-    let network = Network::new();
-
-    let server = network.new_transport("server");
-
-    let server_jh = tokio::spawn(server::server(server).instrument(info_span!("server")));
-
-    let span = info_span!("client1");
-    let client1_fut = async move {
-        let client1_in_room = client::join_room("client1", network).await?;
-        debug!("logged in");
-        let mut client1_handler = ClientHandler::new("client1".try_into().unwrap());
-        let cloned_handler = client1_handler.clone();
-        let (processor, requester) =
-            client1_in_room.into_children_with_handler(&mut client1_handler);
-
-        let jh = tokio::spawn(
-            async move {
-                use subscribe::Flags;
-                debug!("subscribing");
-                requester
-                    .request_loopback::<subscribe::Method>(Flags::all())
-                    .await?;
-                debug!("subscribed");
-
-                requester
-                    .request_loopback::<post::Method>(Message {
-                        from: "client1".try_into().unwrap(),
-                        body: "Hello, World!".try_into().unwrap(),
-                    })
-                    .await?;
-                debug!("sent hello world");
-
-                let transition_request = requester.request_transition::<leave::Method>(());
-
-                anyhow::Ok(transition_request)
-            }
-            .instrument(tracing::Span::current()),
-        );
-        let processor_transition = processor.handle_requests::<in_room::Notify, _>(cloned_handler);
+    #[allow(clippy::type_complexity)]
+    pub async fn run_in_room(
+        jh: tokio::task::JoinHandle<
+            Result<
+                RequesterTransition<
+                    in_room::InRoom,
+                    RequestTransition<
+                        in_room::from_client::Method,
+                        in_room::from_client::leave::Method,
+                        role::Client,
+                        in_memory_transport::Connection<&'static str>,
+                    >,
+                >,
+                anyhow::Error,
+            >,
+        >,
+        client_processor: rpc::machine_cursor::Processor<
+            '_,
+            InRoom,
+            role::Client,
+            ToClient,
+            in_memory_transport::Connection<&'static str>,
+            ClientHandler,
+        >,
+        loopback_handler: ClientHandler,
+    ) -> anyhow::Result<
+        MachineCursor<
+            states::Entrypoint,
+            in_memory_transport::Connection<&'static str>,
+            role::Client,
+        >,
+    > {
+        let processor_transition =
+            client_processor.handle_requests::<in_room::Notify, _>(loopback_handler);
         let selection = select(jh, processor_transition).await;
         let tiebreak_result = match selection {
             futures::future::Either::Left((
@@ -1548,7 +933,7 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
-        let _entrypoint_cursor: MachineCursorClient<Entrypoint, _> = match tiebreak_result {
+        let entrypoint_cursor: MachineCursorClient<states::Entrypoint, _> = match tiebreak_result {
             tiebreak::TiebreakResult::ProcessorWon(finalize_processor_transition) => {
                 let (res, finalize_processor_transition) =
                     finalize_processor_transition.extract_res();
@@ -1566,11 +951,94 @@ async fn main() -> anyhow::Result<()> {
                 finalize_requester_transition.finish(res).await?
             }
         };
+
+        Ok(entrypoint_cursor)
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+    let network = Network::new();
+
+    let server = network.new_transport("server");
+
+    let server_jh = tokio::spawn(server::server(server).instrument(info_span!("server")));
+
+    let span = info_span!("clients");
+    let clients_fut = async move {
+        let client1_in_room = client::join_room("client1", network.clone()).await?;
+        let client2_in_room = client::join_room("client2", network).await?;
+
+        debug!("logged in");
+        let mut client1_handler = ClientHandler::new("client1".try_into().unwrap());
+        let mut client2_handler = ClientHandler::new("client2".try_into().unwrap());
+        let client1_handler_cloned = client1_handler.clone();
+        let (client1_processor, client1_requester) =
+            client1_in_room.into_children_with_handler(&mut client1_handler);
+        let client2_handler_cloned = client2_handler.clone();
+        let (client2_processor, client2_requester) =
+            client2_in_room.into_children_with_handler(&mut client2_handler);
+
+        let jh1 = tokio::spawn(
+            async move {
+                use subscribe::Flags;
+                debug!("subscribing");
+                client1_requester
+                    .request_loopback::<subscribe::Method>(Flags::all())
+                    .await?;
+                debug!("subscribed");
+
+                client1_requester
+                    .request_loopback::<post::Method>(Message {
+                        from: "client1".try_into().unwrap(),
+                        body: "Hello, World!".try_into().unwrap(),
+                    })
+                    .await?;
+                debug!("sent hello world");
+
+                let transition_request = client1_requester.request_transition::<leave::Method>(());
+
+                anyhow::Ok(transition_request)
+            }
+            .instrument(info_span!("client1")),
+        );
+        let jh2 = tokio::spawn(
+            async move {
+                use subscribe::Flags;
+                debug!("subscribing");
+                client2_requester
+                    .request_loopback::<subscribe::Method>(Flags::all())
+                    .await?;
+                debug!("subscribed");
+
+                client2_requester
+                    .request_loopback::<post::Method>(Message {
+                        from: "client2".try_into().unwrap(),
+                        body: "Hello, World!".try_into().unwrap(),
+                    })
+                    .await?;
+                debug!("sent hello world");
+                let transition_request = client2_requester.request_transition::<leave::Method>(());
+
+                anyhow::Ok(transition_request)
+            }
+            .instrument(info_span!("client2")),
+        );
+        let (res1, res2) = join(
+            run_in_room(jh1, client1_processor, client1_handler_cloned.clone()),
+            run_in_room(jh2, client2_processor, client2_handler_cloned),
+        )
+        .await;
+
+        let _client1_entrypoint_mc = res1?;
+        let _client2_entrypoint_mc = res2?;
+
         anyhow::Ok(())
     }
     .instrument(span);
 
-    client1_fut.await?;
+    clients_fut.await?;
 
     server_jh.abort();
 
