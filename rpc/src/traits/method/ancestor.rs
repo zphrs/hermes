@@ -42,7 +42,7 @@ pub mod ancestors {
     define_ancestors!(Seven; A, B, C, D, E, F, G);
     define_ancestors!(Eight; A, B, C, D, E, F, G, H);
     define_ancestors!(Sixteen; A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q);
-    define_ancestors!(ThrityTwo; A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+    define_ancestors!(ThirtyTwo; A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
         AA, AB, AC, AD, AE, AF, AG);
     define_ancestors!(SixtyFour; A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
         AA, AB, AC, AD, AE, AF, AG, AH, AI, AJ, AK, AL, AM, AN, AO, AP, AQ, AR, AS, AT, AU, AV, AW, AX, AY, AZ,

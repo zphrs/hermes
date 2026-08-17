@@ -36,3 +36,8 @@ tokio = { version = "1.50.0", features = ["test-util", "time"] }
 max-sized-string = {version = "0.1.0", path = "../max-sized-string"}
 tracing-subscriber = "0.3.23"
 max-sized-vec = { path = "../max-sized-vec" }
+
+[[example]]
+name = "room"
+path = "examples/room/main.rs"
+doc-scrape-examples = true

@@ -1,3 +1,28 @@
+//! Chat server example.
+//!
+//! Clients can connect to the server and join a room based on a room ID. Then
+//! users in the same room can be notified of one another's messages and when
+//! they join/leave the chat.
+//!
+//! In this case both client1 and client2 join the room "test_room_id" and post
+//! "Hello, World!" to the chat. The handler for both clients are the same and
+//! print out "{my_username}: {notification}" where notification is either another
+//! client joining, leaving, or posting.
+//!
+//! Here's the program's stdout:
+//!
+//! ```ignore
+//! client1 joined; existing participants: []
+//! client2 joined; existing participants: [MaxLenStr("client1")]
+//! client1: client2 joined
+//! client1: from client1: Hello, World!
+//! client2: from client1: Hello, World!
+//! client1: from client2: Hello, World!
+//! client2: from client2: Hello, World!
+//! client2: client1 left
+//! ```
+//!
+
 mod max_len_str;
 
 use futures::future::join;
@@ -7,7 +32,7 @@ use rpc::in_memory_transport::Network;
 use tracing::{Instrument, debug, info_span};
 
 use crate::{
-    client::{ClientHandler, run_in_room},
+    client::{handler::ClientHandler, run_in_room},
     states::in_room::from_client::{leave, post},
 };
 
@@ -32,8 +57,8 @@ async fn main() -> anyhow::Result<()> {
 
     let span = info_span!("clients");
     let clients_fut = async move {
-        let client1_in_room = client::join_room("client1", network.clone()).await?;
-        let client2_in_room = client::join_room("client2", network).await?;
+        let client1_in_room = client::join_room("client1", "test_room_id", network.clone()).await?;
+        let client2_in_room = client::join_room("client2", "test_room_id", network).await?;
 
         debug!("logged in");
         let mut client1_handler = ClientHandler::new("client1".try_into().unwrap());
@@ -45,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
         let (client2_processor, client2_requester) =
             client2_in_room.into_children_with_handler(&mut client2_handler);
 
-        let jh1 = tokio::spawn(
+        let join_handle_1 = tokio::spawn(
             async move {
                 client1_requester
                     .request_loopback::<post::Method>("Hello, World!".try_into().unwrap())
@@ -58,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
             }
             .instrument(info_span!("client1")),
         );
-        let jh2 = tokio::spawn(
+        let join_handle_2 = tokio::spawn(
             async move {
                 client2_requester
                     .request_loopback::<post::Method>("Hello, World!".try_into().unwrap())
@@ -71,8 +96,8 @@ async fn main() -> anyhow::Result<()> {
             .instrument(info_span!("client2")),
         );
         let (res1, res2) = join(
-            run_in_room(jh1, client1_processor, client1_handler_cloned.clone()),
-            run_in_room(jh2, client2_processor, client2_handler_cloned),
+            run_in_room(join_handle_1, client1_processor, client1_handler_cloned),
+            run_in_room(join_handle_2, client2_processor, client2_handler_cloned),
         )
         .await;
 
