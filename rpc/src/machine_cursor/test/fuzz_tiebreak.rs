@@ -13,7 +13,7 @@ use crate::{
     in_memory_transport::{self, ConnPair, setup_conn},
     machine_cursor::{
         MachineCursorClient, MachineCursorServer, Requester,
-        transition::{RequestTransition, requester::RequesterTransition, tiebreak},
+        transition::{StageOne, requester::RequesterTransition, tiebreak},
     },
 };
 
@@ -42,7 +42,7 @@ async fn server(
         Transition(
             RequesterTransition<
                 Entrypoint,
-                RequestTransition<
+                StageOne<
                     client::Method,
                     client::Method,
                     crate::state::role::Server,
@@ -169,7 +169,7 @@ async fn client(
         Transition(
             RequesterTransition<
                 Entrypoint,
-                RequestTransition<
+                StageOne<
                     server::Method,
                     server::Method,
                     crate::state::role::Client,

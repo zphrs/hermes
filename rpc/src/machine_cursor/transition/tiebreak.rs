@@ -7,8 +7,7 @@ use crate::machine_cursor::transition::requester::processor_sacrifice::Processor
 use crate::{
     CallerError, MachineCursor,
     machine_cursor::transition::{
-        RequestTransition,
-        processor::{Entrypoint, FinalizeFuture, ProcessorTransition},
+        processor::{FinalizeFuture, ProcessorTransition},
         requester::{
             AssertSacrificeError, RequesterTransition, ToSacrifice, TransitionReceipt,
             assert_remote_sacrifice,
@@ -178,11 +177,11 @@ pub async fn between_processor_and_requester_transition<
     Conn: crate::transport::Connection,
 >(
     mut processor_transition: ProcessorTransition<
-        super::processor::Entrypoint<State, ProcessorMethod, Role, Conn>,
+        super::processor::StageOne<State, ProcessorMethod, Role, Conn>,
     >,
     requester_transition: RequesterTransition<
         State,
-        RequestTransition<RootMethod, TransitionMethod, Role, Conn>,
+        super::requester::StageOne<RootMethod, TransitionMethod, Role, Conn>,
     >,
 ) -> Result<
     TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
@@ -263,7 +262,7 @@ pub async fn between_potential_processor_and_known_requester_transition<
     TError,
     ToProcessorTransition: Future<
         Output = Result<
-            ProcessorTransition<super::processor::Entrypoint<State, ProcessorMethod, Role, Conn>>,
+            ProcessorTransition<super::processor::StageOne<State, ProcessorMethod, Role, Conn>>,
             TError,
         >,
     >,
@@ -271,7 +270,7 @@ pub async fn between_potential_processor_and_known_requester_transition<
     mut to_processor_transition: EventualTransitionRequest<ToProcessorTransition>,
     requester_transition: RequesterTransition<
         State,
-        RequestTransition<RootMethod, TransitionMethod, Role, Conn>,
+        super::requester::StageOne<RootMethod, TransitionMethod, Role, Conn>,
     >,
 ) -> Result<
     TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
@@ -301,7 +300,7 @@ where
         Role: crate::state::Role,
         Conn: crate::transport::Connection,
     > {
-        Processor(ProcessorTransition<Entrypoint<State, RootMethod, Role, Conn>>),
+        Processor(ProcessorTransition<super::processor::StageOne<State, RootMethod, Role, Conn>>),
         Requester(
             (
                 RootReq,

@@ -22,7 +22,7 @@ use std::marker::PhantomData;
 pub use processor_sacrifice::{AssertSacrificeError, ToSacrifice, assert_remote_sacrifice};
 mod request_transition;
 
-pub use request_transition::{RequestTransition, TransitionReceipt};
+pub use request_transition::{StageOne, TransitionReceipt};
 
 pub struct RequesterTransition<OldState, Stage> {
     stage: Stage,
@@ -32,7 +32,7 @@ pub struct RequesterTransition<OldState, Stage> {
 pub type RequesterTransitionClientEntrypoint<State, TransitionMethod, Connection> =
     RequesterTransition<
         State,
-        RequestTransition<
+        StageOne<
             <State as crate::State>::ServerHandles,
             TransitionMethod,
             state::role::Client,
@@ -43,7 +43,7 @@ pub type RequesterTransitionClientEntrypoint<State, TransitionMethod, Connection
 pub type RequesterTransitionServerEntrypoint<State, TransitionMethod, Connection> =
     RequesterTransition<
         State,
-        RequestTransition<
+        StageOne<
             <State as crate::State>::ClientHandles,
             TransitionMethod,
             state::role::Server,
@@ -207,9 +207,9 @@ impl<
     TransitionMethod: crate::Method,
     Role: crate::state::Role,
     Caller: crate::transport::Caller,
-> RequesterTransition<State, RequestTransition<RootMethod, TransitionMethod, Role, Caller>>
+> RequesterTransition<State, StageOne<RootMethod, TransitionMethod, Role, Caller>>
 {
-    pub fn new(transition: RequestTransition<RootMethod, TransitionMethod, Role, Caller>) -> Self {
+    pub fn new(transition: StageOne<RootMethod, TransitionMethod, Role, Caller>) -> Self {
         Self {
             stage: transition,
             _marker: PhantomData,

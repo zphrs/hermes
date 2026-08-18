@@ -183,5 +183,5 @@ pub async fn main() {
     let _err = server_jh
         .await
         .unwrap()
-        .expect_err("exited ok which is wrong");
+        .expect_err("should exit with a connection aborted error");
 }

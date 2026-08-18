@@ -95,7 +95,7 @@ pub async fn handle_incoming(
 async fn handle_receiver_transition(
     receiver: machine_cursor::transition::requester::RequesterTransition<
         crate::states::in_room::InRoom,
-        machine_cursor::transition::RequestTransition<
+        machine_cursor::transition::StageOne<
             crate::states::in_room::ToClient,
             close::Method,
             role::Server,
@@ -106,7 +106,7 @@ async fn handle_receiver_transition(
         impl Future<
             Output = Result<
                 ProcessorTransition<
-                    processor::Entrypoint<
+                    processor::StageOne<
                         crate::states::in_room::InRoom,
                         crate::states::in_room::from_client::Method,
                         role::Server,

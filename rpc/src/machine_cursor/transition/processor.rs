@@ -32,7 +32,7 @@ pub struct ProcessorTransition<Stage> {
 }
 
 pub type ProcessorTransitionServerEntrypoint<State, Connection> = ProcessorTransition<
-    Entrypoint<State, <State as crate::State>::ServerHandles, role::Server, Connection>,
+    StageOne<State, <State as crate::State>::ServerHandles, role::Server, Connection>,
 >;
 
 impl<Stage> ProcessorTransition<Stage> {
@@ -46,7 +46,7 @@ impl<Stage> ProcessorTransition<Stage> {
 }
 
 #[expect(private_bounds, reason = "for role")]
-pub struct Entrypoint<
+pub struct StageOne<
     State: traits::Prioritized,
     OldMethod: traits::Method,
     Role: traits::state::Role,
@@ -58,7 +58,7 @@ impl<
     OldMethod: traits::Method,
     Role: traits::state::Role,
     Client: crate::transport::Client,
-> Entrypoint<State, OldMethod, Role, Client>
+> StageOne<State, OldMethod, Role, Client>
 {
     #[allow(clippy::type_complexity)]
     pub(crate) fn into_parts(
@@ -104,12 +104,12 @@ impl<Caller> From<AssertSacrificeError<Caller>> for NextWithRequesterError<Calle
     }
 }
 
-pub struct NeedWrapper<Conn, Role, Res> {
+pub struct StageTwo<Conn, Role, Res> {
     conn: Conn,
     role: Role,
     res: Res,
 }
-impl<Conn, Role> NeedWrapper<Conn, Role, ()> {
+impl<Conn, Role> StageTwo<Conn, Role, ()> {
     fn into_parts(self) -> (Conn, Role) {
         (self.conn, self.role)
     }
@@ -121,13 +121,13 @@ impl<
     ProcessorMethod: traits::Method,
     Role: traits::state::Role,
     Conn: crate::transport::Client,
-> ProcessorTransition<Entrypoint<State, ProcessorMethod, Role, Conn>>
+> ProcessorTransition<StageOne<State, ProcessorMethod, Role, Conn>>
 {
     pub(crate) fn new(
         incoming_transition_receipt: PendingTransitionReceipt<State, ProcessorMethod, Role, Conn>,
     ) -> Self {
         ProcessorTransition {
-            state: Entrypoint(incoming_transition_receipt),
+            state: StageOne(incoming_transition_receipt),
         }
     }
 }
@@ -138,13 +138,13 @@ impl<
     ProcessorMethod: traits::Method,
     Role: traits::state::Role,
     Conn: crate::transport::Connection,
-> ProcessorTransition<Entrypoint<State, ProcessorMethod, Role, Conn>>
+> ProcessorTransition<StageOne<State, ProcessorMethod, Role, Conn>>
 {
     pub async fn next_with_requester<RequesterMethod: crate::Method>(
         self,
         requester: Requester<State, Role, RequesterMethod, Conn>,
     ) -> Result<
-        ProcessorTransition<NeedWrapper<Conn, Role, ProcessorMethod::Res>>,
+        ProcessorTransition<StageTwo<Conn, Role, ProcessorMethod::Res>>,
         NextWithRequesterError<<Conn as crate::transport::Client>::Error>,
     > {
         let (receipt, role, client, _wrapper, priority, sender) = self.state.into_parts();
@@ -161,18 +161,18 @@ impl<
         assert_remote_sacrifice(&mut conn).await?;
 
         Ok(ProcessorTransition {
-            state: NeedWrapper { conn, role, res },
+            state: StageTwo { conn, role, res },
         })
     }
 }
 
-impl<Conn, Role, Res> ProcessorTransition<NeedWrapper<Conn, Role, Res>> {
+impl<Conn, Role, Res> ProcessorTransition<StageTwo<Conn, Role, Res>> {
     #[must_use]
-    pub fn extract_res(self) -> (Res, ProcessorTransition<NeedWrapper<Conn, Role, ()>>) {
+    pub fn extract_res(self) -> (Res, ProcessorTransition<StageTwo<Conn, Role, ()>>) {
         (
             self.state.res,
             ProcessorTransition {
-                state: NeedWrapper {
+                state: StageTwo {
                     res: (),
                     conn: self.state.conn,
                     role: self.state.role,
@@ -183,9 +183,7 @@ impl<Conn, Role, Res> ProcessorTransition<NeedWrapper<Conn, Role, Res>> {
 }
 
 #[expect(private_bounds, reason = "for role")]
-impl<Conn: transport::Connection, Role: state::Role>
-    ProcessorTransition<NeedWrapper<Conn, Role, ()>>
-{
+impl<Conn: transport::Connection, Role: state::Role> ProcessorTransition<StageTwo<Conn, Role, ()>> {
     pub fn finish<NewState: crate::State>(
         self,
         wrapper: state::Wrapper<NewState>,

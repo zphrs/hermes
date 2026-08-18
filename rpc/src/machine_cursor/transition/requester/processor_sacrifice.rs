@@ -1,6 +1,6 @@
 use crate::machine_cursor::processor::EventualTransitionRequest;
-use crate::machine_cursor::transition::processor::Entrypoint;
 use crate::machine_cursor::transition::processor::ProcessorTransition;
+use crate::machine_cursor::transition::processor::StageOne;
 use crate::method::is_leaf;
 use crate::transport::ClientExt as _;
 
@@ -64,7 +64,7 @@ impl<
     Conn: crate::transport::Client,
     State: crate::state::Prioritized,
     Role: crate::state::Role,
-> ProcessorSacrifice for ProcessorTransition<Entrypoint<State, ProcessorMethod, Role, Conn>>
+> ProcessorSacrifice for ProcessorTransition<StageOne<State, ProcessorMethod, Role, Conn>>
 {
 }
 

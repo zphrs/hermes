@@ -29,8 +29,8 @@ use crate::{
         MachineCursorClient, MachineCursorServer,
         test::waitlist::{TableOffer, WaitingList},
         transition::{
-            self, RequestTransition, processor::ProcessorTransition,
-            requester::RequesterTransition, tiebreak,
+            self, StageOne, processor::ProcessorTransition, requester::RequesterTransition,
+            tiebreak,
         },
     },
     state::role,
@@ -306,7 +306,7 @@ async fn test_tiebreak() {
             enum Select {
                 Processor(
                     ProcessorTransition<
-                        transition::processor::Entrypoint<
+                        transition::processor::StageOne<
                             waitlist::WaitingList,
                             <WaitingList as crate::State>::ServerHandles,
                             role::Server,
@@ -319,7 +319,7 @@ async fn test_tiebreak() {
                     Option<
                         RequesterTransition<
                             waitlist::WaitingList,
-                            RequestTransition<
+                            StageOne<
                                 waitlist::TableOffer,
                                 waitlist::TableOffer,
                                 role::Server,

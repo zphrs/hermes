@@ -152,7 +152,7 @@ where
         impl Future<
             Output = Result<
                 ProcessorTransition<
-                    super::transition::processor::Entrypoint<State, RootMethod, Role, Client>,
+                    super::transition::processor::StageOne<State, RootMethod, Role, Client>,
                 >,
                 TransitionRequestError<
                     Client::Error,
@@ -243,7 +243,7 @@ where
         impl Future<
             Output = Result<
                 ProcessorTransition<
-                    super::transition::processor::Entrypoint<State, RootMethod, Role, Client>,
+                    super::transition::processor::StageOne<State, RootMethod, Role, Client>,
                 >,
                 MultipleRequestsError<Client::Error, LoopbackHandler::Error, H::Error>,
             >,
@@ -432,7 +432,7 @@ impl<
         }
     }
 
-    pub fn into_parts(self) -> Option<(State::Priority, Wrapper<State>)> {
+    pub(crate) fn into_parts(self) -> Option<(State::Priority, Wrapper<State>)> {
         self.priority.map(|v| (v, self._state))
     }
 }

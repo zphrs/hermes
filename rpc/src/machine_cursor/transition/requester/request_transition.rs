@@ -67,7 +67,7 @@ impl<Res, Role: crate::state::Role, Caller: crate::transport::Caller>
     private_bounds,
     reason = "role trait is private to force role to be either Server or Client"
 )]
-pub struct RequestTransition<
+pub struct StageOne<
     RootMethod: crate::Method,
     M: crate::Method,
     Role: crate::state::Role,
@@ -82,7 +82,7 @@ impl<
     M: crate::Method,
     Role: crate::state::Role,
     Caller: crate::transport::Caller,
-> Unpin for RequestTransition<RootMethod, M, Role, Caller>
+> Unpin for StageOne<RootMethod, M, Role, Caller>
 {
 }
 
@@ -95,7 +95,7 @@ impl<
     M: crate::Method<CanTransition = can_transition::True>,
     Role: crate::state::Role,
     Caller: crate::transport::Caller,
-> RequestTransition<RootMethod, M, Role, Caller>
+> StageOne<RootMethod, M, Role, Caller>
 where
     M::Res: crate::RpcMessage,
 {
@@ -122,7 +122,7 @@ impl<
     M: crate::Method,
     Role: crate::state::Role,
     Caller: crate::transport::Caller,
-> RequestTransition<RootMethod, M, Role, Caller>
+> StageOne<RootMethod, M, Role, Caller>
 {
     pub fn query_req(
         &self,
@@ -141,7 +141,7 @@ impl<
     M: crate::Method,
     Role: crate::state::Role,
     Caller: crate::transport::Caller + CallerExt,
-> FusedFuture for RequestTransition<RootMethod, M, Role, Caller>
+> FusedFuture for StageOne<RootMethod, M, Role, Caller>
 where
     M::Res: crate::RpcMessage,
     RootMethod: crate::Method,
@@ -157,7 +157,7 @@ impl<
     M: crate::Method,
     Role: crate::state::Role,
     Caller: crate::transport::Caller + CallerExt,
-> Future for RequestTransition<RootMethod, M, Role, Caller>
+> Future for StageOne<RootMethod, M, Role, Caller>
 where
     M::Res: crate::RpcMessage,
     RootMethod::Req: crate::RpcMessage,

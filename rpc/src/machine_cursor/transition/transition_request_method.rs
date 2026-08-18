@@ -75,7 +75,7 @@ impl Res {
             })
     }
 
-    pub fn into_parts<Inner: RpcMessage>(self) -> (bool, Inner) {
+    pub(crate) fn into_parts<Inner: RpcMessage>(self) -> (bool, Inner) {
         (self.in_tiebreak, minicbor::decode(&self.res).unwrap())
     }
 
