@@ -10,9 +10,9 @@ pub struct Request {
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
 pub enum RequestValue {
     #[n(0)]
-    FromSky(#[n(0)] sky_to_earth::Request),
+    FromSky(#[n(0)] sky_to_earth::Req),
     #[n(1)]
-    Ping(#[n(0)] ping::Request),
+    Ping(#[n(0)] ping::Req),
 }
 
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
@@ -24,7 +24,7 @@ pub struct Response {
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
 pub enum ResponseValue {
     #[n(0)]
-    FromSky(#[n(0)] sky_to_earth::Response),
+    FromSky(#[n(0)] sky_to_earth::Res),
     #[n(1)]
-    Ping(#[n(0)] ping::Response),
+    Ping(#[n(0)] ping::Res),
 }

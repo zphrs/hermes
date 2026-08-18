@@ -25,30 +25,6 @@ pub enum EarthToSkyRequestValue {
     ConnectTo(#[n(0)] EarthNode),
 }
 
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
-#[cbor(flat)]
-pub enum KademliaReply<Value> {
-    #[n(0)]
-    Reply(#[n(0)] Value),
-    #[n(1)]
-    Redirect(#[n(1)] FindSkyNodeResponse),
-}
-
-impl<Value> MaxLen for KademliaReply<Value>
-where
-    Value: MaxLen + minicbor::CborLen<()> + minicbor::Encode<()>,
-{
-    fn biggest_instantiation() -> Self {
-        let response = Self::Reply(MaxLen::biggest_instantiation());
-        let redirect = Self::Redirect(MaxLen::biggest_instantiation());
-        if minicbor::len(&response) > minicbor::len(&redirect) {
-            response
-        } else {
-            redirect
-        }
-    }
-}
-
 pub mod response {
     use crate::{EarthNode, SkyNode, earth_node::candidate::Candidate};
     use max_sized_vec::MaxSizedVec;

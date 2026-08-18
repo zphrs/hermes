@@ -1,38 +1,34 @@
 use std::convert::Infallible;
 
-use maxlen::MaxLen;
-use rpc::traits::method::can_transition;
+pub type Req = ();
 
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen, Debug)]
-pub struct Request;
+pub type Res = ();
 
-#[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen, Debug)]
-pub struct Response;
+use rpc::{
+    method::{Ancestor, is_leaf},
+    traits::method::can_transition,
+};
 
 pub struct Method;
 
 impl rpc::Method for Method {
-    type Req = Request;
+    type Req = ();
 
-    type Res = Response;
+    type Res = ();
 
     type CanTransition = can_transition::False;
+
+    type IsLeaf = is_leaf::True;
 }
 
-impl rpc::Handler for Method {
+impl<RM: Ancestor<Self>> rpc::Handler<RM> for Method {
     type Error = Infallible;
 
-    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
+    fn handle<Replier: rpc::ReplyHelper<RM, Self>>(
         &mut self,
         replier: Replier,
-        _value: <Self as rpc::Method>::Req,
-    ) -> Result<
-        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
-        rpc::traits::HandleError<
-            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
-            <Self as rpc::Handler<Self>>::Error,
-        >,
-    > {
-        replier.reply(Response).await
+        (): rpc::ReqOf<Self>,
+    ) -> impl Future<Output = rpc::traits::HandlerResult<RM, Self, Replier, Self::Error>> {
+        replier.reply(())
     }
 }

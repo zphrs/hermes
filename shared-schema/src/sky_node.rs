@@ -104,9 +104,9 @@ impl Borrow<kademlia::Id<32>> for SkyId {
     }
 }
 
-impl Into<kademlia::Id<32>> for SkyId {
-    fn into(self) -> kademlia::Id<32> {
-        self.0
+impl From<SkyId> for kademlia::Id<32> {
+    fn from(val: SkyId) -> Self {
+        val.0
     }
 }
 
@@ -167,7 +167,7 @@ impl SkyNode {
         Self::from(addr)
     }
     pub fn sky_id(&self) -> &SkyId {
-        &self.id.get_or_init(|| SkyId::from(self.address))
+        self.id.get_or_init(|| SkyId::from(self.address))
     }
 
     pub fn ip_address(&self) -> IpAddr {

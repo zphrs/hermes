@@ -1,7 +1,4 @@
-pub mod authenticate;
-
 use crate::{EarthNode, SkyNode, sky_node::SkyId};
-use maxlen::MaxLen;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(

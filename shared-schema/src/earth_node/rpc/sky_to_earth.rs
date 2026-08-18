@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use crate::{EarthNode, earth_node::candidate::Candidate};
 
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
-pub struct Request {
+pub struct Req {
     #[n(0)]
     value: RequestValue,
 }
@@ -21,7 +21,7 @@ pub enum RequestValue {
     },
 }
 #[derive(minicbor::Encode, minicbor::Decode, minicbor::CborLen)]
-pub struct Response {
+pub struct Res {
     #[n(0)]
     value: ResponseValue,
 }
