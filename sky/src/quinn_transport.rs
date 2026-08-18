@@ -22,7 +22,6 @@ use std::{
     sync::Arc,
     task::{Poll, ready},
     time::Duration,
-    u64, usize,
 };
 
 use quinn::{EndpointConfig, ServerConfig, VarInt, crypto::rustls::QuicClientConfig};
@@ -119,8 +118,8 @@ mod test_utils {
             // panic if not in a tokio runtime
             let rt = tokio::runtime::Handle::current();
             let _g = rt.enter();
-            let out = tokio::time::Instant::now().into_std();
-            out
+
+            tokio::time::Instant::now().into_std()
         }
     }
 }
@@ -393,7 +392,9 @@ impl Future for OpenStream {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         let res = match &mut self.state {
-            OpenStreamState::OpenBi(open_bi) => ready!(pin!(open_bi.accept_bi()).poll_unpin(cx)),
+            OpenStreamState::OpenBi(connection) => {
+                ready!(pin!(connection.open_bi()).poll_unpin(cx))
+            }
             OpenStreamState::Done => panic!(),
         };
 
@@ -447,27 +448,25 @@ impl Connection {
 impl rpc::transport::Client for Connection {
     type Error = Error;
 
-    fn accept_stream(&self) -> AcceptStream {
-        AcceptStream {
-            state: AcceptStreamState::AcceptBi(self.conn.clone()),
-        }
+    fn accept_stream(
+        &self,
+    ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> {
+        Box::pin(async move { Ok(self.conn.accept_bi().await?) })
     }
-
-    type AcceptStreamFut = AcceptStream;
 }
 
 #[cfg(test)]
 mod tests {
 
-    use dens::sim::MachineIntoRef;
-    use expect_test::expect;
-    use rpc::{
-        Transport as _,
-        traits::method::can_transition,
-        transport::{CallerExt as _, Client, Close, Incoming},
-    };
-    use std::convert::Infallible;
+    use dens::{Machine, sim::MachineIntoRef};
 
+    use rpc::{
+        Transport as _, define_prioritized,
+        machine_cursor::{MachineCursorClient, MachineCursorServer},
+        method::not_applicable::{self, NotApplicable},
+        state::priority::server_wins,
+        transport::Incoming,
+    };
     use std::net::IpAddr;
     use std::time::Duration;
     use tracing::trace;
@@ -478,43 +477,19 @@ mod tests {
 
     use crate::quinn_transport::Transport;
 
-    struct PingHandler;
+    pub struct Entrypoint;
 
-    impl rpc::Method for PingHandler {
-        type Req = shared_schema::ping::Request;
+    impl rpc::State for Entrypoint {
+        type ClientHandles = NotApplicable;
 
-        type Res = ();
-
-        type CanTransition = can_transition::False;
+        type ServerHandles = ping::Method;
     }
 
-    impl rpc::Handler for PingHandler {
-        type Error = Infallible;
-
-        async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
-            &mut self,
-            replier: Replier,
-            value: <Self as rpc::Method>::Req,
-        ) -> Result<
-            <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
-            rpc::traits::HandleError<
-                <Replier as rpc::transport::ReplyHelper<Self>>::Error,
-                <Self as rpc::Handler<Self>>::Error,
-            >,
-        > {
-            trace!("Handling client");
-
-            let res = replier
-                .reply_with(&mut ping::Method, value, |_v| ())
-                .await?;
-            trace!("finished handling client");
-            Ok(res)
-        }
-    }
+    define_prioritized!(Entrypoint, server_wins);
 
     #[test_log::test]
     pub fn basic_quinn() {
-        let sim = Sim::new();
+        let sim = Sim::new_with_config(dens::sim::Config::synchronous_network());
         sim.enter_runtime(|| {
             let net = Sim::add_machine(ip::Network::new_private_class_c());
             let server = OsMock::new(move || {
@@ -523,15 +498,18 @@ mod tests {
                     let tp = Transport::self_signed_server().await?;
                     trace!("server inited");
 
-                    let client = tp.accept().await?.accept().await?;
-                    trace!("accepted client conn");
-                    let mut stream = client.accept_stream().await?;
-                    client
-                        .handle_one_request(&mut stream, &mut PingHandler)
-                        .await?;
+                    let conn = tp.accept().await?.accept().await?;
+                    trace!("conn accepted");
 
-                    trace!("handled client");
-                    tp.close().await;
+                    let cursor =
+                        rpc::machine_cursor::MachineCursorServer::<Entrypoint, _>::new(conn);
+                    let handler = &mut ping::Method;
+                    let (processor, _requester) = cursor.into_children_with_handler(handler);
+                    trace!("handling loopback requests");
+                    processor
+                        .handle_loopback_requests::<()>()
+                        .await
+                        .expect_err("should error because client drops connection");
                     Ok(())
                 }
                 .instrument(span)
@@ -545,25 +523,27 @@ mod tests {
                 let span = span!(Level::TRACE, "client");
                 async move {
                     trace!("running");
-
                     let tp = Transport::client().await?;
                     let conn = tp.connect(&IpAddr::from(server_addr.0).into()).await?;
-                    conn.query::<shared_schema::ping::Method, shared_schema::ping::Request>(
-                        shared_schema::ping::Request,
-                    )
-                    .await?;
-                    trace!("got response");
-
-                    conn.close().await;
-
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    let cursor =
+                        rpc::machine_cursor::MachineCursorClient::<Entrypoint, _>::new(conn);
+                    let mut handler = not_applicable::Handler;
+                    let (_processor, requester) = cursor.into_children_with_handler(&mut handler);
+                    requester
+                        .request_loopback::<ping::Method>(())
+                        .await
+                        .unwrap();
                     Ok(())
                 }
                 .instrument(span)
             })
             .into_ref();
             let _client_ip = client.get().borrow().connect_to_net(net);
-            let arr = [client, server];
+            let arr = [client];
+
             Sim::run_until_idle(|| arr.iter()).unwrap();
+            assert!(client.get().borrow().is_idle());
         })
     }
     #[test_log::test]
@@ -575,12 +555,13 @@ mod tests {
                 let span = span!(Level::INFO, "server");
                 async {
                     let tp = Transport::self_signed_server().await?;
-                    let client = tp.accept().await?.accept().await?;
-                    let mut stream = client.accept_stream().await?;
-                    client
-                        .handle_one_request(&mut stream, &mut PingHandler)
-                        .await?;
-                    tp.close().await;
+                    let conn = tp.accept().await?.accept().await?;
+                    let cursor =
+                        rpc::machine_cursor::MachineCursorServer::<Entrypoint, _>::new(conn);
+                    let mut handler = ping::Method;
+                    let (processor, _requester) = cursor.into_children_with_handler(&mut handler);
+                    processor.handle_loopback_requests().await?;
+
                     Ok(())
                 }
                 .instrument(span)
@@ -595,10 +576,10 @@ mod tests {
                 async move {
                     let tp = Transport::client_with_keepalive(false).await?;
                     let conn = tp.connect(&IpAddr::from(server_addr.0).into()).await?;
-                    conn.query::<shared_schema::ping::Method, shared_schema::ping::Request>(
-                        shared_schema::ping::Request,
-                    )
-                    .await?;
+                    let mut handler = not_applicable::Handler;
+                    let (_processor, requester) = MachineCursorClient::<Entrypoint, _>::new(conn)
+                        .into_children_with_handler(&mut handler);
+                    requester.request_loopback(()).await?;
                     {
                         let _guard = ip::Network::add_one_way_partition(
                             net,
@@ -613,7 +594,11 @@ mod tests {
                         );
                         tokio::time::sleep(Duration::from_secs(40)).await;
                     }
-                    expect!["timed out"].assert_eq(&conn.conn.close_reason().unwrap().to_string());
+
+                    requester
+                        .request_loopback(())
+                        .await
+                        .expect_err("should have timed out");
 
                     Ok(())
                 }
@@ -637,15 +622,12 @@ mod tests {
                     let tp = Transport::self_signed_server().await?;
                     trace!("server inited");
 
-                    let client = tp.accept().await?.accept().await?;
-                    trace!("accepted client conn");
-                    let mut stream = client.accept_stream().await?;
-                    client
-                        .handle_one_request(&mut stream, &mut PingHandler)
-                        .await?;
+                    let conn = tp.accept().await?.accept().await?;
+                    let mut handler = ping::Method;
+                    let (processor, _requester) = MachineCursorServer::<Entrypoint, _>::new(conn)
+                        .into_children_with_handler(&mut handler);
 
-                    trace!("handled client");
-                    tp.close().await;
+                    processor.handle_loopback_requests().await?;
                     Ok(())
                 }
                 .instrument(span)
@@ -662,13 +644,11 @@ mod tests {
 
                     let tp = Transport::client().await?;
                     let conn = tp.connect(&IpAddr::from(server_addr.0).into()).await?;
-                    conn.query::<shared_schema::ping::Method, shared_schema::ping::Request>(
-                        shared_schema::ping::Request,
-                    )
-                    .await?;
+                    let mut handler = not_applicable::Handler;
+                    let (_processor, requester) = MachineCursorClient::<Entrypoint, _>::new(conn)
+                        .into_children_with_handler(&mut handler);
+                    requester.request_loopback(()).await?;
                     trace!("got response");
-
-                    conn.close().await;
 
                     Ok(())
                 }
@@ -676,7 +656,7 @@ mod tests {
             })
             .into_ref();
             let _client_ip = client.get().borrow().connect_to_net(net);
-            let arr = [client, server];
+            let arr = [client];
             Sim::run_until_idle(|| arr.iter()).unwrap();
         })
     }

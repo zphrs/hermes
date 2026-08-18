@@ -8,6 +8,7 @@ use tracing_subscriber::fmt::time::FormatTime;
 ///
 /// The `Default` implementation for `Uptime` makes the epoch the current time.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[allow(unused)]
 pub struct TokioUptime {
     epoch: tokio::time::Instant,
 }
@@ -56,6 +57,7 @@ impl FormatTime for TokioUptime {
 /// ```no_run
 /// tracing_subscriber::fmt::time::TokioUptime::default()
 /// ```
+#[allow(unused)]
 pub fn tokio_uptime() -> TokioUptime {
     TokioUptime::default()
 }

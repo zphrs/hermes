@@ -2,12 +2,13 @@ pub mod register;
 
 use std::convert::Infallible;
 
-type LoopbackState = state::Wrapper<State>;
-
 use maxlen::MaxLen;
-use rpc::traits::{
-    method::{can_transition, not_applicable::NotApplicable},
-    state,
+use rpc::{
+    method::{Ancestor, is_leaf},
+    traits::{
+        method::{can_transition, not_applicable::NotApplicable},
+        state,
+    },
 };
 use shared_schema::EarthNode;
 
@@ -31,8 +32,8 @@ impl From<find_nodes::Request> for Request {
     }
 }
 
-impl From<shared_schema::ping::Request> for Request {
-    fn from(value: shared_schema::ping::Request) -> Self {
+impl From<shared_schema::ping::Req> for Request {
+    fn from(value: shared_schema::ping::Req) -> Self {
         Self::Ping(value)
     }
 }
@@ -58,6 +59,8 @@ pub struct Method {
     find_nodes: find_nodes::Method,
     register: register::Method,
 }
+
+impl Ancestor<shared_schema::ping::Method> for Method {}
 
 impl std::fmt::Debug for Method {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -88,22 +91,18 @@ impl rpc::Method for Method {
     type Res = Response;
 
     type CanTransition = can_transition::False;
+
+    type IsLeaf = is_leaf::False;
 }
 
-impl rpc::Handler for Method {
+impl<RM: Ancestor<Method>> rpc::Handler<RM> for Method {
     type Error = Infallible;
 
-    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
+    async fn handle<Replier: rpc::ReplyHelper<RM, Self>>(
         &mut self,
         replier: Replier,
-        value: <Self as rpc::Method>::Req,
-    ) -> Result<
-        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
-        rpc::traits::HandleError<
-            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
-            <Self as rpc::Handler<Self>>::Error,
-        >,
-    > {
+        value: rpc::ReqOf<Self>,
+    ) -> rpc::traits::HandlerResult<RM, Self, Replier, Self::Error> {
         Ok(match value {
             Request::Ping(request) => {
                 replier

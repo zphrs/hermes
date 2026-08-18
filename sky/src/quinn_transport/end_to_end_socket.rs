@@ -30,7 +30,7 @@ impl AsyncUdpSocket for EndToEndSocket {
         self.sock
             .lock()
             .unwrap()
-            .try_send_to(&transmit.contents, transmit.destination)
+            .try_send_to(transmit.contents, transmit.destination)
             .map(|_| ())
     }
 

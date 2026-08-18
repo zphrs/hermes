@@ -16,6 +16,7 @@ use maxlen::MaxLen;
 
 pub use bi_stream::BiStream;
 pub use replier::{ImmediateReplier, ReplyHelper, ReplyReceipt};
+use tracing::debug;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CallerError<T> {
@@ -72,10 +73,10 @@ impl<R, E> From<crate::traits::HandleError<R, E>> for HandleOneRequestError<R, E
 
 pub trait Client: BiStream {
     type Error;
-    /// A future that does not capture `&self` (see [`Client::accept_stream`]) and is [`Unpin`].
-    type AcceptStreamFut: ::core::future::Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>>
-        + Unpin;
-    fn accept_stream(&self) -> Self::AcceptStreamFut;
+
+    fn accept_stream(
+        &self,
+    ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> + Unpin;
 }
 
 pub(crate) trait ClientExt: Client {
@@ -110,6 +111,7 @@ pub(crate) trait ClientExt: Client {
             let read = stream;
             let mut receiver = minicbor_io::AsyncReader::new(read);
             receiver.set_max_len(Method::Req::max_len() as u32);
+            debug!("handling request");
             let Some(root) = (match receiver.read::<Method::Req>().await {
                 Ok(v) => v,
                 Err(e) => Err(HandleOneRequestError::Read(e))?,
@@ -118,6 +120,7 @@ pub(crate) trait ClientExt: Client {
                     ErrorKind::ConnectionAborted.into(),
                 )));
             };
+            debug!("got request, now handling");
             let out = match handler.handle(write, root).await {
                 Ok(v) => v,
                 Err(traits::HandleError::Handler(e)) => {
@@ -127,6 +130,7 @@ pub(crate) trait ClientExt: Client {
                     return Err(HandleOneRequestError::Replier(e));
                 }
             };
+            debug!("handled request");
             Ok(out)
         }
     }

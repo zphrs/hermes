@@ -1,4 +1,4 @@
-use sky::server::SkyServer;
+// use sky::server::SkyServer;
 use tracing_subscriber::fmt::time::tokio_uptime;
 
 #[tokio::main]
@@ -10,6 +10,6 @@ async fn main() {
         .with_test_writer()
         .with_timer(tokio_uptime())
         .init();
-    let ss = SkyServer::new().await.unwrap();
-    ss.run().await.unwrap().unwrap();
+    // let ss = SkyServer::new().await.unwrap();
+    // ss.run().await.unwrap().unwrap();
 }

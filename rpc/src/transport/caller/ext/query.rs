@@ -6,7 +6,7 @@ use std::{
 
 use futures::FutureExt as _;
 use maxlen::MaxLen;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::{Caller, CallerError, transport::BiStream};
 
@@ -30,6 +30,7 @@ pub struct PendingQuery<C: Caller, M: crate::Method, RootReq> {
 
 impl<C: Caller, M: crate::Method, RootReq> PendingQuery<C, M, RootReq> {
     pub fn new(caller: &C, req: RootReq) -> Self {
+        trace!("opening stream");
         let stream_fut = caller.open_stream();
         Self {
             req,

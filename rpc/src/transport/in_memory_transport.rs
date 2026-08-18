@@ -160,50 +160,17 @@ impl<Address> crate::transport::BiStream for Connection<Address> {
 
 impl<Address> crate::transport::Client for Connection<Address> {
     type Error = std::io::Error;
-    type AcceptStreamFut = AcceptStreamFut;
     #[inline(never)]
-    fn accept_stream(&self) -> AcceptStreamFut {
-        AcceptStreamFut {
-            state: AcceptStreamFutState::Locking(self.stream_rx.clone()),
-        }
-    }
-}
-
-pub struct AcceptStreamFut {
-    state: AcceptStreamFutState,
-}
-
-enum AcceptStreamFutState {
-    Receiving(tokio::sync::OwnedMutexGuard<StreamChannelRx>),
-    Locking(Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<(SendStream, RecvStream)>>>),
-    Done,
-}
-
-impl Future for AcceptStreamFut {
-    type Output = Result<(SendStream, RecvStream), std::io::Error>;
-    #[inline(never)]
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Self::Output> {
-        loop {
-            match &mut self.state {
-                AcceptStreamFutState::Locking(val) => {
-                    let guard = ready!(pin!(val.clone().lock_owned()).poll_unpin(cx));
-                    self.state = AcceptStreamFutState::Receiving(guard);
-                }
-                AcceptStreamFutState::Receiving(guard) => {
-                    let result = ready!(guard.poll_recv(cx));
-                    self.state = AcceptStreamFutState::Done;
-                    return Poll::Ready(result.ok_or_else(|| {
-                        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed")
-                    }));
-                }
-                AcceptStreamFutState::Done => {
-                    unreachable!("AcceptStreamFut polled after completion")
-                }
-            }
-        }
+    fn accept_stream(&self) -> impl Future<Output = Result<(SendStream, RecvStream), Self::Error>> {
+        Box::pin(async move {
+            self.stream_rx
+                .clone()
+                .lock_owned()
+                .await
+                .recv()
+                .await
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
+        })
     }
 }
 

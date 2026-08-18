@@ -2,6 +2,7 @@ use std::time::SystemTime;
 #[cfg(test)]
 use std::time::{Duration, UNIX_EPOCH};
 
+#[allow(unused)]
 pub fn get_system_time() -> SystemTime {
     #[cfg(test)]
     let curr_time = {
@@ -28,6 +29,7 @@ pub fn get_system_time() -> SystemTime {
 }
 
 #[cfg(test)]
+#[allow(unused)]
 pub fn since_epoch() -> Duration {
     get_system_time().duration_since(UNIX_EPOCH).unwrap()
 }

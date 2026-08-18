@@ -1,5 +1,6 @@
 use crate::machine_cursor::transition::processor::ProcessorTransition;
-use crate::method::{Ancestor, FromDescendant, is_leaf};
+use crate::method::{Ancestor, FromDescendant, can_transition, is_leaf};
+use crate::transport::ClientExt;
 use crate::{Handler, ImmediateReplier, machine_cursor::PendingTransitionReceipt};
 mod concurrent_request_handler;
 
@@ -14,7 +15,7 @@ use futures::{
     FutureExt as _, StreamExt as _, future::FusedFuture, select, stream::FuturesUnordered,
 };
 use maxlen::MaxLen;
-use tracing::{debug, trace};
+use tracing::{Instrument, Span, debug, trace};
 
 use crate::{
     HandleOneRequestError, Method,
@@ -47,6 +48,56 @@ where
     _root_method: method::Wrapper<RootMethod>,
     role: Role,
     client: Client,
+}
+
+#[expect(
+    private_bounds,
+    reason = "role trait is private to force role to be either Server or Client"
+)]
+impl<'h, State, Role, RootMethod, Client, H> Processor<'h, State, Role, RootMethod, Client, H>
+where
+    State: traits::State,
+    Role: state::Role,
+    Client: crate::transport::Client,
+    RootMethod: crate::Method<CanTransition = can_transition::False, IsLeaf = is_leaf::True>,
+    H: traits::Handler<RootMethod, RootMethod> + Clone,
+{
+    pub async fn handle_loopback_requests<T>(
+        self,
+    ) -> Result<T, LoopbackRequestsError<Client::Error, H::Error>>
+    where
+        <RootMethod as traits::method::Method>::Req: crate::RpcMessage,
+    {
+        let Self {
+            _state,
+            handler,
+            _root_method,
+            client,
+            ..
+        } = self;
+
+        let mut js = FuturesUnordered::new();
+        let client = &client;
+        let mut stream_fut = client.accept_stream().fuse();
+        loop {
+            select! {
+                maybe_stream = stream_fut => {
+                    let mut stream = maybe_stream.map_err(LoopbackRequestsError::Client)?;
+                    debug!("accepted stream");
+                    let mut handler = handler.clone();
+
+                    js.push(async move {
+                        client.handle_one_request(&mut stream, &mut handler).await?;
+                        Result::<(), LoopbackRequestsError<Client::Error, H::Error>>::Ok(())
+                    });
+                    stream_fut = client.accept_stream().fuse();
+                },
+                next_result = js.select_next_some() => {
+                    next_result?;
+                }
+            };
+        }
+    }
 }
 
 #[must_use = "should be explicitly awaited or alternatively passed into a tiebreak \
@@ -97,6 +148,14 @@ pub enum TransitionRequestError<ClientError, HandlerError, ReplierError> {
     Handler(#[from] traits::HandleError<Infallible, HandlerError>),
     #[error("handle one request error: {0}")]
     HandleOneRequest(#[from] HandleOneRequestError<ReplierError, HandlerError>),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum LoopbackRequestsError<ClientError, HandlerError> {
+    #[error("client error: {0}")]
+    Client(ClientError),
+    #[error("handle one request error: {0}")]
+    HandleOneRequest(#[from] HandleOneRequestError<minicbor_io::Error, HandlerError>),
 }
 
 #[derive(Debug, thiserror::Error)]

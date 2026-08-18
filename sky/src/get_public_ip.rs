@@ -24,7 +24,7 @@ pub async fn get_public_ip() -> Option<IpAddr> {
     let ip_addrs: Vec<_> = ls.run_until(jh1).await.unwrap_or_default();
     let ip_addrs_2: Vec<_> = ls.run_until(jh2).await.unwrap_or_default();
     // return most frequent from all sources who returned as a "best guess" for pub ip.
-    // this way any ip address provider can't create a DOS
+    // this way any individual slow ip address won't result in a DOS
     // TODO: get both v4 and v6 addresses and return both of them
     warn!("get both v4 and v6 addresses and return both of them");
     let mut hm: HashMap<IpAddr, usize> = HashMap::new();
@@ -45,7 +45,7 @@ pub async fn get_public_ip_mock() -> Option<IpAddr> {
 
 // returns first ip returned from any of the default stun servers
 async fn query_stun_server() -> Vec<IpAddr> {
-    static DEFAULT_STUN_SERVERS: [&'static str; 4] = [
+    static DEFAULT_STUN_SERVERS: [&str; 4] = [
         "stun.cloudflare.com",
         "stun.l.google.com",
         "stun.syncthing.net",

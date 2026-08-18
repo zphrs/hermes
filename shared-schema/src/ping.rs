@@ -9,6 +9,7 @@ use rpc::{
     traits::method::can_transition,
 };
 
+#[derive(Clone, Copy)]
 pub struct Method;
 
 impl rpc::Method for Method {
