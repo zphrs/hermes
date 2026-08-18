@@ -1,5 +1,5 @@
 use futures::select;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::machine_cursor::processor::EventualTransitionRequest;
 
@@ -383,6 +383,7 @@ where
             if in_tiebreak {
                 debug!("in tiebreak");
                 let mut processor_transition = to_processor_transition.await?;
+                trace!("processor transition request received");
                 let processor_transition_mut = processor_transition.inner_mut().inner_mut();
 
                 assert!(

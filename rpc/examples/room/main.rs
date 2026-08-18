@@ -25,6 +25,8 @@
 
 mod max_len_str;
 
+use std::future::pending;
+
 use futures::future::join;
 use max_len_str::MaxLenStr;
 
@@ -33,7 +35,10 @@ use tracing::{Instrument, debug, info_span};
 
 use crate::{
     client::{handler::ClientHandler, run_in_room},
-    states::in_room::from_client::{leave, post},
+    states::in_room::{
+        close,
+        from_client::{leave, post},
+    },
 };
 
 pub type Username = MaxLenStr<256>;
@@ -70,6 +75,8 @@ async fn main() -> anyhow::Result<()> {
         let (client2_processor, client2_requester) =
             client2_in_room.into_children_with_handler(&mut client2_handler);
 
+        let client1_span = info_span!("client1");
+        let client2_span = info_span!("client2");
         let join_handle_1 = tokio::spawn(
             async move {
                 client1_requester
@@ -81,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
 
                 anyhow::Ok(transition_request)
             }
-            .instrument(info_span!("client1")),
+            .instrument(client1_span.clone()),
         );
         let join_handle_2 = tokio::spawn(
             async move {
@@ -89,15 +96,17 @@ async fn main() -> anyhow::Result<()> {
                     .request_loopback::<post::Method>("Hello, World!".try_into().unwrap())
                     .await?;
                 debug!("sent hello world");
-                let transition_request = client2_requester.request_transition::<leave::Method>(());
+                let transition_request = client2_requester.request_transition::<close::Method>(());
 
                 anyhow::Ok(transition_request)
             }
-            .instrument(info_span!("client2")),
+            .instrument(client2_span.clone()),
         );
         let (res1, res2) = join(
-            run_in_room(join_handle_1, client1_processor, client1_handler_cloned),
-            run_in_room(join_handle_2, client2_processor, client2_handler_cloned),
+            run_in_room(join_handle_1, client1_processor, client1_handler_cloned)
+                .instrument(client1_span),
+            run_in_room(join_handle_2, client2_processor, client2_handler_cloned)
+                .instrument(client2_span),
         )
         .await;
 

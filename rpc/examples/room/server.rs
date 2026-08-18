@@ -1,11 +1,13 @@
-use futures::{FutureExt, select};
+use anyhow::anyhow;
+use futures::{FutureExt, select_biased};
 
 use rpc::{
     Transport as _, in_memory_transport,
     machine_cursor::{
         self, MachineCursorServer,
         transition::{
-            processor::{self, ProcessorTransition},
+            processor::{self, ProcessorTransition, ProcessorTransitionServerEntrypoint},
+            requester::RequesterTransitionServerEntrypoint,
             tiebreak,
         },
     },
@@ -77,14 +79,15 @@ pub async fn handle_incoming(
         drop(room_mutex_guard);
         let mut eventual_processor_transition =
             processor.handle_requests::<loopback::Method, _>(loopback_handler);
+        let mut fused_receiver = receiver.fuse();
         debug!("server handling requests");
-        cursor = select! {
+        cursor = select_biased! {
+            receiver_transition = fused_receiver => handle_receiver_transition(receiver_transition?, eventual_processor_transition).await?,
             processor_transition = eventual_processor_transition => {
                 drop(eventual_processor_transition);
                 trace!("handling processor transition");
-                handle_processor_transition(processor_transition, handler).await?
+                handle_processor_transition(processor_transition, handler, fused_receiver).await?
             },
-            receiver_transition = receiver.fuse() => handle_receiver_transition(receiver_transition?, eventual_processor_transition).await?,
         };
     }
 }
@@ -144,23 +147,30 @@ async fn handle_receiver_transition(
     }
 }
 
-#[allow(clippy::type_complexity)]
-async fn handle_processor_transition(
+async fn handle_processor_transition<TransitionMethod: rpc::Method>(
     processor_transition_result: Result<
-        ProcessorTransition<
-            processor::Entrypoint<
-                crate::states::in_room::InRoom,
-                crate::states::in_room::from_client::Method,
-                role::Server,
-                in_memory_transport::Connection<&str>,
-            >,
+        ProcessorTransitionServerEntrypoint<
+            crate::states::in_room::InRoom,
+            in_memory_transport::Connection<&'static str>,
         >,
         machine_cursor::processor::MultipleRequestsError<std::io::Error, Infallible, Infallible>,
     >,
     mut handler: in_room::FromClientHandler,
+    fused_receiver: futures::future::Fuse<
+        tokio::sync::oneshot::Receiver<
+            RequesterTransitionServerEntrypoint<
+                crate::states::in_room::InRoom,
+                TransitionMethod,
+                in_memory_transport::Connection<&'static str>,
+            >,
+        >,
+    >,
 ) -> anyhow::Result<
-    rpc::MachineCursor<Entrypoint, in_memory_transport::Connection<&str>, role::Server>,
-> {
+    rpc::MachineCursor<Entrypoint, in_memory_transport::Connection<&'static str>, role::Server>,
+>
+where
+    <TransitionMethod as rpc::Method>::Res: rpc::RpcMessage + rpc::state::Has<Entrypoint>,
+{
     let processor_transition = processor_transition_result?;
     // either they called a close or a leave, either way we remove them
     // from the room
@@ -172,7 +182,20 @@ async fn handle_processor_transition(
 
         Ok(processor_transition.finish(res.extract_wrapper()))
     } else {
-        unreachable!()
+        let receiver = fused_receiver.await.unwrap();
+        match tiebreak::between_processor_and_requester_transition(processor_transition, receiver)
+            .await
+            .map_err(|e| anyhow!("{e:?}"))?
+        {
+            tiebreak::TiebreakResult::ProcessorWon(finalize_processor_transition) => {
+                let (res, finalize) = finalize_processor_transition.extract_res();
+                Ok(finalize.finish(res.extract_wrapper()).await?)
+            }
+            tiebreak::TiebreakResult::RequesterWon(finalize_requester_transition) => {
+                let (res, finalize) = finalize_requester_transition.extract_res();
+                Ok(finalize.finish(res.extract_wrapper()).await?)
+            }
+        }
     }
 }
 

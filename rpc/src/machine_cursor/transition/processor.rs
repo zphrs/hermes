@@ -23,13 +23,17 @@ use crate::{
         Requester,
         transition::requester::{AssertSacrificeError, assert_remote_sacrifice},
     },
-    state::{self, Prioritized},
+    state::{self, Prioritized, role},
     traits, transport,
 };
 
 pub struct ProcessorTransition<Stage> {
     state: Stage,
 }
+
+pub type ProcessorTransitionServerEntrypoint<State, Connection> = ProcessorTransition<
+    Entrypoint<State, <State as crate::State>::ServerHandles, role::Server, Connection>,
+>;
 
 impl<Stage> ProcessorTransition<Stage> {
     pub(crate) fn into_inner(self) -> Stage {

@@ -136,7 +136,10 @@ impl<RootMethod: Ancestor<close::Method>> rpc::Handler<RootMethod, close::Method
     ) -> HandlerResult<RootMethod, close::Method, Replier, Self::Error> {
         // either we trigger closing the room or the room is already closed
         let mut room_lock = self.room.lock().await;
-        let room = room_lock.take().ok_or(user::Error::RoomClosed)?;
+        let Some(room) = room_lock.take() else {
+            let wrapper = replier.new_wrapper();
+            return replier.reply(wrapper).await;
+        };
         drop(room_lock);
         self.rooms.lock().unwrap().remove(&room.id);
         room.close().await;
@@ -157,7 +160,10 @@ impl<RootMethod: Ancestor<leave::Method>> rpc::Handler<RootMethod, leave::Method
     ) -> HandlerResult<RootMethod, leave::Method, Replier, Self::Error> {
         {
             let mut room_lock = self.room.lock().await;
-            let room = room_lock.as_mut().ok_or(user::Error::RoomClosed)?;
+            let Some(room) = room_lock.as_mut() else {
+                let wrapper = replier.new_wrapper();
+                return replier.reply(wrapper).await;
+            };
 
             let me = room.remove_user(&self.username).await.unwrap();
             debug!("removed {}", me.name);

@@ -1,4 +1,8 @@
-use rpc::{in_memory_transport, machine_cursor, state::role};
+use rpc::{
+    in_memory_transport,
+    machine_cursor::{self, transition::requester::RequesterTransitionServerEntrypoint},
+    state::role,
+};
 
 use crate::{
     Username,
@@ -19,22 +23,16 @@ pub struct User {
         <in_room::InRoom as rpc::State>::ClientHandles,
         in_memory_transport::Connection<&'static str>,
     >,
-    #[allow(clippy::type_complexity)]
     pub(crate) room_closing_notification: tokio::sync::oneshot::Sender<
-        machine_cursor::transition::requester::RequesterTransition<
+        RequesterTransitionServerEntrypoint<
             in_room::InRoom,
-            machine_cursor::transition::RequestTransition<
-                in_room::ToClient,
-                close::Method,
-                role::Server,
-                in_memory_transport::Connection<&'static str>,
-            >,
+            close::Method,
+            in_memory_transport::Connection<&'static str>,
         >,
     >,
 }
 
 impl User {
-    #[allow(clippy::type_complexity)]
     pub fn new(
         name: Username,
         requester: rpc::machine_cursor::Requester<
@@ -44,14 +42,10 @@ impl User {
             in_memory_transport::Connection<&'static str>,
         >,
         room_closing_notification: tokio::sync::oneshot::Sender<
-            machine_cursor::transition::requester::RequesterTransition<
+            RequesterTransitionServerEntrypoint<
                 in_room::InRoom,
-                machine_cursor::transition::RequestTransition<
-                    in_room::ToClient,
-                    close::Method,
-                    role::Server,
-                    in_memory_transport::Connection<&'static str>,
-                >,
+                close::Method,
+                in_memory_transport::Connection<&'static str>,
             >,
         >,
     ) -> User {

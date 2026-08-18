@@ -1,12 +1,13 @@
 use futures::future::select;
 use rpc::{
-    MachineCursor, Transport, in_memory_transport,
+    MachineCursor, RpcMessage, Transport,
+    in_memory_transport::{self, Connection},
     machine_cursor::{
         MachineCursorClient,
-        transition::{RequestTransition, requester::RequesterTransition, tiebreak},
+        transition::{requester::RequesterTransitionClientEntrypoint, tiebreak},
     },
     method::not_applicable,
-    state::role,
+    state::{self, Has, role},
 };
 use tracing::debug;
 
@@ -48,22 +49,14 @@ pub async fn join_room(
     Ok(in_room)
 }
 
-#[allow(clippy::type_complexity)]
-pub async fn run_in_room(
-    join_handle: tokio::task::JoinHandle<
-        Result<
-            RequesterTransition<
-                in_room::InRoom,
-                RequestTransition<
-                    in_room::from_client::Method,
-                    in_room::from_client::leave::Method,
-                    role::Client,
-                    in_memory_transport::Connection<&'static str>,
-                >,
-            >,
-            anyhow::Error,
-        >,
-    >,
+pub type JoinHandleResult<TransitionMethod> = RequesterTransitionClientEntrypoint<
+    in_room::InRoom,
+    TransitionMethod,
+    Connection<&'static str>,
+>;
+
+pub async fn run_in_room<TransitionMethod: rpc::Method>(
+    join_handle: tokio::task::JoinHandle<Result<JoinHandleResult<TransitionMethod>, anyhow::Error>>,
     client_processor: rpc::machine_cursor::Processor<
         '_,
         InRoom,
@@ -75,7 +68,10 @@ pub async fn run_in_room(
     loopback_handler: handler::ClientHandler,
 ) -> anyhow::Result<
     MachineCursor<states::Entrypoint, in_memory_transport::Connection<&'static str>, role::Client>,
-> {
+>
+where
+    <TransitionMethod as rpc::Method>::Res: RpcMessage + state::Has<states::Entrypoint>,
+{
     let processor_transition =
         client_processor.handle_requests::<in_room::Notify, _>(loopback_handler);
     let selection = select(join_handle, processor_transition).await;
@@ -87,10 +83,10 @@ pub async fn run_in_room(
             )
             .await?
         }
-        futures::future::Either::Right((processor_transition, requester_transition)) => {
+        futures::future::Either::Right((processor_transition, requester_transition_jh)) => {
             tiebreak::between_processor_and_requester_transition(
                 processor_transition?,
-                requester_transition.await.unwrap()?,
+                requester_transition_jh.await.unwrap()?,
             )
             .await
             .unwrap()
@@ -110,7 +106,9 @@ pub async fn run_in_room(
         }
         tiebreak::TiebreakResult::RequesterWon(finalize_requester_transition) => {
             let (res, finalize_requester_transition) = finalize_requester_transition.extract_res();
-            finalize_requester_transition.finish(res).await?
+            finalize_requester_transition
+                .finish(res.extract_wrapper())
+                .await?
         }
     };
 

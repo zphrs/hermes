@@ -52,9 +52,9 @@ pub async fn assert_remote_sacrifice<Conn: crate::transport::Connection>(
         .accept_stream()
         .await
         .map_err(AssertSacrificeError::AcceptStream)?;
-    tracing::warn!("opened notification stream");
+    tracing::debug!("opened notification stream");
     conn.handle_one_notification::<Method>(&mut stream).await?;
-    tracing::warn!("handled notification");
+    tracing::debug!("handled notification");
 
     Ok(())
 }

@@ -29,6 +29,28 @@ pub struct RequesterTransition<OldState, Stage> {
     _marker: PhantomData<OldState>,
 }
 
+pub type RequesterTransitionClientEntrypoint<State, TransitionMethod, Connection> =
+    RequesterTransition<
+        State,
+        RequestTransition<
+            <State as crate::State>::ServerHandles,
+            TransitionMethod,
+            state::role::Client,
+            Connection,
+        >,
+    >;
+
+pub type RequesterTransitionServerEntrypoint<State, TransitionMethod, Connection> =
+    RequesterTransition<
+        State,
+        RequestTransition<
+            <State as crate::State>::ClientHandles,
+            TransitionMethod,
+            state::role::Server,
+            Connection,
+        >,
+    >;
+
 impl<State, Stage> RequesterTransition<State, Stage> {
     pub(crate) fn into_inner(self) -> Stage {
         self.stage
@@ -177,9 +199,6 @@ pub(crate) struct NeedIncomingTransitionRequest<
     pub _receipt: TransitionReceipt<Res, Role, Caller>,
     pub _priority: Priority,
 }
-
-pub type RequesterTransitionEntrypoint<State, RootReq, TransitionMethod, Role, Connection> =
-    RequesterTransition<State, RequestTransition<RootReq, TransitionMethod, Role, Connection>>;
 
 #[expect(private_bounds, reason = "for role")]
 impl<
