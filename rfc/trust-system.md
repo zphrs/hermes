@@ -7,17 +7,25 @@ watch the world burn, instead worried about selfish nodes and dishonest nodes.
 
 Comprised of the following assumptions:
 
--   The “good” state is common. I.e. nodes are only rarely overwhelmed during
-    actively malicious attacks which are discouraged with PoW; we assume 
-    post-scarcity messaging abilities.
--   Proof of work coupled with a theory of abundance ensures that nodes who want 
-    to watch the world burn are mitigated and that nodes which are overwhelmed 
-    will be up front about how they are overwhelmed.
--   Nodes cannot trust one another’s “goodness” ratings. Only first hand
+- The “good” state is common. I.e. nodes are only rarely overwhelmed during
+  actively malicious attacks which are discouraged with PoW; we assume
+  post-scarcity messaging abilities for the network overall (surplus of internet
+  bandwidth + uptime + disk space).
+- Proof of work coupled with a theory of abundance ensures that nodes who want
+  to watch the world burn are mitigated and that nodes which are overwhelmed
+  will be up front about how they are overwhelmed.
+- Nodes cannot trust one another’s “goodness” ratings. Only first hand
     experience counts.
--   No money/monetary system/linearized log. Only game theory
--   Targeted attacks against a specific Node are considered out of scope
--   Nodes behave selfishly at worst and at best perform neutrally; not selfishly
+- A globally linearized log (like what is used for blockchain systems to keep track of
+  financial transactions) is overkill for establishing which nodes to help out and which nodes help. 
+    - proof of work is prohibitively slow and computationally expensive to
+      maintain, 
+    - proof of stake indefinitely relies on non-participants of the earth
+      network to continue providing the service
+    - proof of agreement results in participation in the network being gatekept
+      by the existing users of the network
+- Targeted attacks against a specific Node are considered out of scope
+- Nodes behave selfishly at worst and at best perform neutrally; not selfishly
     nor selflessly.
 
 ## how it works
