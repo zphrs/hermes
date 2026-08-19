@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use rpc::{
-    in_memory_transport::{ConnPair, Network, setup_conn},
+    in_memory_transport::{self, ConnPair, Network, setup_conn},
     machine_cursor::MachineCursorClient,
     method::not_applicable::{self},
     state::{self},
@@ -19,19 +19,10 @@ use crate::states::{
 mod server;
 mod states;
 
-pub(crate) async fn client<
-    R: rpc::transport::Connection + Clone + Send + std::marker::Sync + 'static,
->(
-    conn: R,
-) -> anyhow::Result<()>
+pub(crate) async fn client(conn: in_memory_transport::Connection<u8>) -> anyhow::Result<()>
 where
-    <R as rpc::transport::Caller>::Error:
-        Send + Sync + std::fmt::Debug + std::fmt::Display + 'static,
-    <R as rpc::Caller>::OpenStreamFut: Send,
-    <R as rpc::transport::BiStream>::SendStream: Send,
-    <R as rpc::transport::BiStream>::RecvStream: Send,
 {
-    let entrypoint_cursor = MachineCursorClient::<states::Entrypoint, R>::new(conn);
+    let entrypoint_cursor = MachineCursorClient::<states::Entrypoint, _>::new(conn);
 
     let mut handler = not_applicable::Handler;
 
@@ -97,6 +88,8 @@ where
         .request_transition::<logged_in::logout::Method>(())
         .next()
         .await?
+        .next()
+        .await?
         .assert_need_processor()
         .extract_res();
     // log out successful
@@ -122,14 +115,15 @@ async fn login<R: rpc::transport::Connection + Clone>(
     >,
 )>
 where
-    <R as rpc::transport::Caller>::Error:
-        Send + Sync + std::fmt::Debug + std::fmt::Display + 'static,
+    <R as rpc::transport::Caller>::Error: Send + Sync + 'static + std::error::Error,
 {
     let (res, requester_transition) = requester
         .request_transition::<states::entrypoint::login::Method>(states::entrypoint::login::Req {
             username: username.try_into().unwrap(),
             password: password.try_into().unwrap(),
         })
+        .next()
+        .await?
         .next()
         .await?
         .assert_need_processor()

@@ -82,18 +82,15 @@ where
     }
 }
 
-impl<Address> crate::transport::Transport for MemoryTransport<Address>
+impl<Address> MemoryTransport<Address>
 where
     Address: Eq + Hash + Copy,
 {
-    type Address = Address;
-    type Error = Infallible;
-    type Caller = Connection<Address>;
     #[inline(never)]
-    fn connect(
+    pub fn connect(
         &self,
-        to: &Self::Address,
-    ) -> impl Future<Output = Result<Self::Caller, Self::Error>> {
+        to: &Address,
+    ) -> impl Future<Output = Result<Connection<Address>, Infallible>> {
         let tx = self
             .network
             .registry
@@ -119,10 +116,7 @@ where
         }
     }
 
-    type Client = Connection<Address>;
-    type Incoming = Incoming<Address>;
-
-    fn accept(&self) -> impl Future<Output = Result<Self::Incoming, Self::Error>> {
+    pub fn accept(&self) -> impl Future<Output = Result<Incoming<Address>, Infallible>> {
         let rx = self.incoming_rx.clone();
         let local_addr = self.address;
         async move { Ok(Incoming { rx, local_addr }) }
@@ -161,16 +155,14 @@ impl<Address> crate::transport::BiStream for Connection<Address> {
 impl<Address> crate::transport::Client for Connection<Address> {
     type Error = std::io::Error;
     #[inline(never)]
-    fn accept_stream(&self) -> impl Future<Output = Result<(SendStream, RecvStream), Self::Error>> {
-        Box::pin(async move {
-            self.stream_rx
-                .clone()
-                .lock_owned()
-                .await
-                .recv()
-                .await
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
-        })
+    async fn accept_stream(&self) -> Result<(SendStream, RecvStream), Self::Error> {
+        self.stream_rx
+            .clone()
+            .lock_owned()
+            .await
+            .recv()
+            .await
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
     }
 }
 
@@ -225,9 +217,15 @@ impl Future for OpenStreamFut {
 
 impl<Address> crate::transport::Caller for Connection<Address> {
     type Error = Infallible;
-    type OpenStreamFut = OpenStreamFut;
     #[inline(never)]
-    fn open_stream(&self) -> OpenStreamFut {
+    fn open_stream(
+        &self,
+    ) -> impl futures::Future<
+        Output = std::result::Result<
+            (Self::SendStream, Self::RecvStream),
+            <Self as crate::transport::Caller>::Error,
+        >,
+    > {
         OpenStreamFut::new(self.stream_tx.clone())
     }
 }

@@ -1,6 +1,6 @@
 use futures::future::join;
 
-use crate::{Transport as _, in_memory_transport, transport::Incoming as _};
+use crate::{in_memory_transport, transport::Incoming as _};
 
 #[must_use]
 pub struct ConnPair {

@@ -2,6 +2,8 @@ mod bi_stream;
 mod caller;
 mod conn;
 pub mod in_memory_transport;
+#[cfg(feature = "quinn")]
+mod quinn;
 use futures::FutureExt as _;
 pub use in_memory_transport::MemoryTransport;
 mod replier;

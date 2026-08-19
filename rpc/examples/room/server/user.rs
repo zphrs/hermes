@@ -59,7 +59,7 @@ impl User {
     pub async fn kick_user(self) {
         let requester_transition: machine_cursor::transition::requester::RequesterTransition<
             in_room::InRoom,
-            machine_cursor::transition::StageOne<
+            machine_cursor::transition::StageZero<
                 in_room::ToClient,
                 close::Method,
                 role::Server,

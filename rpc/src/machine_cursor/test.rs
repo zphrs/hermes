@@ -23,13 +23,12 @@ use tokio::task::JoinSet;
 use tracing::{Instrument, Span, debug, info_span};
 
 use crate::{
-    Transport,
     in_memory_transport::{ConnPair, Connection, setup_conn},
     machine_cursor::{
         MachineCursorClient, MachineCursorServer,
         test::waitlist::{TableOffer, WaitingList},
         transition::{
-            self, StageOne, processor::ProcessorTransition, requester::RequesterTransition,
+            self, StageZero, processor::ProcessorTransition, requester::RequesterTransition,
             tiebreak,
         },
     },
@@ -224,6 +223,8 @@ async fn join() {
                 // (would be a problem if our processor ever started handling requests)
                 .next()
                 .await?
+                .next()
+                .await?
                 // asserts that the remote didn't send off a transition request
                 // (in this case impossible since Method is NotApplicable)
                 .assert_need_processor()
@@ -319,7 +320,7 @@ async fn test_tiebreak() {
                     Option<
                         RequesterTransition<
                             waitlist::WaitingList,
-                            StageOne<
+                            StageZero<
                                 waitlist::TableOffer,
                                 waitlist::TableOffer,
                                 role::Server,
@@ -418,7 +419,7 @@ async fn test_tiebreak() {
                 let requester_transition = requester_transition.next().await.unwrap();
 
                 let transition::requester::Need::Processor(requester_transition) =
-                    requester_transition
+                    requester_transition.next().await.unwrap()
                 else {
                     panic!("unexpected Need variant")
                 };

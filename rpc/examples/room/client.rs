@@ -1,12 +1,12 @@
 use futures::future::select;
 use rpc::{
-    MachineCursor, RpcMessage, Transport,
+    MachineCursor, RpcMessage,
     in_memory_transport::{self, Connection},
     machine_cursor::{
         MachineCursorClient,
         transition::{requester::RequesterTransitionClientEntrypoint, tiebreak},
     },
-    method::not_applicable,
+    method::{can_transition, is_leaf, not_applicable},
     state::{self, Has, role},
 };
 use tracing::debug;
@@ -37,6 +37,8 @@ pub async fn join_room(
         })
         .next()
         .await?
+        .next()
+        .await?
         .assert_need_processor()
         .extract_res();
     let res = res?;
@@ -55,7 +57,9 @@ pub type JoinHandleResult<TransitionMethod> = RequesterTransitionClientEntrypoin
     Connection<&'static str>,
 >;
 
-pub async fn run_in_room<TransitionMethod: rpc::Method>(
+pub async fn run_in_room<
+    TransitionMethod: rpc::Method<IsLeaf = is_leaf::True, CanTransition = can_transition::True>,
+>(
     join_handle: tokio::task::JoinHandle<Result<JoinHandleResult<TransitionMethod>, anyhow::Error>>,
     client_processor: rpc::machine_cursor::Processor<
         '_,
@@ -71,6 +75,7 @@ pub async fn run_in_room<TransitionMethod: rpc::Method>(
 >
 where
     <TransitionMethod as rpc::Method>::Res: RpcMessage + state::Has<states::Entrypoint>,
+    states::in_room::from_client::Method: rpc::method::FromDescendant<TransitionMethod>,
 {
     let processor_transition =
         client_processor.handle_requests::<in_room::Notify, _>(loopback_handler);

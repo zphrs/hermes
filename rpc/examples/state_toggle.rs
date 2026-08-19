@@ -116,7 +116,8 @@ where
 
 pub async fn client<Conn: rpc::transport::Connection + Clone>(conn: Conn) -> anyhow::Result<()>
 where
-    <Conn as rpc::transport::Caller>::Error: Send + Sync + Debug + Display + 'static,
+    <Conn as rpc::transport::Caller>::Error:
+        Send + Sync + Debug + Display + 'static + std::error::Error,
 {
     let entrypoint_cursor =
         rpc::machine_cursor::MachineCursorClient::<states::Entrypoint, _>::new(conn);
@@ -135,12 +136,16 @@ async fn from_b_to_a<Conn: rpc::transport::Connection + Clone>(
     b_cursor: rpc::MachineCursor<states::B, Conn, rpc::state::role::Client>,
 ) -> anyhow::Result<rpc::MachineCursor<states::A, Conn, rpc::state::role::Client>>
 where
-    <Conn as rpc::transport::Caller>::Error: Send + Sync + Debug + Display + 'static,
+    <Conn as rpc::transport::Caller>::Error:
+        Send + Sync + Debug + Display + 'static + std::error::Error,
+    <Conn as rpc::Caller>::Error: Debug + Display,
 {
     let mut handler = rpc::method::not_applicable::Handler;
     let (processor, requester) = b_cursor.into_children_with_handler(&mut handler);
     let (res, transition) = requester
         .request_transition(())
+        .next()
+        .await?
         .next()
         .await?
         .assert_need_processor()
@@ -154,12 +159,14 @@ async fn from_a_to_b<Conn: rpc::transport::Connection + Clone>(
     entrypoint_cursor: rpc::MachineCursor<states::A, Conn, rpc::state::role::Client>,
 ) -> anyhow::Result<rpc::MachineCursor<states::B, Conn, rpc::state::role::Client>>
 where
-    <Conn as rpc::transport::Caller>::Error: Send + Sync + Debug + Display + 'static,
+    <Conn as rpc::transport::Caller>::Error: Send + Sync + 'static + std::error::Error,
 {
     let mut handler = rpc::method::not_applicable::Handler;
     let (processor, requester) = entrypoint_cursor.into_children_with_handler(&mut handler);
     let (res, transition) = requester
         .request_transition(())
+        .next()
+        .await?
         .next()
         .await?
         .assert_need_processor()

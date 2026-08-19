@@ -17,11 +17,18 @@ pub trait CallerExt: Caller {
     fn query<M: Method<IsLeaf = is_leaf::True>, RootMethod: FromDescendant<M>>(
         &self,
         req: M::Req,
-    ) -> PendingQuery<Self, M, RootMethod::Req>
+    ) -> impl Future<Output = Result<M::Res, CallerError<Self::Error>>>
     where
         M::Res: RpcMessage,
+        RootMethod::Req: crate::RpcMessage,
     {
-        PendingQuery::<Self, M, RootMethod::Req>::new(self, RootMethod::from_descendant_req(req))
+        async {
+            PendingQuery::<Self, M, RootMethod::Req>::new(
+                RootMethod::from_descendant_req(req),
+                self.open_stream().await.map_err(CallerError::Transport)?,
+            )
+            .await
+        }
     }
 
     fn query_owned<
@@ -29,6 +36,7 @@ pub trait CallerExt: Caller {
         RootMethod: crate::method::FromDescendant<M>,
     >(
         self,
+        stream: (Self::SendStream, Self::RecvStream),
         req: M::Req,
     ) -> PendingQueryOwned<Self, M, RootMethod::Req>
     where
@@ -37,6 +45,7 @@ pub trait CallerExt: Caller {
         PendingQueryOwned::<Self, M, RootMethod::Req>::new(
             self,
             RootMethod::from_descendant_req(req),
+            stream,
         )
     }
 
@@ -68,8 +77,15 @@ pub(crate) trait PrivateCallerExt: Caller {
     fn query_owned_from_root<M: Method<IsLeaf = is_leaf::True>, RootReq>(
         self,
         root_req: RootReq,
-    ) -> PendingQueryOwned<Self, M, RootReq> {
-        PendingQueryOwned::new(self, root_req)
+    ) -> impl Future<Output = Result<PendingQueryOwned<Self, M, RootReq>, Self::Error>>
+    where
+        M::Res: crate::RpcMessage,
+        RootReq: crate::RpcMessage,
+    {
+        async move {
+            let stream = self.open_stream().await?;
+            Ok(PendingQueryOwned::<_, M, _>::new(self, root_req, stream))
+        }
     }
 }
 

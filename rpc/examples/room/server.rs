@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use futures::{FutureExt, select_biased};
 
 use rpc::{
-    Transport as _, in_memory_transport,
+    in_memory_transport,
     machine_cursor::{
         self, MachineCursorServer,
         transition::{
@@ -11,6 +11,7 @@ use rpc::{
             tiebreak,
         },
     },
+    method::{can_transition, is_leaf},
     state::{Has, role},
     transport::Incoming,
 };
@@ -95,7 +96,7 @@ pub async fn handle_incoming(
 async fn handle_receiver_transition(
     receiver: machine_cursor::transition::requester::RequesterTransition<
         crate::states::in_room::InRoom,
-        machine_cursor::transition::StageOne<
+        machine_cursor::transition::StageZero<
             crate::states::in_room::ToClient,
             close::Method,
             role::Server,
@@ -151,7 +152,9 @@ async fn handle_receiver_transition(
     }
 }
 
-async fn handle_processor_transition<TransitionMethod: rpc::Method>(
+async fn handle_processor_transition<
+    TransitionMethod: rpc::Method<IsLeaf = is_leaf::True, CanTransition = can_transition::True>,
+>(
     processor_transition_result: Result<
         ProcessorTransitionServerEntrypoint<
             crate::states::in_room::InRoom,
@@ -174,6 +177,7 @@ async fn handle_processor_transition<TransitionMethod: rpc::Method>(
 >
 where
     <TransitionMethod as rpc::Method>::Res: rpc::RpcMessage + rpc::state::Has<Entrypoint>,
+    crate::states::in_room::ToClient: rpc::method::FromDescendant<TransitionMethod>,
 {
     let processor_transition = processor_transition_result?;
     // either they called a close or a leave, either way we remove them

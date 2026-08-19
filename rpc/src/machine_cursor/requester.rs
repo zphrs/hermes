@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::{
     CallerError,
-    machine_cursor::transition::{StageOne, requester::RequesterTransition},
+    machine_cursor::transition::{StageZero, requester::RequesterTransition},
     method::{FromDescendant, ancestor::Leaf, is_leaf},
     traits::{
         method::{self, CanTransition, Loopback},
@@ -110,13 +110,13 @@ where
     pub fn request_transition<M: CanTransition + Leaf<RootMethod>>(
         self,
         req: M::Req,
-    ) -> RequesterTransition<State, StageOne<RootMethod, M, Role, Caller>>
+    ) -> RequesterTransition<State, StageZero<RootMethod, M, Role, Caller>>
     where
         RootMethod::Req: crate::RpcMessage,
-        RootMethod: crate::method::FromDescendant<M>,
+        RootMethod: crate::method::FromDescendant<M> + CanTransition,
         M::Res: crate::RpcMessage,
     {
         let Self { role, caller, .. } = self;
-        RequesterTransition::new(StageOne::<_, M, _, _>::new(req, role, caller))
+        RequesterTransition::new(StageZero::<_, M, _, _>::new(req, role, caller))
     }
 }

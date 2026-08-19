@@ -11,8 +11,7 @@ use tracing::debug;
 use crate::{Caller, transport::BiStream};
 
 enum QueryState<C: Caller> {
-    Entrypoint(),
-    StreamFut(C::OpenStreamFut),
+    Entrypoint(Option<(C::SendStream, C::RecvStream)>),
     SenderFut(
         minicbor_io::AsyncWriter<<C as BiStream>::SendStream>,
         Option<<C as BiStream>::RecvStream>,
@@ -33,11 +32,11 @@ pub struct PendingQueryOwned<C: Caller, M: crate::Method, RootReq> {
 }
 
 impl<C: Caller, M: crate::Method, RootReq> PendingQueryOwned<C, M, RootReq> {
-    pub fn new(caller: C, req: RootReq) -> Self {
+    pub fn new(caller: C, req: RootReq, stream: (C::SendStream, C::RecvStream)) -> Self {
         Self {
             caller: caller.into(),
             req: Some(req),
-            state: QueryState::Entrypoint(),
+            state: QueryState::Entrypoint(stream.into()),
             _marker: PhantomData,
             cancel: false,
             waker: None,
@@ -105,23 +104,12 @@ where
             *waker = cx.waker().clone().into();
         }
         match state {
-            QueryState::Entrypoint() => {
-                let stream = caller.as_ref().unwrap().open_stream();
-                *state = QueryState::StreamFut(stream)
-            }
-            QueryState::StreamFut(stream_fut) => {
-                let res = ready!(pin!(stream_fut).poll_unpin(cx));
-                let (write, read) = match res {
-                    Ok(v) => v,
-                    Err(e) => return Poll::Ready(Err(Error::Transport(e))),
-                };
-                debug!("sending query");
-                {
-                    let mut sender = minicbor_io::AsyncWriter::new(write);
-                    let _ = pin!(sender.write(&req)).poll_unpin(cx);
-                    let sender_future = QueryState::SenderFut(sender, Some(read));
-                    *state = sender_future;
-                }
+            QueryState::Entrypoint(stream) => {
+                let (write, read) = stream.take().unwrap();
+                let mut sender = minicbor_io::AsyncWriter::new(write);
+                let _ = pin!(sender.write(&req)).poll_unpin(cx);
+                let sender_future = QueryState::SenderFut(sender, Some(read));
+                *state = sender_future;
             }
             QueryState::SenderFut(sender, read) => {
                 let sync_fut = sender.sync();

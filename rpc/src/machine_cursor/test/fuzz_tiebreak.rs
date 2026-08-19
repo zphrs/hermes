@@ -13,7 +13,7 @@ use crate::{
     in_memory_transport::{self, ConnPair, setup_conn},
     machine_cursor::{
         MachineCursorClient, MachineCursorServer, Requester,
-        transition::{StageOne, requester::RequesterTransition, tiebreak},
+        transition::{StageZero, requester::RequesterTransition, tiebreak},
     },
 };
 
@@ -42,7 +42,7 @@ async fn server(
         Transition(
             RequesterTransition<
                 Entrypoint,
-                StageOne<
+                StageZero<
                     client::Method,
                     client::Method,
                     crate::state::role::Server,
@@ -169,7 +169,7 @@ async fn client(
         Transition(
             RequesterTransition<
                 Entrypoint,
-                StageOne<
+                StageZero<
                     server::Method,
                     server::Method,
                     crate::state::role::Client,
@@ -293,7 +293,7 @@ fn generate_request(tc: TestCase) -> Option<Request> {
     }
 }
 
-#[hegel::test(test_cases = 100_000)]
+#[hegel::test]
 fn fuzz_tiebreak(tc: TestCase) {
     // needed to seed the rng
     tokio::runtime::Builder::new_current_thread()

@@ -1,9 +1,11 @@
 use futures::select;
 use tracing::{debug, trace};
 
+use crate::RpcMessage;
 use crate::machine_cursor::processor::EventualTransitionRequest;
 
 use crate::machine_cursor::transition::requester::processor_sacrifice::ProcessorSacrifice;
+use crate::method::{CanTransition, FromDescendant, is_leaf};
 use crate::{
     CallerError, MachineCursor,
     machine_cursor::transition::{
@@ -171,8 +173,8 @@ fn tiebreak_choice<Role: crate::state::Role, State: crate::state::Prioritized>(
 pub async fn between_processor_and_requester_transition<
     State: crate::state::Prioritized,
     ProcessorMethod: crate::Method,
-    RootMethod: crate::Method,
-    TransitionMethod: crate::Method,
+    RootMethod,
+    TransitionMethod,
     Role: crate::state::Role,
     Conn: crate::transport::Connection,
 >(
@@ -181,26 +183,27 @@ pub async fn between_processor_and_requester_transition<
     >,
     requester_transition: RequesterTransition<
         State,
-        super::requester::StageOne<RootMethod, TransitionMethod, Role, Conn>,
+        super::requester::StageZero<RootMethod, TransitionMethod, Role, Conn>,
     >,
 ) -> Result<
     TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
     TiebreakError<Conn, ()>,
 >
 where
-    TransitionMethod::Res: crate::RpcMessage,
     RootMethod::Req: crate::RpcMessage,
+    TransitionMethod: crate::Method<IsLeaf = is_leaf::True> + CanTransition,
+    RootMethod: FromDescendant<TransitionMethod> + CanTransition,
+    TransitionMethod::Res: RpcMessage,
 {
     let request_transition = requester_transition.into_inner();
 
     let processor_transition_ref = processor_transition.inner_mut().inner_mut();
 
     assert!(
-        request_transition.query_req().caller().unwrap() == processor_transition_ref.conn(),
+        request_transition.caller() == processor_transition_ref.conn(),
         "processor and requester must both belong to the same connection"
     );
-    let query_req = request_transition.query_req();
-    let root_req = query_req.root_req().unwrap();
+    let root_req = request_transition.root_req();
 
     let requester_priority = unsafe { State::requester_priority::<Role, _>(root_req) };
 
@@ -231,7 +234,11 @@ where
             // conclusion
             Requester => {
                 debug!("requester won");
-                let res = request_transition
+                let res = RequesterTransition::<State, _>::new(request_transition)
+                    .next()
+                    .await
+                    .map_err(|e| TiebreakError::Caller(CallerError::Transport(e)))?
+                    .into_inner()
                     .await
                     .map_err(|e| TiebreakError::Caller(CallerError::try_from(e).unwrap()))?
                     .1;
@@ -255,9 +262,9 @@ where
 pub async fn between_potential_processor_and_known_requester_transition<
     State: crate::state::Prioritized,
     ProcessorMethod: crate::Method,
-    TransitionMethod: crate::Method,
-    RootMethod: crate::Method,
-    Role: crate::state::Role,
+    TransitionMethod,
+    RootMethod,
+    Role,
     Conn: crate::transport::Connection,
     TError,
     ToProcessorTransition: Future<
@@ -270,28 +277,25 @@ pub async fn between_potential_processor_and_known_requester_transition<
     mut to_processor_transition: EventualTransitionRequest<ToProcessorTransition>,
     requester_transition: RequesterTransition<
         State,
-        super::requester::StageOne<RootMethod, TransitionMethod, Role, Conn>,
+        super::requester::StageZero<RootMethod, TransitionMethod, Role, Conn>,
     >,
 ) -> Result<
     TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
     TiebreakError<Conn, TError>,
 >
 where
-    <Conn as crate::transport::Client>::Error: std::fmt::Debug,
-    TError: std::fmt::Debug,
-    TransitionMethod::Res: crate::RpcMessage,
     RootMethod::Req: crate::RpcMessage,
-    <Conn as crate::Caller>::Error: std::fmt::Debug,
+    TransitionMethod::Res: crate::RpcMessage,
+    Role: crate::state::Role,
+    RootMethod: crate::Method + CanTransition + FromDescendant<TransitionMethod>,
+    TransitionMethod: crate::Method<IsLeaf = is_leaf::True> + CanTransition,
+    RootMethod: FromDescendant<TransitionMethod>,
+    TransitionMethod::Res: RpcMessage,
+    RootMethod::Req: crate::RpcMessage,
 {
-    let mut request_transition = requester_transition.into_inner();
-    let requester_priority = unsafe {
-        State::requester_priority::<Role, _>(
-            request_transition
-                .query_req()
-                .root_req()
-                .expect("should be defined because request_transition hasn't been awaited yet"),
-        )
-    };
+    let request_transition = requester_transition.into_inner();
+    let requester_priority =
+        unsafe { State::requester_priority::<Role, _>(request_transition.root_req()) };
 
     enum Select<
         State: crate::state::Prioritized,
@@ -308,6 +312,11 @@ where
             ),
         ),
     }
+    let requester_transition = RequesterTransition::<State, _>::new(request_transition)
+        .next()
+        .await
+        .map_err(|e| TiebreakError::Caller(CallerError::Transport(e)))?;
+    let mut request_transition = requester_transition.into_inner();
 
     let result = select! {
         processor_transition = to_processor_transition => {

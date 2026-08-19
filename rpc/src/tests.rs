@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use tokio::task::JoinSet;
 
 use crate::{
-    RpcError, Transport,
+    RpcError,
     in_memory_transport::{self, MemoryTransport},
     method::Ancestor,
     traits::method::{can_transition::False, is_leaf},

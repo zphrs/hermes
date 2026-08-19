@@ -6,12 +6,12 @@ use std::{
 
 use futures::FutureExt as _;
 use maxlen::MaxLen;
-use tracing::{debug, trace};
+use tracing::debug;
 
 use crate::{Caller, CallerError, transport::BiStream};
 
 enum QueryState<C: Caller> {
-    Stream(C::OpenStreamFut),
+    Entrypoint(Option<(C::SendStream, C::RecvStream)>),
     Sender(
         minicbor_io::AsyncWriter<<C as BiStream>::SendStream>,
         Option<<C as BiStream>::RecvStream>,
@@ -29,12 +29,13 @@ pub struct PendingQuery<C: Caller, M: crate::Method, RootReq> {
 }
 
 impl<C: Caller, M: crate::Method, RootReq> PendingQuery<C, M, RootReq> {
-    pub fn new(caller: &C, req: RootReq) -> Self {
-        trace!("opening stream");
-        let stream_fut = caller.open_stream();
+    pub fn new(
+        req: RootReq,
+        stream: (C::SendStream, C::RecvStream),
+    ) -> PendingQuery<C, M, RootReq> {
         Self {
             req,
-            state: QueryState::Stream(stream_fut),
+            state: QueryState::Entrypoint(stream.into()),
             _marker: PhantomData,
         }
     }
@@ -54,12 +55,8 @@ where
         let this = &mut *self;
         loop {
             match &mut this.state {
-                QueryState::Stream(stream_fut) => {
-                    let res = ready!(pin!(stream_fut).poll_unpin(cx));
-                    let (write, read) = match res {
-                        Ok(v) => v,
-                        Err(e) => return Poll::Ready(Err(CallerError::Transport(e))),
-                    };
+                QueryState::Entrypoint(stream) => {
+                    let (write, read) = stream.take().unwrap();
                     debug!("sending query");
                     {
                         let mut sender = minicbor_io::AsyncWriter::new(write);

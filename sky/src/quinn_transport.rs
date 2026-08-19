@@ -407,14 +407,19 @@ impl Future for OpenStream {
 impl rpc::transport::Caller for Connection {
     type Error = Error;
 
-    fn open_stream(&self) -> OpenStream {
-        let bi = self.conn.clone();
-        OpenStream {
-            state: OpenStreamState::OpenBi(bi),
-        }
+    fn open_stream(
+        &self,
+    ) -> impl Future<
+        Output = std::result::Result<
+            (
+                <Self as rpc::transport::BiStream>::SendStream,
+                <Self as rpc::transport::BiStream>::RecvStream,
+            ),
+            <Self as rpc::Caller>::Error,
+        >,
+    > + std::marker::Send {
+        <quinn::Connection as Connection>::open_stream(&self)
     }
-
-    type OpenStreamFut = OpenStream;
 }
 
 pub struct AcceptStream {

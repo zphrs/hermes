@@ -15,14 +15,18 @@
 //! While waiting for the transition request to turn into a receipt, also wait
 //! for the processor to receive a transition request. If the processor does receive a transition request then it will tiebreak. If our request wins then continue waiting for the transition request to turn into a receipt.
 
-use crate::traits::state::priority::PrioritizedUnsafeExt;
+use crate::{
+    RpcMessage,
+    method::{CanTransition, FromDescendant, is_leaf},
+    traits::state::priority::PrioritizedUnsafeExt,
+};
 pub(super) mod processor_sacrifice;
 use std::marker::PhantomData;
 
 pub use processor_sacrifice::{AssertSacrificeError, ToSacrifice, assert_remote_sacrifice};
 mod request_transition;
 
-pub use request_transition::{StageOne, TransitionReceipt};
+pub use request_transition::{StageOne, StageZero, TransitionReceipt};
 
 pub struct RequesterTransition<OldState, Stage> {
     stage: Stage,
@@ -32,7 +36,7 @@ pub struct RequesterTransition<OldState, Stage> {
 pub type RequesterTransitionClientEntrypoint<State, TransitionMethod, Connection> =
     RequesterTransition<
         State,
-        StageOne<
+        StageZero<
             <State as crate::State>::ServerHandles,
             TransitionMethod,
             state::role::Client,
@@ -43,7 +47,7 @@ pub type RequesterTransitionClientEntrypoint<State, TransitionMethod, Connection
 pub type RequesterTransitionServerEntrypoint<State, TransitionMethod, Connection> =
     RequesterTransition<
         State,
-        StageOne<
+        StageZero<
             <State as crate::State>::ClientHandles,
             TransitionMethod,
             state::role::Server,
@@ -200,6 +204,59 @@ pub(crate) struct NeedIncomingTransitionRequest<
     pub _priority: Priority,
 }
 
+#[expect(
+    private_bounds,
+    reason = "role trait is private to force role to be either Server or Client"
+)]
+impl<
+    State,
+    RootMethod: crate::Method + CanTransition,
+    TransitionMethod: crate::Method<IsLeaf = is_leaf::True>,
+    Role: crate::state::Role,
+    Caller: crate::transport::Caller,
+> RequesterTransition<State, StageZero<RootMethod, TransitionMethod, Role, Caller>>
+{
+    pub fn new(transition: StageZero<RootMethod, TransitionMethod, Role, Caller>) -> Self {
+        Self {
+            stage: transition,
+            _marker: PhantomData,
+        }
+    }
+
+    pub async fn next(
+        self,
+    ) -> Result<
+        RequesterTransition<State, StageOne<RootMethod, TransitionMethod, Role, Caller>>,
+        Caller::Error,
+    >
+    where
+        RootMethod::Req: crate::RpcMessage,
+        TransitionMethod: crate::Method<IsLeaf = is_leaf::True> + CanTransition,
+        RootMethod: FromDescendant<TransitionMethod>,
+        TransitionMethod::Res: RpcMessage,
+    {
+        let (req, role, caller) = self.stage.into_parts();
+        Ok(StageOne::new(req, role, caller).await?.into())
+    }
+}
+
+impl<
+    State,
+    RootMethod: crate::Method,
+    TransitionMethod: crate::Method,
+    Role: crate::state::Role,
+    Caller: crate::transport::Caller,
+> From<StageOne<RootMethod, TransitionMethod, Role, Caller>>
+    for RequesterTransition<State, StageOne<RootMethod, TransitionMethod, Role, Caller>>
+{
+    fn from(value: StageOne<RootMethod, TransitionMethod, Role, Caller>) -> Self {
+        Self {
+            stage: value,
+            _marker: PhantomData,
+        }
+    }
+}
+
 #[expect(private_bounds, reason = "for role")]
 impl<
     State,
@@ -209,13 +266,6 @@ impl<
     Caller: crate::transport::Caller,
 > RequesterTransition<State, StageOne<RootMethod, TransitionMethod, Role, Caller>>
 {
-    pub fn new(transition: StageOne<RootMethod, TransitionMethod, Role, Caller>) -> Self {
-        Self {
-            stage: transition,
-            _marker: PhantomData,
-        }
-    }
-
     pub async fn next(
         self,
     ) -> Result<
