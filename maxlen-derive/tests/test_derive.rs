@@ -62,14 +62,14 @@ struct WithArray {
 fn test_simple_struct() {
     let instance = SimpleStruct::biggest_instantiation();
     assert_eq!(instance.value, u32::MAX);
-    assert_eq!(instance.flag, true);
+    assert!(instance.flag);
 }
 
 #[test]
 fn test_tuple_struct() {
     let instance = TupleStruct::biggest_instantiation();
     assert_eq!(instance.0, u32::MAX);
-    assert_eq!(instance.1, true);
+    assert!(instance.1);
 }
 
 #[test]

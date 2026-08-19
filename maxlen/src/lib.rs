@@ -51,16 +51,18 @@
 //! ```
 
 use std::{
+    any::Any,
     borrow::Cow,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     time::{Duration, SystemTime},
 };
 
-use minicbor::CborLen;
+use minicbor::{CborLen, bytes::cbor_len};
 
 // Re-export the derive macro when the derive feature is enabled
 #[cfg(feature = "derive")]
 pub use maxlen_derive::MaxLen;
+use tracing::warn;
 
 /// Trait for types that can provide their maximum CBOR-encoded length.
 ///
@@ -126,7 +128,10 @@ where
     /// assert_eq!(len1, len2);
     /// ```
     fn max_len() -> usize {
-        tracing::warn!("using uncached version of max_len");
+        tracing::warn!(
+            "using uncached version of max_len for {}",
+            std::any::type_name::<Self>(),
+        );
         Self::max_len_init()
     }
 }
@@ -192,6 +197,11 @@ where
 /// The unit type has a fixed size.
 impl MaxLen for () {
     fn biggest_instantiation() -> Self {}
+    fn max_len() -> usize {
+        const MAXLEN: usize = 1;
+        debug_assert_eq!(().cbor_len(&mut ()), MAXLEN);
+        MAXLEN
+    }
 }
 
 /// MaxLen implementation for SocketAddr.
@@ -320,7 +330,7 @@ mod tests {
 
     #[test]
     fn test_unit_maxlen() {
-        let _unit = <()>::biggest_instantiation();
+        let () = <()>::biggest_instantiation();
     }
 
     #[test]
