@@ -25,8 +25,6 @@
 
 mod max_len_str;
 
-use std::future::pending;
-
 use futures::future::join;
 use max_len_str::MaxLenStr;
 
@@ -51,7 +49,7 @@ pub mod server;
 
 pub mod client;
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let network = Network::new();

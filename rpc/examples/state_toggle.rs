@@ -16,7 +16,7 @@ pub mod states {
 
         /// transition method
         ///
-        /// Unconditionally goes from state A to state B
+        /// Unconditionally goes from current state to state To
         pub struct Method<To: rpc::State>(PhantomData<To>);
 
         impl<To: rpc::State> Method<To> {
@@ -168,7 +168,7 @@ where
     Ok(b_cursor)
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 pub async fn main() {
     let network = in_memory_transport::Network::new();
     let ConnPair {

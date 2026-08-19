@@ -137,7 +137,7 @@ where
     Ok((res.into_inner(), requester_transition))
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() {
     use tracing_subscriber;
 
