@@ -49,7 +49,10 @@ impl rpc::Method for JoinRoom {
 impl state::Has<crate::states::in_room::InRoom>
     for Result<(MaxSizedVec<Username, 10>, rpc::state::Wrapper<InRoom>), Error>
 {
-    fn extract_wrapper(self) -> rpc::state::Wrapper<crate::states::in_room::InRoom> {
-        self.ok().unwrap().1
+    fn try_extract_wrapper(self) -> Result<state::Wrapper<InRoom>, Self> {
+        match self {
+            Ok(v) => Ok(v.1),
+            Err(_) => Err(self),
+        }
     }
 }

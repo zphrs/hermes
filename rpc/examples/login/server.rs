@@ -1,5 +1,4 @@
 use rpc::machine_cursor::MachineCursorServer;
-use rpc::state::Has as _;
 
 use crate::states::{self, logged_in};
 

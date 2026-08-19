@@ -66,7 +66,7 @@ pub async fn handle_incoming(
             in_room::FromClientHandler::new(rooms, room_arc, &room.id, permit.username().clone());
         let loopback_handler = handler.to_loopback_handler();
         let (processor, requester) = transition
-            .finish(res.extract_wrapper())
+            .finish(res.try_extract_wrapper().ok().unwrap())
             .into_children_with_handler(&mut handler);
         let (sender, receiver) = tokio::sync::oneshot::channel();
         {
@@ -138,11 +138,15 @@ async fn handle_receiver_transition(
     match tiebreak_result {
         tiebreak::TiebreakResult::ProcessorWon(finalize_processor_transition) => {
             let (res, finalize) = finalize_processor_transition.extract_res();
-            Ok(finalize.finish(res.extract_wrapper()).await?)
+            Ok(finalize
+                .finish(res.try_extract_wrapper().ok().unwrap())
+                .await?)
         }
         tiebreak::TiebreakResult::RequesterWon(finalize_requester_transition) => {
             let (res, finalize) = finalize_requester_transition.extract_res();
-            Ok(finalize.finish(res.extract_wrapper()).await?)
+            Ok(finalize
+                .finish(res.try_extract_wrapper().ok().unwrap())
+                .await?)
         }
     }
 }
@@ -180,7 +184,7 @@ where
             .await?
             .extract_res();
 
-        Ok(processor_transition.finish(res.extract_wrapper()))
+        Ok(processor_transition.finish(res.try_extract_wrapper().ok().unwrap()))
     } else {
         let receiver = fused_receiver.await.unwrap();
         match tiebreak::between_processor_and_requester_transition(processor_transition, receiver)
@@ -189,11 +193,15 @@ where
         {
             tiebreak::TiebreakResult::ProcessorWon(finalize_processor_transition) => {
                 let (res, finalize) = finalize_processor_transition.extract_res();
-                Ok(finalize.finish(res.extract_wrapper()).await?)
+                Ok(finalize
+                    .finish(res.try_extract_wrapper().ok().unwrap())
+                    .await?)
             }
             tiebreak::TiebreakResult::RequesterWon(finalize_requester_transition) => {
                 let (res, finalize) = finalize_requester_transition.extract_res();
-                Ok(finalize.finish(res.extract_wrapper()).await?)
+                Ok(finalize
+                    .finish(res.try_extract_wrapper().ok().unwrap())
+                    .await?)
             }
         }
     }

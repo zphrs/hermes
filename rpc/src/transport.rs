@@ -76,7 +76,7 @@ pub trait Client: BiStream {
 
     fn accept_stream(
         &self,
-    ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>> + Unpin;
+    ) -> impl Future<Output = Result<(Self::SendStream, Self::RecvStream), Self::Error>>;
 }
 
 pub(crate) trait ClientExt: Client {

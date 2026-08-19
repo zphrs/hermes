@@ -7,7 +7,7 @@ use rpc::{
     in_memory_transport::{ConnPair, Network, setup_conn},
     machine_cursor::MachineCursorClient,
     method::not_applicable::{self},
-    state::{self, Has},
+    state::{self},
 };
 use tracing::{Instrument, info_span};
 

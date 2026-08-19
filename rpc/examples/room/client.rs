@@ -107,7 +107,7 @@ where
         tiebreak::TiebreakResult::RequesterWon(finalize_requester_transition) => {
             let (res, finalize_requester_transition) = finalize_requester_transition.extract_res();
             finalize_requester_transition
-                .finish(res.extract_wrapper())
+                .finish(res.try_extract_wrapper().ok().unwrap())
                 .await?
         }
     };

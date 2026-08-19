@@ -117,11 +117,10 @@ pub enum Res {
 }
 
 impl state::Has<crate::states::Entrypoint> for Res {
-    fn extract_wrapper(self) -> state::Wrapper<crate::states::Entrypoint> {
+    fn try_extract_wrapper(self) -> Result<state::Wrapper<crate::states::Entrypoint>, Self> {
         match self {
-            Res::Loopback(_) => unreachable!(),
-            Res::Close(wrapper) => wrapper,
-            Res::Leave(wrapper) => wrapper,
+            Res::Loopback(_) => Err(self),
+            Res::Close(wrapper) | Res::Leave(wrapper) => Ok(wrapper),
         }
     }
 }

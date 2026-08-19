@@ -23,14 +23,17 @@ impl Error {
     ) -> Self {
         Self::PasswordIncorrect(replier.new_wrapper())
     }
+
+    pub fn extract_wrapper(self) -> rpc::state::Wrapper<Entrypoint> {
+        match self {
+            Error::UserNotFound(wrapper) | Error::PasswordIncorrect(wrapper) => wrapper,
+        }
+    }
 }
 
 impl rpc::state::Has<Entrypoint> for Error {
-    fn extract_wrapper(self) -> rpc::state::Wrapper<Entrypoint> {
-        match self {
-            Error::UserNotFound(wrapper) => wrapper,
-            Error::PasswordIncorrect(wrapper) => wrapper,
-        }
+    fn try_extract_wrapper(self) -> Result<rpc::state::Wrapper<Entrypoint>, Self> {
+        Ok(self.extract_wrapper())
     }
 }
 
@@ -56,13 +59,19 @@ impl From<state::Wrapper<LoggedIn>> for Res {
 }
 
 impl state::Has<LoggedIn> for Res {
-    fn extract_wrapper(self) -> rpc::state::Wrapper<LoggedIn> {
-        self.0.ok().unwrap()
+    fn try_extract_wrapper(self) -> Result<rpc::state::Wrapper<LoggedIn>, Self> {
+        match self.0 {
+            Ok(wrapper) => Ok(wrapper),
+            Err(_) => Err(self),
+        }
     }
 }
 
 impl state::Has<Entrypoint> for Res {
-    fn extract_wrapper(self) -> rpc::state::Wrapper<Entrypoint> {
-        self.0.err().unwrap().extract_wrapper()
+    fn try_extract_wrapper(self) -> Result<rpc::state::Wrapper<Entrypoint>, Self> {
+        match self.0 {
+            Ok(_) => Err(self),
+            Err(wrapper) => Ok(wrapper.try_extract_wrapper().unwrap()),
+        }
     }
 }
