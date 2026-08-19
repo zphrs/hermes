@@ -5,14 +5,12 @@ use std::{convert::Infallible, net::IpAddr};
 
 use maxlen::MaxLen;
 use rpc::{
-    state::priority::ServerWins,
+    method::{Ancestor, is_leaf},
     traits::method::{can_transition, not_applicable::NotApplicable},
 };
 use shared_schema::{EarthNode, SkyNode};
 
 pub struct EntrypointState;
-
-pub type Entrypoint = ServerWins<EntrypointState>;
 
 impl rpc::traits::State for EntrypointState {
     type ClientHandles = NotApplicable;
@@ -61,27 +59,25 @@ impl rpc::Method for Method {
     type Res = Response;
 
     type CanTransition = can_transition::True;
+
+    type IsLeaf = is_leaf::False;
 }
 
-impl rpc::Handler for Method {
+impl<RM: Ancestor<Self> + Ancestor<as_sky::Method> + Ancestor<as_earth::Method>> rpc::Handler<RM>
+    for Method
+{
     type Error = Infallible;
 
-    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
+    async fn handle<Replier: rpc::ReplyHelper<RM, Self>>(
         &mut self,
         replier: Replier,
-        value: <Self as rpc::Method>::Req,
-    ) -> Result<
-        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
-        rpc::traits::HandleError<
-            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
-            <Self as rpc::Handler<Self>>::Error,
-        >,
-    > {
+        value: rpc::ReqOf<Self>,
+    ) -> rpc::traits::HandlerResult<RM, Self, Replier, Self::Error> {
         Ok(match value {
             Request::Sky(mut request) => {
                 request.set_sky_node(self.peer_ip);
                 replier
-                    .reply_with(&mut as_sky::Method, request, |v| {
+                    .reply_with::<as_sky::Method, _>(&mut as_sky::Method, request, |v| {
                         Response::Sky(v, SkyNode::from(self.peer_ip))
                     })
                     .await?

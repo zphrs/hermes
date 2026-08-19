@@ -1,4 +1,4 @@
-// pub mod client;
+pub mod client;
 // pub mod server;
 
 pub(crate) mod dirs;
@@ -7,11 +7,11 @@ pub(crate) mod get_public_ip;
 pub mod no_cert_verification;
 pub mod quinn_transport;
 
-// mod api;
-// pub use api::entrypoint;
+mod api;
+pub use api::entrypoint;
 mod get_system_time;
-// #[cfg(test)]
-// mod kad_test;
+#[cfg(test)]
+mod kad_test;
 #[cfg(test)]
 mod tokio_uptime;
 

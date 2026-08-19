@@ -2,7 +2,10 @@ mod kad_handler;
 mod kad_manager;
 use kad_handler::KadHandler;
 pub use kad_manager::KadRpcManager;
-use rpc::traits::method::{can_transition, not_applicable::NotApplicable};
+use rpc::{
+    method::{Ancestor, is_leaf},
+    traits::method::{can_transition, not_applicable::NotApplicable},
+};
 
 use std::convert::Infallible;
 
@@ -76,23 +79,19 @@ impl rpc::Method for Method {
     type Res = Response;
 
     type CanTransition = can_transition::False;
+
+    type IsLeaf = is_leaf::True;
 }
 
-impl rpc::Handler for Method {
+impl<RM: Ancestor<Self>> rpc::Handler<RM> for Method {
     type Error = Infallible;
 
     #[tracing::instrument(skip(self, replier))]
-    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
+    async fn handle<Replier: rpc::ReplyHelper<RM, Self>>(
         &mut self,
         replier: Replier,
-        value: <Self as rpc::Method>::Req,
-    ) -> Result<
-        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
-        rpc::traits::HandleError<
-            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
-            <Self as rpc::Handler<Self>>::Error,
-        >,
-    > {
+        value: rpc::ReqOf<Self>,
+    ) -> rpc::traits::HandlerResult<RM, Self, Replier, Self::Error> {
         let sky_id: kademlia::Id<32> = value.sky_id.into();
         let out = self
             .rpc_manager

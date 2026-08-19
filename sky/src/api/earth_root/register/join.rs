@@ -1,6 +1,9 @@
 use std::convert::Infallible;
 
-use rpc::traits::method::can_transition;
+use rpc::{
+    method::{Ancestor, is_leaf},
+    traits::method::can_transition,
+};
 use shared_schema::EarthNode;
 use tokio::time::Instant;
 
@@ -23,22 +26,18 @@ impl rpc::Method for Method<'_> {
     type Res = Response;
 
     type CanTransition = can_transition::False;
+
+    type IsLeaf = is_leaf::True;
 }
 
-impl rpc::Handler for Method<'_> {
+impl<'a, RM: Ancestor<Method<'a>>> rpc::Handler<RM> for Method<'a> {
     type Error = Infallible;
 
-    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
+    async fn handle<Replier: rpc::ReplyHelper<RM, Self>>(
         &mut self,
         replier: Replier,
-        value: <Self as rpc::Method>::Req,
-    ) -> Result<
-        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
-        rpc::traits::HandleError<
-            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
-            <Self as rpc::Handler<Self>>::Error,
-        >,
-    > {
+        value: rpc::ReqOf<Self>,
+    ) -> rpc::traits::HandlerResult<RM, Self, Replier, Self::Error> {
         self.map.write().insert(
             self.remote.earth_id().clone(),
             OnlineNode {

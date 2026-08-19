@@ -1,7 +1,10 @@
 use std::{convert::Infallible, net::IpAddr};
 
 use maxlen::MaxLen;
-use rpc::traits::{method::can_transition, state};
+use rpc::{
+    method::{Ancestor, is_leaf},
+    traits::{method::can_transition, state},
+};
 use shared_schema::SkyNode;
 
 type LoopbackWrapper = state::Wrapper<super::EntrypointState>;
@@ -29,9 +32,27 @@ impl Request {
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Response {
     #[n(0)]
-    Ok(#[cbor(skip)] state::Wrapper<crate::api::sky_root::State>),
+    Ok(#[n(0)] state::Wrapper<crate::api::sky_root::State>),
     #[n(1)]
-    Invalid(#[cbor(skip)] LoopbackWrapper),
+    Invalid(#[n(1)] state::Wrapper<super::EntrypointState>),
+}
+
+impl state::Has<crate::api::sky_root::State> for Response {
+    fn try_extract_wrapper(self) -> Result<rpc::state::Wrapper<crate::api::sky_root::State>, Self> {
+        match self {
+            Response::Ok(wrapper) => Ok(wrapper),
+            other => Err(other),
+        }
+    }
+}
+
+impl state::Has<super::EntrypointState> for Response {
+    fn try_extract_wrapper(self) -> Result<rpc::state::Wrapper<super::EntrypointState>, Self> {
+        match self {
+            Response::Invalid(wrapper) => Ok(wrapper),
+            other => Err(other),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -43,25 +64,27 @@ impl rpc::Method for Method {
     type Res = Response;
 
     type CanTransition = can_transition::True;
+
+    type IsLeaf = is_leaf::True;
 }
 
-impl rpc::Handler for Method {
+impl<RM: Ancestor<Self>> rpc::Handler<RM> for Method {
     type Error = Infallible;
 
-    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
+    async fn handle<Replier: rpc::ReplyHelper<RM, Self>>(
         &mut self,
         replier: Replier,
-        value: <Self as rpc::Method>::Req,
-    ) -> Result<
-        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
-        rpc::traits::HandleError<
-            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
-            <Self as rpc::Handler<Self>>::Error,
-        >,
-    > {
+        value: rpc::ReqOf<Self>,
+    ) -> rpc::traits::HandlerResult<RM, Self, Replier, Self::Error> {
         match value.0 {
-            Some(_) => replier.reply(Response::Ok(Default::default())).await,
-            None => replier.reply(Response::Invalid(Default::default())).await,
+            Some(_) => {
+                let wrapper = replier.new_wrapper();
+                replier.reply(Response::Ok(wrapper)).await
+            }
+            None => {
+                let wrapper = replier.new_wrapper();
+                replier.reply(Response::Invalid(wrapper)).await
+            }
         }
     }
 }

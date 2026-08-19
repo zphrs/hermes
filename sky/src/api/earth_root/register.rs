@@ -11,7 +11,10 @@ use std::{
 
 use max_sized_vec::MaxSizedVec;
 use maxlen::MaxLen;
-use rpc::traits::method::can_transition;
+use rpc::{
+    method::{Ancestor, ancestors, is_leaf},
+    traits::method::can_transition,
+};
 use shared_schema::{EarthNode, earth_node::EarthId};
 use tokio::time::Instant;
 
@@ -86,22 +89,30 @@ impl rpc::Method for Method {
     type Req = Request;
     type Res = Response;
     type CanTransition = can_transition::False;
+    type IsLeaf = is_leaf::False;
 }
 
-impl rpc::Handler for Method {
+pub trait Ancestors:
+    Ancestor<Method> + for<'a> ancestors::Three<join::Method<'a>, renew::Method<'a>, nearby::Method<'a>>
+{
+}
+
+impl<
+    T: Ancestor<Method>
+        + for<'a> ancestors::Three<join::Method<'a>, renew::Method<'a>, nearby::Method<'a>>
+        + ?Sized,
+> Ancestors for T
+{
+}
+
+impl<RM: Ancestors> rpc::Handler<RM> for Method {
     type Error = Infallible;
 
-    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
+    async fn handle<Replier: rpc::ReplyHelper<RM, Self>>(
         &mut self,
         replier: Replier,
-        value: <Self as rpc::Method>::Req,
-    ) -> Result<
-        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
-        rpc::traits::HandleError<
-            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
-            <Self as rpc::Handler<Self>>::Error,
-        >,
-    > {
+        value: rpc::ReqOf<Self>,
+    ) -> rpc::traits::HandlerResult<RM, Self, Replier, Self::Error> {
         Ok(match value {
             Request::Join(candidates) => {
                 replier

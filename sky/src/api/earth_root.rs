@@ -4,13 +4,10 @@ use std::convert::Infallible;
 
 use maxlen::MaxLen;
 use rpc::{
-    method::{Ancestor, is_leaf},
-    traits::{
-        method::{can_transition, not_applicable::NotApplicable},
-        state,
-    },
+    method::{Ancestor, ancestors, is_leaf},
+    traits::method::{can_transition, not_applicable::NotApplicable},
 };
-use shared_schema::EarthNode;
+use shared_schema::{EarthNode, ping};
 
 use crate::api::{
     earth_root::register::OnlineNodes,
@@ -19,7 +16,7 @@ use crate::api::{
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Request {
     #[n(0)]
-    Ping(#[n(0)] shared_schema::ping::Request),
+    Ping(#[n(0)] shared_schema::ping::Req),
     #[n(1)]
     FindNodes(#[n(0)] find_nodes::Request),
     #[n(2)]
@@ -39,19 +36,9 @@ impl From<shared_schema::ping::Req> for Request {
 }
 
 pub enum Response {
-    Ping(LoopbackState),
-    FindNodes(find_nodes::Response, LoopbackState),
+    Ping(shared_schema::ping::Res),
+    FindNodes(find_nodes::Response),
     Register(register::Response),
-}
-
-impl From<Response> for LoopbackState {
-    fn from(value: Response) -> Self {
-        match value {
-            Response::Ping(method_wrapper) => method_wrapper,
-            Response::FindNodes(_find_nodes_response, method_wrapper) => method_wrapper,
-            Response::Register(_response) => LoopbackState::new(),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -95,7 +82,17 @@ impl rpc::Method for Method {
     type IsLeaf = is_leaf::False;
 }
 
-impl<RM: Ancestor<Method>> rpc::Handler<RM> for Method {
+pub trait Ancestors:
+    ancestors::Three<Method, ping::Method, find_nodes::Method> + register::Ancestors
+{
+}
+
+impl<T: ancestors::Three<Method, ping::Method, find_nodes::Method> + register::Ancestors + ?Sized>
+    Ancestors for T
+{
+}
+
+impl<RM: Ancestors> rpc::Handler<RM> for Method {
     type Error = Infallible;
 
     async fn handle<Replier: rpc::ReplyHelper<RM, Self>>(
@@ -114,7 +111,7 @@ impl<RM: Ancestor<Method>> rpc::Handler<RM> for Method {
             Request::FindNodes(find_nodes_request) => {
                 replier
                     .reply_with(&mut self.find_nodes, find_nodes_request, |r| {
-                        Response::FindNodes(r, LoopbackState::default())
+                        Response::FindNodes(r)
                     })
                     .await?
             }

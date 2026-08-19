@@ -4,7 +4,7 @@ use std::{convert::Infallible, time::Duration};
 use crate::api::sky_root;
 use crate::client::cache::Sender;
 use crate::client::{Cache, cache};
-use crate::entrypoint::{Entrypoint, as_sky};
+use crate::entrypoint::{EntrypointState, as_sky};
 
 use rpc::{CallerError, HandleOneRequestError};
 use shared_schema::{SkyNode, sky_node::SkyId};
@@ -15,7 +15,7 @@ use crate::quinn_transport;
 
 #[derive(Clone)]
 pub struct KadHandler {
-    cache: Arc<RwLock<Cache<sky_root::State, Entrypoint, as_sky::Method>>>,
+    cache: Arc<RwLock<Cache<sky_root::State, EntrypointState, as_sky::Method>>>,
 }
 
 impl From<quinn_transport::Transport> for KadHandler {

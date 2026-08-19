@@ -3,6 +3,7 @@ use std::convert::Infallible;
 type LoopbackState = state::Wrapper<State>;
 
 use maxlen::MaxLen;
+use rpc::method::{ancestors, is_leaf};
 use rpc::traits::method::can_transition;
 use rpc::traits::method::not_applicable::NotApplicable;
 use rpc::traits::state;
@@ -14,15 +15,9 @@ use super::find_nodes;
 #[derive(Debug, minicbor::Encode, minicbor::Decode, minicbor::CborLen, MaxLen)]
 pub enum Request {
     #[n(0)]
-    Ping(#[n(0)] shared_schema::ping::Request),
+    Ping(#[n(0)] shared_schema::ping::Req),
     #[n(1)]
     FindNodes(#[n(0)] find_nodes::Request),
-}
-
-impl From<shared_schema::ping::Request> for Request {
-    fn from(value: shared_schema::ping::Request) -> Self {
-        Self::Ping(value)
-    }
 }
 
 impl From<find_nodes::Request> for Request {
@@ -32,18 +27,8 @@ impl From<find_nodes::Request> for Request {
 }
 
 pub enum Response {
-    Ping(LoopbackState),
-
-    FindNodes(find_nodes::Response, LoopbackState),
-}
-
-impl From<Response> for LoopbackState {
-    fn from(value: Response) -> Self {
-        match value {
-            Response::Ping(method_wrapper) => method_wrapper,
-            Response::FindNodes(_find_nodes_response, method_wrapper) => method_wrapper,
-        }
-    }
+    Ping(shared_schema::ping::Res),
+    FindNodes(find_nodes::Response),
 }
 
 pub struct State;
@@ -79,22 +64,21 @@ impl rpc::Method for Method {
     type Res = Response;
 
     type CanTransition = can_transition::False;
+
+    type IsLeaf = is_leaf::False;
 }
 
-impl rpc::Handler for Method {
+impl<
+    RM: ancestors::Two<Self, shared_schema::ping::Method> + rpc::method::Ancestor<find_nodes::Method>,
+> rpc::Handler<RM> for Method
+{
     type Error = Infallible;
 
-    async fn handle<Replier: rpc::transport::ReplyHelper<Self>>(
+    async fn handle<Replier: rpc::ReplyHelper<RM, Self>>(
         &mut self,
         replier: Replier,
-        value: <Self as rpc::Method>::Req,
-    ) -> Result<
-        <Replier as rpc::transport::ReplyHelper<Self>>::Receipt<Self>,
-        rpc::traits::HandleError<
-            <Replier as rpc::transport::ReplyHelper<Self>>::Error,
-            <Self as rpc::Handler<Self>>::Error,
-        >,
-    > {
+        value: rpc::ReqOf<Self>,
+    ) -> rpc::traits::HandlerResult<RM, Self, Replier, Self::Error> {
         Ok(match value {
             Request::Ping(request) => {
                 replier
@@ -106,7 +90,7 @@ impl rpc::Handler for Method {
             Request::FindNodes(find_nodes_request) => {
                 replier
                     .reply_with(&mut self.find_nodes, find_nodes_request, |r| {
-                        Response::FindNodes(r, LoopbackState::default())
+                        Response::FindNodes(r)
                     })
                     .await?
             }

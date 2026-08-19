@@ -1,5 +1,6 @@
 pub mod candidate;
 pub mod message;
+mod registration;
 pub mod rpc;
 
 use tokio::time::Duration;

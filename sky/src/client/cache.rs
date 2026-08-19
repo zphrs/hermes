@@ -1,6 +1,8 @@
 use rpc::{
-    machine_cursor::{self, Processor},
-    state::role,
+    Handler,
+    machine_cursor::{self, MachineCursorClient, Processor, Requester},
+    method::{FromDescendant, ancestor::Leaf},
+    state::{Has, Prioritized, role},
 };
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
@@ -22,14 +24,16 @@ use crate::{
 
 pub type Sender<State> = Arc<
     machine_cursor::Requester<
+        State,
         role::Client,
         <State as rpc::State>::ServerHandles,
         quinn_transport::Connection,
     >,
 >;
 
-pub type Parts<State> = (
+pub type Parts<'h, State> = (
     Processor<
+        'h,
         State,
         role::Client,
         NotApplicable,
@@ -39,9 +43,9 @@ pub type Parts<State> = (
     Sender<State>,
 );
 
-pub struct Cache<State: rpc::State, LoginState: rpc::State, LoginMethod: rpc::Method> {
+pub struct Cache<'h, State: rpc::State, LoginState: rpc::State, LoginMethod: rpc::Method> {
     tp: Transport,
-    cache: HashMap<SkyNode, Mutex<Option<Parts<State>>>>,
+    cache: HashMap<SkyNode, Mutex<Option<Parts<'h, State>>>>,
     login_request: LoginMethod::Req,
     _marker: PhantomData<LoginState>,
 }
@@ -58,10 +62,11 @@ pub enum ConnectError<'a> {
 }
 
 impl<
+    'h,
     State: rpc::State<ClientHandles = NotApplicable> + Send,
-    LoginState: rpc::State<ClientHandles = NotApplicable>,
+    LoginState: rpc::State<ClientHandles = NotApplicable> + Prioritized,
     LoginMethod: rpc::Method,
-> Cache<State, LoginState, LoginMethod>
+> Cache<'h, State, LoginState, LoginMethod>
 where
     ServerReq<State>: rpc::RpcMessage,
     ServerReq<LoginState>: rpc::RpcMessage,
@@ -69,7 +74,8 @@ where
     LoginMethod::Res: rpc::RpcMessage + Unpin,
     api::entrypoint::Request: From<<LoginState::ServerHandles as rpc::Method>::Req>,
     LoginMethod: CanTransition,
-    ServerReq<LoginState>: From<LoginMethod::Req>,
+    LoginMethod: Leaf<LoginMethod>,
+    LoginMethod::Res: Has<State>,
 {
     pub fn new(tp: Transport, login_request: LoginMethod::Req) -> Self {
         Cache {
@@ -79,13 +85,20 @@ where
             _marker: PhantomData,
         }
     }
+
     /// if this returns none, one should call insert_node_entry before trying
     /// to connect again.
     pub async fn try_connect<'a>(
         &self,
         node: &'a SkyNode,
-        handle_req: &mut impl FnMut(LoginMethod::Res) -> Option<state::Wrapper<State>>,
-    ) -> Result<Sender<State>, ConnectError<'a>> {
+        not_applicable_handler: &'h mut not_applicable::Handler,
+    ) -> Result<
+        impl FnOnce(&'h mut not_applicable::Handler) -> Arc<Requester<State, Client>>,
+        ConnectError<'a>,
+    >
+    where
+        LoginState::ServerHandles: FromDescendant<LoginMethod>,
+    {
         let mut entry_lock = self
             .cache
             .get(node)
@@ -94,7 +107,7 @@ where
             .await;
         if let Some(value) = entry_lock.as_ref() {
             if value.0.client().inner().close_reason().is_none() {
-                return Ok(value.1.clone());
+                return Ok(|_handler| Ok(value.1.clone()));
             }
             *entry_lock = None;
         };
@@ -105,30 +118,32 @@ where
             .await
             .map_err(rpc::CallerError::Transport)?;
 
-        let cursor = MachineCursor::<LoginState, _, _>::new(conn, rpc::state::role::Client);
+        let cursor = MachineCursorClient::<LoginState, _>::new(conn);
 
-        let (handler, querier) = cursor.into_parts(not_applicable::Handler);
-
+        let (processor, querier) = cursor.into_children_with_handler(not_applicable_handler);
         let (res, transition_receipt) = querier
             .request_transition::<LoginMethod>(self.login_request.clone())
+            .next()
             .await?
-            .extract_result();
+            .assert_need_processor()
+            .extract_res();
+        let cursor = transition_receipt
+            .finish(
+                processor,
+                res.try_extract_wrapper()
+                    .map_err(|_| ConnectError::LoginFailed)?,
+            )
+            .await?;
 
-        let method = handle_req(res).ok_or(ConnectError::LoginFailed)?;
+        Ok(move |handler: &'h mut not_applicable::Handler| async move {
+            let parts = cursor.into_children_with_handler(not_applicable_handler);
 
-        let cursor = MachineCursor::<_, _, state::role::Client>::from_transition_receipt(
-            transition_receipt,
-            method,
-            handler,
-        )
-        .await?;
-        let parts = cursor.into_parts(not_applicable::Handler);
+            let wrapper = (parts.0, Arc::new(parts.1));
+            let out = wrapper.1.clone();
+            *entry_lock = Some(wrapper);
 
-        let wrapper = (parts.0, Arc::new(parts.1));
-        let out = wrapper.1.clone();
-        *entry_lock = Some(wrapper);
-
-        Ok(out)
+            Ok(out)
+        })
     }
 
     pub fn insert_node_entry(&mut self, node: &SkyNode) {
@@ -138,10 +153,13 @@ where
     pub async fn connect<'a>(
         &mut self,
         node: &'a SkyNode,
-        mut handle_req: impl FnMut(LoginMethod::Res) -> Option<state::Wrapper<State>>,
-    ) -> Result<Sender<State>, ConnectError<'a>> {
+        not_applicable_handler: &'h mut not_applicable::Handler,
+    ) -> Result<Sender<State>, ConnectError<'a>>
+    where
+        <LoginState as rpc::State>::ServerHandles: rpc::method::FromDescendant<LoginMethod>,
+    {
         loop {
-            match self.try_connect(node, &mut handle_req).await {
+            match self.try_connect(node, not_applicable_handler).await {
                 Err(ConnectError::MissingNodeEntry(_)) => self.insert_node_entry(node),
                 res => return res,
             }
