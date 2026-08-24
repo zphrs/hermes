@@ -4,8 +4,8 @@ use crate::transport::ClientExt;
 use crate::{Handler, machine_cursor::PendingTransitionReceipt};
 mod concurrent_request_handler;
 
+use std::convert::Infallible;
 use std::pin::{Pin, pin};
-use std::{convert::Infallible, io::ErrorKind};
 
 use crate::state::{PrioritizedUnsafeExt, Wrapper};
 
@@ -14,7 +14,6 @@ use crate::{traits::Prioritized, transport::ReplyHelper};
 use futures::{
     FutureExt as _, StreamExt as _, future::FusedFuture, select, stream::FuturesUnordered,
 };
-use maxlen::MaxLen;
 use tracing::{debug, trace};
 
 use crate::{
@@ -247,34 +246,10 @@ where
                 let replier = DelayedReplier::<RootMethod>::new();
                 // inlined `client.handle_one_request_with_handler(replier, stream, handler)`
                 // in order to avoid https://github.com/rust-lang/rust/issues/100013
-                let stream = &mut stream.1;
-                let handler = &mut with_priority;
-                async move {
-                    let write = replier;
-                    let read = stream;
-                    let mut receiver = minicbor_io::AsyncReader::new(read);
-                    receiver.set_max_len(RootMethod::Req::max_len() as u32);
-                    let Some(root) = (match receiver.read::<RootMethod::Req>().await {
-                        Ok(v) => v,
-                        Err(e) => Err(HandleOneRequestError::Read(e))?,
-                    }) else {
-                        return Err(HandleOneRequestError::Read(minicbor_io::Error::Io(
-                            ErrorKind::ConnectionAborted.into(),
-                        )));
-                    };
-                    let out = match handler.handle(write, root).await {
-                        Ok(v) => v,
-                        Err(traits::HandleError::Handler(e)) => {
-                            return Err(HandleOneRequestError::App(e));
-                        }
-                        Err(traits::HandleError::Replier(e)) => {
-                            return Err(HandleOneRequestError::Replier(e));
-                        }
-                    };
-                    Ok(out)
-                }
-            }
-            .await?;
+                client
+                    .handle_one_request_with_handler(replier, &mut stream.1, &mut with_priority)
+                    .await?
+            };
 
             let (priority, state) = with_priority
                 .into_parts()
