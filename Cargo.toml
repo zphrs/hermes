@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["earth", "dens", "maxlen", "maxlen-derive", "rpc", "max-sized-vec", "max-sized-string", "kademlia", "sky"]
+members = ["earth", "dens", "maxlen", "maxlen-derive", "rpc", "max-sized-vec", "max-sized-string", "kademlia", "sky", "cose"]
 
 [profile.dev.package]
 expect-test.opt-level = 3
@@ -12,9 +12,6 @@ tracing-core = { git = 'https://github.com/zphrs/tracing.git' }
 getrandom4 = { git = 'https://github.com/zphrs/getrandom-twizzler.git', package = 'getrandom', branch = "deterministic-testing" }
 getrandom3 = { git = 'https://github.com/zphrs/getrandom-twizzler.git', package = 'getrandom',  branch = "getrandom-v0.2" }
 getrandom2 = { git = 'https://github.com/zphrs/getrandom-twizzler.git', package = 'getrandom',  branch = "getrandom-v0.3.5" }
-
-[profile.dev.package.dens]
-opt-level = 3
 
 [profile.dev.package.rpc]
 opt-level = 3

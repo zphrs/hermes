@@ -1,0 +1,13 @@
+[package]
+name = "cose"
+version = "0.1.0"
+edition = "2024"
+
+[dev-dependencies]
+anyhow = "1.0.104"
+cbor-diag = "0.1.12"
+expect-test = "1.5.1"
+minicbor = { version = "2.3.0", features = ["alloc"] }
+
+[dependencies]
+minicbor = "2.3.0"

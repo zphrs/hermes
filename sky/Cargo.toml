@@ -4,36 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.103"
-arrayvec = "0.7.6"
-etcetera = "0.11.0"
-futures-util = "0.3.31"
-minicbor = "2.2.1"
-minicbor-io = { version = "0.23.0", features = ["async-io"] }
-public-ip = "0.2.2"
-rand = "0.9.2"
-rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "pem", "ring"] }
-quinn = { version = "0.11.9", default-features = false, features = ["ring", "bloom", "platform-verifier", "log", "runtime-tokio", "rustls-ring", "futures-io"] }
-rustls = { version = "0.23.37", default-features = false, features = ["ring"] }
-stun = "0.17.1"
-thiserror = "2.0.16"
-tokio = { version = "1.47.1", features = ["net", "rt", "time", "test-util"] }
-tokio-util = { version = "0.7.16", features = ["compat"] }
-tracing = "0.1.41"
-tracing-subscriber = {version = "0.3.23", features = ["tokio-time"] }
-kademlia = { version = "0.1.0", path = "../kademlia" }
-shared-schema = { version = "0.1.0", path = "../shared-schema" }
-maxlen = { version = "0.1.0", path = "../maxlen" }
 max-sized-vec = { version = "0.1.0", path = "../max-sized-vec" }
+quinn = { version = "0.11.9", default-features = false, features = ["ring", "bloom", "platform-verifier", "runtime-tokio", "rustls-ring", "futures-io"] }
 rpc = { version = "0.1.0", path = "../rpc" }
+rustls = { version = "0.23.37", default-features = false, features = ["ring"] }
+shared-schema = { version = "0.1.0", path = "../shared-schema" }
+tokio = "1.53.1"
+tracing = "0.1.44"
 
 [dev-dependencies]
-dens = { version = "0.1.0", path = "../dens" }
-expect-test = "1.5.1"
-getrandom2 = { package = "getrandom", version = "0.2.18", features = ["unsafe_deterministic_testing"]}
-getrandom3 = {package = "getrandom", version = "0.3.5", features = ["unsafe_deterministic_testing"]}
-getrandom4 = {package = "getrandom", version = "0.4.2", features = ["unsafe_deterministic_testing"]}
-test-log = { version = "0.2.19", default-features = false, features = ["color","trace"] }
-tracing-subscriber = {version = "0.3.23", features = ["tokio-time"] }
-
-turmoil = "0.6.6"
+dens = { path = "../dens" }
