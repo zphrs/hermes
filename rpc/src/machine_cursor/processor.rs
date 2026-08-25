@@ -15,7 +15,7 @@ use crate::{traits::Prioritized, transport::ReplyHelper};
 use futures::{
     FutureExt as _, StreamExt as _, future::FusedFuture, select, stream::FuturesUnordered,
 };
-use tracing::{debug, trace};
+use tracing::{debug, error, trace};
 
 use crate::{
     HandleOneRequestError, Method,

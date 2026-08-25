@@ -223,7 +223,7 @@ impl<
         }
     }
 
-    pub async fn next(
+    pub(crate) async fn next_while_handling(
         self,
     ) -> Result<
         RequesterTransition<State, StageOne<RootMethod, TransitionMethod, Role, Caller>>,
@@ -237,6 +237,85 @@ impl<
     {
         let (req, role, caller) = self.stage.into_parts();
         Ok(StageOne::new(req, role, caller).await?.into())
+    }
+}
+
+pub mod fast_path {
+    use crate::{
+        CallerError,
+        machine_cursor::transition::{StageZero, requester::RequesterTransition},
+        method::{CanTransition, is_leaf, not_applicable::NotApplicable},
+        state::{Prioritized, role},
+    };
+    // for client requester
+    impl<
+        State: crate::State<ClientHandles = NotApplicable>,
+        RootMethod: crate::Method + CanTransition + crate::method::FromDescendant<TransitionMethod>,
+        TransitionMethod: crate::Method<IsLeaf = is_leaf::True> + CanTransition,
+        Caller: crate::transport::Caller,
+    > RequesterTransition<State, StageZero<RootMethod, TransitionMethod, role::Client, Caller>>
+    where
+        <TransitionMethod as crate::Method>::Res: crate::RpcMessage,
+        State: Prioritized,
+        TransitionMethod::Res: crate::RpcMessage,
+        RootMethod::Req: crate::RpcMessage,
+    {
+        /// fast path
+        pub async fn next(
+            self,
+        ) -> Result<
+            RequesterTransition<
+                State,
+                super::NeedProcessor<
+                    <TransitionMethod as crate::Method>::Res,
+                    role::Client,
+                    Caller,
+                >,
+            >,
+            CallerError<<Caller as crate::Caller>::Error>,
+        > {
+            let next = self
+                .next_while_handling()
+                .await
+                .map_err(CallerError::Transport)?;
+            let res = next.next_when_handling_not_applicable().await?;
+            Ok(res)
+        }
+    }
+    // for server requester
+    impl<
+        State: crate::State<ServerHandles = NotApplicable>,
+        RootMethod: crate::Method + CanTransition + crate::method::FromDescendant<TransitionMethod>,
+        TransitionMethod: crate::Method<IsLeaf = is_leaf::True> + CanTransition,
+        Caller: crate::transport::Caller,
+    > RequesterTransition<State, StageZero<RootMethod, TransitionMethod, role::Server, Caller>>
+    where
+        <TransitionMethod as crate::Method>::Res: crate::RpcMessage,
+        State: Prioritized,
+        TransitionMethod::Res: crate::RpcMessage,
+        RootMethod::Req: crate::RpcMessage,
+    {
+        /// fast path
+        pub async fn next(
+            self,
+        ) -> Result<
+            RequesterTransition<
+                State,
+                super::NeedProcessor<
+                    <TransitionMethod as crate::Method>::Res,
+                    role::Server,
+                    Caller,
+                >,
+            >,
+            CallerError<<Caller as crate::Caller>::Error>,
+        > {
+            let next = self
+                .next_while_handling()
+                .await
+                .map_err(CallerError::Transport)?;
+            let res = next.next_when_handling_not_applicable().await?;
+            Ok(res)
+        }
     }
 }
 
@@ -299,6 +378,87 @@ impl<
         } else {
             Need::Processor(RequesterTransition::from(NeedProcessor(receipt)))
         })
+    }
+}
+mod stage_one_fast_path {
+    use crate::{
+        CallerError,
+        machine_cursor::transition::requester::{NeedProcessor, RequesterTransition, StageOne},
+        method::not_applicable::NotApplicable,
+        state::{Prioritized, role},
+    };
+
+    // for client requester
+    impl<
+        State: crate::State<ClientHandles = NotApplicable>,
+        RootMethod: crate::Method,
+        TransitionMethod: crate::Method,
+        Caller: crate::transport::Caller,
+    > RequesterTransition<State, StageOne<RootMethod, TransitionMethod, role::Client, Caller>>
+    {
+        pub async fn next_when_handling_not_applicable(
+            self,
+        ) -> Result<
+            RequesterTransition<State, NeedProcessor<TransitionMethod::Res, role::Client, Caller>>,
+            CallerError<<Caller as crate::Caller>::Error>,
+        >
+        where
+            <TransitionMethod as crate::Method>::Res: crate::RpcMessage,
+            State: Prioritized,
+            TransitionMethod::Res: crate::RpcMessage,
+            RootMethod::Req: crate::RpcMessage,
+        {
+            let (_req, receipt) = self
+                .stage
+                .await
+                .map_err(|e| CallerError::try_from(e).unwrap())?;
+            let (res, receipt) = receipt.extract_result();
+            let (in_transition, res) = res.into_parts();
+
+            let receipt = receipt.insert_result(res);
+
+            Ok(if in_transition {
+                unreachable!()
+            } else {
+                RequesterTransition::from(NeedProcessor(receipt))
+            })
+        }
+    }
+    // for server requester
+    impl<
+        State: crate::State<ServerHandles = NotApplicable>,
+        RootMethod: crate::Method,
+        TransitionMethod: crate::Method,
+        Caller: crate::transport::Caller,
+    > RequesterTransition<State, StageOne<RootMethod, TransitionMethod, role::Server, Caller>>
+    {
+        pub async fn next_when_handling_not_applicable(
+            self,
+        ) -> Result<
+            RequesterTransition<State, NeedProcessor<TransitionMethod::Res, role::Server, Caller>>,
+            CallerError<<Caller as crate::Caller>::Error>,
+        >
+        where
+            <TransitionMethod as crate::Method>::Res: crate::RpcMessage,
+            State: Prioritized,
+            TransitionMethod::Res: crate::RpcMessage,
+            RootMethod::Req: crate::RpcMessage,
+        {
+            let (_req, receipt) = self
+                .stage
+                .await
+                .map_err(|e| CallerError::try_from(e).unwrap())?;
+            let (res, receipt) = receipt.extract_result();
+            let (in_transition, res) = res.into_parts();
+
+            let receipt = receipt.insert_result(res);
+
+            Ok(if in_transition {
+                unreachable!()
+            } else {
+                RequesterTransition::from(NeedProcessor(receipt))
+            })
+        }
     }
 }
 

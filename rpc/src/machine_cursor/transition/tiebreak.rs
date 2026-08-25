@@ -3,21 +3,20 @@ use std::marker::PhantomData;
 use futures::select;
 use tracing::{debug, trace};
 
-use crate::RpcMessage;
-use crate::machine_cursor::processor::EventualTransitionRequest;
-
-use crate::machine_cursor::transition::requester::processor_sacrifice::ProcessorSacrifice;
-use crate::method::{CanTransition, FromDescendant, is_leaf, not_applicable};
 use crate::{
-    CallerError, MachineCursor,
-    machine_cursor::transition::{
-        processor::{FinalizeFuture, ProcessorTransition},
-        requester::{
-            AssertSacrificeError, RequesterTransition, ToSacrifice, TransitionReceipt,
-            assert_remote_sacrifice,
+    CallerError, MachineCursor, RpcMessage,
+    machine_cursor::{
+        processor::EventualTransitionRequest,
+        transition::{
+            processor::{FinalizeFuture, ProcessorTransition},
+            requester::{
+                AssertSacrificeError, RequesterTransition, ToSacrifice, TransitionReceipt,
+                assert_remote_sacrifice, processor_sacrifice::ProcessorSacrifice,
+            },
+            transition_request_method,
         },
-        transition_request_method,
     },
+    method::{CanTransition, FromDescendant, is_leaf},
     state::{self, PrioritizedUnsafeExt},
     transport::ext::query_owned,
 };
@@ -245,7 +244,7 @@ where
             Requester => {
                 debug!("requester won");
                 let res = RequesterTransition::<State, _>::new(request_transition)
-                    .next()
+                    .next_while_handling()
                     .await
                     .map_err(|e| TiebreakError::Caller(CallerError::Transport(e)))?
                     .into_inner()
@@ -324,7 +323,7 @@ where
         ),
     }
     let requester_transition = RequesterTransition::<State, _>::new(request_transition)
-        .next()
+        .next_while_handling()
         .await
         .map_err(|e| TiebreakError::Caller(CallerError::Transport(e)))?;
     let mut request_transition = requester_transition.into_inner();

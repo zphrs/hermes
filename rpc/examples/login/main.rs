@@ -88,9 +88,6 @@ where
         .request_transition::<logged_in::logout::Method>(())
         .next()
         .await?
-        .next()
-        .await?
-        .assert_need_processor()
         .extract_res();
     // log out successful
     let entrypoint_cursor = transition.finish(processor, res);
@@ -124,9 +121,6 @@ where
         })
         .next()
         .await?
-        .next()
-        .await?
-        .assert_need_processor()
         .extract_res();
     Ok((res.into_inner(), requester_transition))
 }

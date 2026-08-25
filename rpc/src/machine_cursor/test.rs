@@ -223,11 +223,6 @@ async fn join() {
                 // (would be a problem if our processor ever started handling requests)
                 .next()
                 .await?
-                .next()
-                .await?
-                // asserts that the remote didn't send off a transition request
-                // (in this case impossible since Method is NotApplicable)
-                .assert_need_processor()
                 // takes Res out of the NeedProcessor type
                 .extract_res();
             requester_transition.finish(processor, res).await.unwrap()
@@ -416,14 +411,8 @@ async fn test_tiebreak() {
                 let (processor, requester) =
                     host_stand_cursor.into_children_with_handler(&mut handler);
                 let requester_transition = requester.request_transition::<waitlist::Join>(());
-                let requester_transition = requester_transition.next().await.unwrap();
-
-                let transition::requester::Need::Processor(requester_transition) =
-                    requester_transition.next().await.unwrap()
-                else {
-                    panic!("unexpected Need variant")
-                };
-                let (res, requester_transition) = requester_transition.extract_res();
+                let (res, requester_transition) =
+                    requester_transition.next().await.unwrap().extract_res();
                 requester_transition.finish(processor, res).await.unwrap()
             };
             debug!("joined waitlist");

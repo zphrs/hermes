@@ -37,9 +37,6 @@ pub async fn join_room(
         })
         .next()
         .await?
-        .next()
-        .await?
-        .assert_need_processor()
         .extract_res();
     let res = res?;
     println!(

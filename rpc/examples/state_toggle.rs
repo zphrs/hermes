@@ -142,14 +142,7 @@ where
 {
     let mut handler = rpc::method::not_applicable::Handler;
     let (processor, requester) = b_cursor.into_children_with_handler(&mut handler);
-    let (res, transition) = requester
-        .request_transition(())
-        .next()
-        .await?
-        .next()
-        .await?
-        .assert_need_processor()
-        .extract_res();
+    let (res, transition) = requester.request_transition(()).next().await?.extract_res();
     let a_cursor = transition.finish(processor, res).await?;
     Ok(a_cursor)
 }
@@ -163,14 +156,7 @@ where
 {
     let mut handler = rpc::method::not_applicable::Handler;
     let (processor, requester) = entrypoint_cursor.into_children_with_handler(&mut handler);
-    let (res, transition) = requester
-        .request_transition(())
-        .next()
-        .await?
-        .next()
-        .await?
-        .assert_need_processor()
-        .extract_res();
+    let (res, transition) = requester.request_transition(()).next().await?.extract_res();
     let b_cursor = transition.finish(processor, res).await?;
     Ok(b_cursor)
 }
