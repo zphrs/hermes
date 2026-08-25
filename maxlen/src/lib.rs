@@ -51,18 +51,16 @@
 //! ```
 
 use std::{
-    any::Any,
     borrow::Cow,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     time::{Duration, SystemTime},
 };
 
-use minicbor::{CborLen, bytes::cbor_len};
+use minicbor::CborLen;
 
 // Re-export the derive macro when the derive feature is enabled
 #[cfg(feature = "derive")]
 pub use maxlen_derive::MaxLen;
-use tracing::warn;
 
 /// Trait for types that can provide their maximum CBOR-encoded length.
 ///
