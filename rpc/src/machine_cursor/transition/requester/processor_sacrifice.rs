@@ -2,9 +2,13 @@ use crate::machine_cursor::processor::EventualTransitionRequest;
 use crate::machine_cursor::transition::processor::ProcessorTransition;
 use crate::machine_cursor::transition::processor::StageOne;
 use crate::method::is_leaf;
+use crate::method::not_applicable;
+use crate::state;
+use crate::traits::state::StateTypeIdExt as _;
 use crate::transport::ClientExt as _;
 
 use maxlen::MaxLen;
+use tracing::trace;
 
 use crate::{
     Caller,
@@ -45,9 +49,18 @@ pub enum AssertSacrificeError<Client> {
     Handler(#[from] minicbor_io::Error),
 }
 
-pub async fn assert_remote_sacrifice<Conn: crate::transport::Connection>(
+#[expect(private_bounds, reason = "for role")]
+pub async fn assert_remote_sacrifice<
+    OldState: crate::State,
+    Role: state::Role,
+    Conn: crate::transport::Connection,
+>(
     conn: &mut Conn,
 ) -> Result<(), AssertSacrificeError<<Conn as crate::transport::Client>::Error>> {
+    if OldState::remote_handles_type_id::<Role>() == not_applicable::TYPE_ID {
+        trace!("skipping waiting for remote sacrifice");
+        return Ok(());
+    }
     let mut stream = conn
         .accept_stream()
         .await

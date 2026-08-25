@@ -1,4 +1,5 @@
 //! Marker types for each side
+
 #[derive(Clone, Copy)]
 pub struct Client;
 #[derive(Clone, Copy)]

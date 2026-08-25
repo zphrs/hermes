@@ -357,7 +357,7 @@ impl<State, Role: crate::state::Role, Conn: crate::transport::Connection>
             processor.client() == receipt.connection(),
             "requester and processor must belong to the same connection"
         );
-        let (role, conn) = receipt.into_parts(processor.sacrifice()).await?;
+        let (role, conn) = receipt.into_parts::<State>(processor.sacrifice()).await?;
 
         Ok(MachineCursor::new_with_role(conn, role, wrapper))
     }

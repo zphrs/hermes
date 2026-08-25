@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use futures::select;
 use tracing::{debug, trace};
 
@@ -5,7 +7,7 @@ use crate::RpcMessage;
 use crate::machine_cursor::processor::EventualTransitionRequest;
 
 use crate::machine_cursor::transition::requester::processor_sacrifice::ProcessorSacrifice;
-use crate::method::{CanTransition, FromDescendant, is_leaf};
+use crate::method::{CanTransition, FromDescendant, is_leaf, not_applicable};
 use crate::{
     CallerError, MachineCursor,
     machine_cursor::transition::{
@@ -26,9 +28,10 @@ pub enum TiebreakResult<
     RequesterRes,
     Role: crate::state::Role,
     Conn: crate::transport::Connection,
+    OldState,
 > {
     ProcessorWon(FinalizeProcessorTransition<ProcessorMethod::Res, Role, Conn>),
-    RequesterWon(FinalizeRequesterTransition<RequesterRes, Role, Conn>),
+    RequesterWon(FinalizeRequesterTransition<RequesterRes, Role, Conn, OldState>),
 }
 
 pub struct FinalizeProcessorTransition<Res, Role, Conn: crate::transport::Connection> {
@@ -64,7 +67,7 @@ impl<Role: crate::state::Role, Conn: crate::transport::Connection>
         AssertSacrificeError<<Conn as crate::transport::Client>::Error>,
     > {
         self.finalize_fut.await?;
-        assert_remote_sacrifice(&mut self.conn).await?;
+        assert_remote_sacrifice::<State, Role, _>(&mut self.conn).await?;
         Ok(MachineCursor::new_with_role(self.conn, self.role, wrapper))
     }
 }
@@ -74,36 +77,43 @@ pub struct FinalizeRequesterTransition<
     TransitionRes,
     Role: crate::state::Role,
     Conn: crate::transport::Connection,
+    OldState,
 > {
     receipt: TransitionReceipt<TransitionRes, Role, Conn>,
     to_sacrifice: ToSacrifice,
+    _marker: PhantomData<OldState>,
 }
 
 #[expect(private_bounds, reason = "for role")]
-impl<Res, Role: crate::state::Role, Conn: crate::transport::Connection>
-    FinalizeRequesterTransition<Res, Role, Conn>
+impl<Res, Role: crate::state::Role, Conn: crate::transport::Connection, OldState>
+    FinalizeRequesterTransition<Res, Role, Conn, OldState>
 {
-    pub fn extract_res(self) -> (Res, FinalizeRequesterTransition<(), Role, Conn>) {
+    pub fn extract_res(self) -> (Res, FinalizeRequesterTransition<(), Role, Conn, OldState>) {
         let (res, receipt) = self.receipt.extract_result();
         (
             res,
             FinalizeRequesterTransition {
                 receipt,
                 to_sacrifice: self.to_sacrifice,
+                _marker: PhantomData,
             },
         )
     }
 }
 
 #[expect(private_bounds, reason = "for role")]
-impl<Role: crate::state::Role, Conn: crate::transport::Connection>
-    FinalizeRequesterTransition<(), Role, Conn>
+impl<Role: crate::state::Role, Conn: crate::transport::Connection, OldState: crate::State>
+    FinalizeRequesterTransition<(), Role, Conn, OldState>
 {
-    pub async fn finish<State: crate::state::State>(
+    pub async fn finish<NewState: crate::state::State>(
         self,
-        wrapper: state::Wrapper<State>,
-    ) -> Result<MachineCursor<State, Conn, Role>, CallerError<<Conn as crate::Caller>::Error>> {
-        let (role, conn) = self.receipt.into_parts(self.to_sacrifice).await?;
+        wrapper: state::Wrapper<NewState>,
+    ) -> Result<MachineCursor<NewState, Conn, Role>, CallerError<<Conn as crate::Caller>::Error>>
+    {
+        let (role, conn) = self
+            .receipt
+            .into_parts::<OldState>(self.to_sacrifice)
+            .await?;
         Ok(MachineCursor::new_with_role(conn, role, wrapper))
     }
 }
@@ -186,7 +196,7 @@ pub async fn between_processor_and_requester_transition<
         super::requester::StageZero<RootMethod, TransitionMethod, Role, Conn>,
     >,
 ) -> Result<
-    TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
+    TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn, State>,
     TiebreakError<Conn, ()>,
 >
 where
@@ -251,6 +261,7 @@ where
                 TiebreakResult::RequesterWon(FinalizeRequesterTransition {
                     receipt,
                     to_sacrifice: processor_transition.sacrifice(),
+                    _marker: PhantomData,
                 })
             }
         }
@@ -280,7 +291,7 @@ pub async fn between_potential_processor_and_known_requester_transition<
         super::requester::StageZero<RootMethod, TransitionMethod, Role, Conn>,
     >,
 ) -> Result<
-    TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn>,
+    TiebreakResult<ProcessorMethod, TransitionMethod::Res, Role, Conn, State>,
     TiebreakError<Conn, TError>,
 >
 where
@@ -373,6 +384,7 @@ where
                     TiebreakResult::RequesterWon(FinalizeRequesterTransition {
                         receipt,
                         to_sacrifice: processor_transition.sacrifice(),
+                        _marker: PhantomData,
                     })
                 }
             }
@@ -408,6 +420,7 @@ where
                 TiebreakResult::RequesterWon(FinalizeRequesterTransition {
                     receipt,
                     to_sacrifice: processor_transition.sacrifice(),
+                    _marker: PhantomData,
                 })
             } else {
                 debug!("not in tiebreak");
@@ -415,6 +428,7 @@ where
                 TiebreakResult::RequesterWon(FinalizeRequesterTransition {
                     receipt,
                     to_sacrifice: to_processor_transition.sacrifice(),
+                    _marker: PhantomData,
                 })
             }
         }

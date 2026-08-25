@@ -71,13 +71,15 @@ pub type ResOf<M> = <M as Method>::Res;
 
 pub mod not_applicable {
     use crate::{method::is_leaf, traits::method::can_transition};
-    use std::convert::Infallible;
+    use std::{any::TypeId, convert::Infallible};
 
     /// Type for a method whose requests and responses are impossible to construct;
     /// used to specify no method at all for a one-sided
     /// [`State`](crate::traits::State).
     #[derive(Clone)]
     pub enum NotApplicable {}
+
+    pub const TYPE_ID: TypeId = TypeId::of::<NotApplicable>();
 
     impl PartialEq for NotApplicable {
         fn eq(&self, _other: &Self) -> bool {

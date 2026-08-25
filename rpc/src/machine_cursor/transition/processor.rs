@@ -16,6 +16,7 @@ pub(super) use delayed_replier::FinalizeFuture;
 pub(crate) use incoming_transition_request::PendingTransitionReceipt;
 
 pub use delayed_replier::{DelayedReceipt, DelayedReplier};
+use tracing::trace;
 
 use crate::{
     MachineCursor,
@@ -151,6 +152,7 @@ impl<
         // don't need priority because we have the whole requester so we know
         // there can't possibly be a conflict
         drop(priority);
+        trace!("finalizing receipt");
         let (res, finalize_fut) = receipt.finalize(sender, false);
         let mut conn = requester.into_parts().1;
         assert!(
@@ -158,7 +160,8 @@ impl<
             "requester and processor must belong to the same connection"
         );
         finalize_fut.await?;
-        assert_remote_sacrifice(&mut conn).await?;
+        trace!("finalized receipt");
+        assert_remote_sacrifice::<State, Role, _>(&mut conn).await?;
 
         Ok(ProcessorTransition {
             state: StageTwo { conn, role, res },

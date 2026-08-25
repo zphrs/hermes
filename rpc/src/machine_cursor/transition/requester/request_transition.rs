@@ -1,7 +1,8 @@
-use crate::traits::state::StateTypeIdExt as _;
+use crate::{method::not_applicable, traits::state::StateTypeIdExt as _};
 use std::{marker::PhantomData, pin::Pin, task::ready};
 
 use futures::{FutureExt as _, future::FusedFuture};
+use tracing::trace;
 
 use crate::{
     CallerError,
@@ -32,14 +33,20 @@ impl<Role: crate::state::Role, Caller: crate::transport::Caller>
         TransitionReceipt(result, self.1, self.2)
     }
 
-    pub(crate) async fn into_parts(
+    /// Notifies the remote that we've sacrificed only if our local method
+    /// was not NotApplicable.
+    pub(crate) async fn into_parts<OldState: crate::State>(
         mut self,
         processor: ToSacrifice,
     ) -> Result<(Role, Caller), CallerError<<Caller as crate::Caller>::Error>>
     where
         Caller: crate::transport::Client + PartialEq,
     {
-        processor.sacrifice(&mut self.2).await?;
+        if OldState::local_handles_type_id::<Role>() != not_applicable::TYPE_ID {
+            processor.sacrifice(&mut self.2).await?;
+        } else {
+            trace!("skipping sending sacrifice notification");
+        }
         Ok((self.1, self.2))
     }
 }

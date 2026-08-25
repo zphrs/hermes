@@ -6,24 +6,42 @@ pub use has::Has;
 pub(crate) use priority::PrioritizedUnsafeExt;
 pub use priority::{Prioritized, Priority};
 pub(crate) use role::Role;
+use std::{any::TypeId, marker::PhantomData};
+
+use maxlen::MaxLen;
+
+use crate::traits::{self, method};
 
 /// It's necessary to divide between what requests the client and the server can
 /// perform as an entrypoint into establishing a symmetric state.
 pub trait State {
-    type ClientHandles: crate::Method;
-    type ServerHandles: crate::Method;
+    type ClientHandles: crate::Method + 'static;
+    type ServerHandles: crate::Method + 'static;
 }
+
+pub(crate) trait StateTypeIdExt: State {
+    #[inline(always)]
+    fn local_handles_type_id<Role: crate::state::Role>() -> TypeId {
+        match Role::to_enum() {
+            role::WhichRole::Client => TypeId::of::<Self::ClientHandles>(),
+            role::WhichRole::Server => TypeId::of::<Self::ServerHandles>(),
+        }
+    }
+    #[inline(always)]
+    fn remote_handles_type_id<Role: crate::state::Role>() -> std::any::TypeId {
+        match Role::to_enum() {
+            role::WhichRole::Client => TypeId::of::<Self::ServerHandles>(),
+            role::WhichRole::Server => TypeId::of::<Self::ClientHandles>(),
+        }
+    }
+}
+
+impl<T: State + ?Sized> StateTypeIdExt for T {}
 
 pub type ServerReq<State> = <<State as self::State>::ServerHandles as crate::Method>::Req;
 pub type ServerRes<State> = <<State as self::State>::ServerHandles as crate::Method>::Res;
 pub type ClientReq<State> = <<State as self::State>::ClientHandles as crate::Method>::Req;
 pub type ClientRes<State> = <<State as self::State>::ClientHandles as crate::Method>::Res;
-
-use std::marker::PhantomData;
-
-use maxlen::MaxLen;
-
-use crate::traits::{self, method};
 
 pub struct Wrapper<State: crate::traits::State> {
     _marker: PhantomData<State>,
