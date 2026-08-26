@@ -244,12 +244,12 @@ pub mod fast_path {
     use crate::{
         CallerError,
         machine_cursor::transition::{StageZero, requester::RequesterTransition},
-        method::{CanTransition, is_leaf, not_applicable::NotApplicable},
+        method::{CanTransition, can_transition, is_leaf},
         state::{Prioritized, role},
     };
     // for client requester
     impl<
-        State: crate::State<ClientHandles = NotApplicable>,
+        State: crate::State,
         RootMethod: crate::Method + CanTransition + crate::method::FromDescendant<TransitionMethod>,
         TransitionMethod: crate::Method<IsLeaf = is_leaf::True> + CanTransition,
         Caller: crate::transport::Caller,
@@ -259,6 +259,8 @@ pub mod fast_path {
         State: Prioritized,
         TransitionMethod::Res: crate::RpcMessage,
         RootMethod::Req: crate::RpcMessage,
+        <State as crate::State>::ClientHandles:
+            crate::Method<CanTransition = can_transition::False>,
     {
         /// fast path
         pub async fn next(
@@ -284,7 +286,7 @@ pub mod fast_path {
     }
     // for server requester
     impl<
-        State: crate::State<ServerHandles = NotApplicable>,
+        State: crate::State,
         RootMethod: crate::Method + CanTransition + crate::method::FromDescendant<TransitionMethod>,
         TransitionMethod: crate::Method<IsLeaf = is_leaf::True> + CanTransition,
         Caller: crate::transport::Caller,
@@ -294,6 +296,8 @@ pub mod fast_path {
         State: Prioritized,
         TransitionMethod::Res: crate::RpcMessage,
         RootMethod::Req: crate::RpcMessage,
+        <State as crate::State>::ServerHandles:
+            crate::Method<CanTransition = can_transition::False>,
     {
         /// fast path
         pub async fn next(
@@ -384,13 +388,13 @@ mod stage_one_fast_path {
     use crate::{
         CallerError,
         machine_cursor::transition::requester::{NeedProcessor, RequesterTransition, StageOne},
-        method::not_applicable::NotApplicable,
+        method::can_transition,
         state::{Prioritized, role},
     };
 
     // for client requester
     impl<
-        State: crate::State<ClientHandles = NotApplicable>,
+        State: crate::State,
         RootMethod: crate::Method,
         TransitionMethod: crate::Method,
         Caller: crate::transport::Caller,
@@ -407,6 +411,8 @@ mod stage_one_fast_path {
             State: Prioritized,
             TransitionMethod::Res: crate::RpcMessage,
             RootMethod::Req: crate::RpcMessage,
+            <State as crate::State>::ClientHandles:
+                crate::Method<CanTransition = can_transition::False>,
         {
             let (_req, receipt) = self
                 .stage
@@ -426,7 +432,7 @@ mod stage_one_fast_path {
     }
     // for server requester
     impl<
-        State: crate::State<ServerHandles = NotApplicable>,
+        State,
         RootMethod: crate::Method,
         TransitionMethod: crate::Method,
         Caller: crate::transport::Caller,
@@ -443,6 +449,8 @@ mod stage_one_fast_path {
             State: Prioritized,
             TransitionMethod::Res: crate::RpcMessage,
             RootMethod::Req: crate::RpcMessage,
+            <State as crate::State>::ServerHandles:
+                crate::Method<CanTransition = can_transition::False>,
         {
             let (_req, receipt) = self
                 .stage

@@ -16,8 +16,10 @@ pub mod can_transition {
     //! [`Method`](super::Method)s can be passed into various transitioning and
     //! non-transitioning functions.
 
+    use std::any::TypeId;
+
     /// either [`True`] or [`False`]
-    pub(super) trait Transitions {}
+    pub(super) trait Transitions: 'static {}
     /// indicates that the method does transition
     pub struct True;
 
@@ -26,6 +28,17 @@ pub mod can_transition {
     pub struct False;
 
     impl Transitions for False {}
+
+    #[expect(private_bounds, reason = "for transitions")]
+    pub trait TransitionsAsBoolExt: Transitions {
+        fn as_bool() -> bool;
+    }
+
+    impl<T: Transitions> TransitionsAsBoolExt for T {
+        fn as_bool() -> bool {
+            TypeId::of::<T>() == TypeId::of::<True>()
+        }
+    }
 }
 
 pub trait Loopback: Method<CanTransition = can_transition::False> {}

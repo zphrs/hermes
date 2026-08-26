@@ -1,21 +1,20 @@
 use crate::machine_cursor::transition::processor::ProcessorTransition;
-use crate::method::{Ancestor, FromDescendant, can_transition, is_leaf, not_applicable};
+use crate::method::{Ancestor, CanTransition, FromDescendant, can_transition, is_leaf};
 use crate::transport::ClientExt;
 use crate::{Handler, machine_cursor::PendingTransitionReceipt};
 mod concurrent_request_handler;
 
 use std::convert::Infallible;
-use std::future::pending;
 use std::pin::{Pin, pin};
 
-use crate::state::{PrioritizedUnsafeExt, StateTypeIdExt, Wrapper};
+use crate::state::{PrioritizedUnsafeExt, Wrapper};
 
 use crate::{traits::Prioritized, transport::ReplyHelper};
 
 use futures::{
     FutureExt as _, StreamExt as _, future::FusedFuture, select, stream::FuturesUnordered,
 };
-use tracing::{debug, error, trace};
+use tracing::{debug, trace};
 
 use crate::{
     HandleOneRequestError, Method,
@@ -225,12 +224,9 @@ where
         RootMethod::Req: crate::RpcMessage,
         State: Prioritized,
         Client: 'a,
+        RootMethod: CanTransition,
     {
         let fut = async move {
-            if State::local_handles_type_id::<Role>() == not_applicable::TYPE_ID {
-                error!("handling NotApplicable transition request will never resolve");
-                return pending().await;
-            }
             let Self {
                 handler,
                 role,
@@ -296,13 +292,9 @@ where
         State: Prioritized,
         RootMethod: Ancestor<LoopbackMethod>,
         RootMethod: FromDescendant<LoopbackMethod, IsLeaf = is_leaf::False>,
+        RootMethod: CanTransition,
     {
         let fut = async move {
-            if State::local_handles_type_id::<Role>() == not_applicable::TYPE_ID {
-                error!("handling NotApplicable requests will never resolve");
-                return pending().await;
-            }
-
             let Self {
                 _state: state,
                 handler,
