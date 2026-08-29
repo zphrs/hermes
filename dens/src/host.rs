@@ -13,7 +13,7 @@ use crate::sim::{
 };
 
 pub(crate) type Software<'a> = Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result>>> + 'static>;
-pub(crate) type Result<T = (), E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+pub(crate) type Result<T = (), E = anyhow::Error> = anyhow::Result<T, E>;
 
 pub struct Host {
     entrypoint: Software<'static>,

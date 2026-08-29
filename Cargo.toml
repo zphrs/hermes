@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["earth", "dens", "maxlen", "maxlen-derive", "rpc", "max-sized-vec", "max-sized-string", "kademlia", "sky", "cose"]
+members = ["earth", "dens", "maxlen", "maxlen-derive", "rpc", "max-sized-vec", "max-sized-string", "kademlia", "sky", "cose", "rpc-rewrite"]
 
 [profile.dev.package]
 expect-test.opt-level = 3

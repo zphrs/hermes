@@ -82,7 +82,7 @@ impl Default for Network {
 }
 
 impl Network {
-    /// Returns a network which uses the 172.16.0.0/12 block to allocate IP
+    /// Returns a network which uses the 172.16.0.0/8 block to allocate IP
     /// addresses to machines added via [`Network::add_machine`].
     #[must_use]
     pub fn new_private_class_a() -> Self {
@@ -105,20 +105,25 @@ impl Network {
     }
     #[must_use]
     pub fn new_with_ipv4_prefix(net: Ipv4Prefix) -> Self {
+        let mut v4_generator = Ipv4NetworkIterator::new(net, 32);
+        let _zero = v4_generator.next().unwrap();
+
+        let mut v6_generator = Ipv6NetworkIterator::new(
+            // If the Ipv4Prefix was successfully constructed then a mapped
+            // ipv6 network can be made based on the Ipv4Prefix netmask
+            // and address.
+            #[expect(clippy::missing_panics_doc, reason = "infallible")]
+            Ipv6Network::new(
+                net.network_address().to_ipv6_mapped(),
+                128 - (32 - net.netmask()),
+            )
+            .unwrap(),
+            128,
+        );
+        let _zero = v6_generator.next();
         Self {
-            ipv4_generator: Ipv4NetworkIterator::new(net, 32),
-            ipv6_generator: Ipv6NetworkIterator::new(
-                // If the Ipv4Prefix was successfully constructed then a mapped
-                // ipv6 network can be made based on the Ipv4Prefix netmask
-                // and address.
-                #[expect(clippy::missing_panics_doc, reason = "infallible")]
-                Ipv6Network::new(
-                    net.network_address().to_ipv6_mapped(),
-                    128 - (32 - net.netmask()),
-                )
-                .unwrap(),
-                128,
-            ),
+            ipv4_generator: v4_generator,
+            ipv6_generator: v6_generator,
             ..Default::default()
         }
     }
