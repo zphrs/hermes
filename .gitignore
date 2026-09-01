@@ -4,3 +4,4 @@ Cargo.lock
 logs
 .agents
 *.diff
+.hegel

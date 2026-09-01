@@ -6,21 +6,22 @@ use std::{
 use anyhow::anyhow;
 use dens::{MachineIntoRef, Sim};
 
-use futures::AsyncReadExt;
-use minicbor::{CborLen as _, bytes::ByteSlice};
+use minicbor::bytes::ByteSlice;
 use quinn::EndpointConfig;
 use tracing::{Instrument, info, info_span, instrument, trace, warn};
 
 use crate::{
+    io::request,
     quinn_transport,
-    traits::method::{
-        self, ReqOf, ResOf, can_transition,
-        handler::{
-            BranchHandler,
-            replier::{Receipt, futures_io},
-            root_method::{RootHandler, RootMethod},
+    traits::{
+        markers::False,
+        method::{
+            self,
+            handler::{
+                replier::futures_io,
+                root_method::{RootHandler, RootMethod},
+            },
         },
-        has_descendants,
     },
 };
 
@@ -31,9 +32,9 @@ impl method::Method for Ping {
 
     type Res<'buf> = &'buf minicbor::bytes::ByteSlice;
 
-    type Transitions = can_transition::False;
+    type Transitions = False;
 
-    type HasDescendants = has_descendants::False;
+    type HasDescendants = False;
 }
 
 impl method::handler::LeafHandler for Ping {
@@ -46,26 +47,12 @@ impl method::handler::LeafHandler for Ping {
 async fn server_handle_connection(connection: quinn::Connection) -> anyhow::Result<()> {
     trace!("accepted connection");
     let mut read_buf = Vec::new();
-    let mut write_buf = Vec::new();
     loop {
-        let (send, mut recv) = connection.accept_bi().await?;
+        let (send, recv) = connection.accept_bi().await?;
         trace!("accepted bi");
+        let replier = futures_io::Replier::<RootMethod<Ping>, _>::new(send);
 
-        read_buf.clear();
-        futures::AsyncReadExt::read_to_end(&mut recv, &mut read_buf).await?;
-        trace!("read to end");
-
-        {
-            let request: ReqOf<RootMethod<Ping>> = minicbor::decode(&read_buf)?;
-
-            let replier =
-                futures_io::Replier::<RootMethod<Ping>, _>::new_with_buffer(send, &mut write_buf);
-            let _receipt = RootHandler(Ping)
-                .handle(request, replier)
-                .await?
-                .finalize()
-                .await?;
-        }
+        crate::io::respond(&mut read_buf, recv, replier, &mut RootHandler(Ping)).await?;
     }
 }
 
@@ -138,24 +125,15 @@ fn ping() -> anyhow::Result<()> {
                     .await?;
                 trace!("connected to server");
 
-                let (mut send, mut recv) = connection.open_bi().await?;
+                let stream = connection.open_bi().await?;
 
-                let request: &'static ByteSlice = b"Hello, world!".as_slice().into();
+                let req: &'static ByteSlice = b"Hello, world!".as_slice().into();
 
-                buf.clear();
-                buf.reserve(request.cbor_len(&mut ()));
+                let res =
+                    request::<RootMethod<Ping>, Ping, quinn::Connection>(&mut buf, req, stream)
+                        .await?;
 
-                minicbor::encode::<&ByteSlice, _>(request, &mut buf)?;
-                trace!("wrote");
-                send.write_all(&buf).await?;
-                drop(send);
-
-                buf.clear();
-
-                AsyncReadExt::read_to_end(&mut recv, &mut buf).await?;
-                let res: ResOf<'_, Ping> = minicbor::decode(&buf)?;
-
-                assert_eq!(res, request);
+                assert_eq!(res, req);
 
                 Ok(())
             }

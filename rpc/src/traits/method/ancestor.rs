@@ -1,4 +1,5 @@
 pub(crate) trait Descendant<A: ?Sized>: crate::Method {}
+
 pub trait Ancestor<D: crate::Method + ?Sized>: crate::Method {}
 
 impl<T: crate::Method> Ancestor<T> for T {}

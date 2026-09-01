@@ -566,8 +566,6 @@ impl UdpSocket {
 
         if self.send.is_closed() {
             Poll::Ready(Err(io::Error::from(ErrorKind::BrokenPipe)))
-        } else if self.send.capacity() == 0 {
-            Poll::Pending
         } else {
             Poll::Ready(Ok(()))
         }

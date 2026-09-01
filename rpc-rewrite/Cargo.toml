@@ -7,14 +7,19 @@ edition = "2024"
 anyhow = { version = "1.0.104", features = ["backtrace"] }
 bytes = "1.12.1"
 futures = "0.3.34"
-minicbor = { version = "2.3.0", features = ["std"] }
+minicbor = { version = "2.3.0", features = ["derive", "std"] }
+paste = "1.0.15"
+pin-project = "1.1.13"
 quinn = { version = "0.11.11", features = ["futures-io"] }
 rand = "0.10.2"
 test-log = { version = "0.2.21", default-features = false, features = ["color", "trace"] }
+thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["rt", "test-util"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
 anyhow = "1.0.104"
-dens = { path = "../dens" }
+dens = { path = "../dens", features = ["deterministic-getrandom"] }
+hegeltest = "0.39.4"
 rcgen = "0.14.10"
+scoped-tls = "1.0.1"

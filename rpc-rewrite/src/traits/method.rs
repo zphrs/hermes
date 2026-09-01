@@ -4,6 +4,8 @@ pub mod has_descendants;
 
 pub use descendant::Descendant;
 
+use crate::traits::markers::NotApplicable;
+
 pub mod handler;
 
 pub trait Method {
@@ -20,14 +22,18 @@ pub trait Method {
 pub type ReqOf<'buf, M> = <M as Method>::Req<'buf>;
 pub type ResOf<'buf, M> = <M as Method>::Res<'buf>;
 
-pub trait Loopback: Method<Transitions = can_transition::True> {}
-pub trait Transitions: Method<Transitions = can_transition::False> {}
+pub trait Loopback: Method<Transitions = super::markers::False> {}
+pub trait Transitions: Method<Transitions = super::markers::True> {}
 
-impl<T: Method<Transitions = can_transition::True> + ?Sized> Loopback for T {}
-impl<T: Method<Transitions = can_transition::False> + ?Sized> Transitions for T {}
+impl<T: Method<Transitions = super::markers::False> + ?Sized> Loopback for T {}
+impl<T: Method<Transitions = super::markers::True> + ?Sized> Transitions for T {}
 
-pub trait Branch: Method<HasDescendants = has_descendants::True> {}
-pub trait Leaf: Method<HasDescendants = has_descendants::False> {}
+pub trait Branch: Method<HasDescendants = super::markers::True> {}
+pub trait Leaf: Method<HasDescendants = super::markers::False> {}
 
-impl<T: Method<HasDescendants = has_descendants::True> + ?Sized> Branch for T {}
-impl<T: Method<HasDescendants = has_descendants::False> + ?Sized> Leaf for T {}
+impl<T: Method<HasDescendants = super::markers::True> + ?Sized> Branch for T {}
+impl<T: Method<HasDescendants = super::markers::False> + ?Sized> Leaf for T {}
+
+pub trait Notification: for<'a> Method<Res<'a> = NotApplicable> {}
+
+impl<T: for<'a> Method<Res<'a> = NotApplicable> + ?Sized> Notification for T {}

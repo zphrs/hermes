@@ -1,5 +1,4 @@
-pub struct True;
-pub struct False;
+use crate::traits::markers::{False, True};
 
 pub(super) trait Sealed {}
 

@@ -1,30 +1,30 @@
 use std::{convert::Infallible, marker::PhantomData, pin::pin};
 
-use futures::{AsyncWriteExt, io::AsyncWrite};
+use futures::io::AsyncWrite;
 use minicbor::CborLen;
 
-use crate::traits::method;
+use crate::traits::{
+    io::BytesWriteStream,
+    method::{self, ResOf},
+};
 
-pub struct Replier<'buffer, M: method::Branch, SendStream: AsyncWrite> {
+pub struct Replier<M: method::Branch, SendStream: BytesWriteStream> {
     stream: SendStream,
-    buffer: &'buffer mut Vec<u8>,
     _marker: PhantomData<M>,
 }
 
-impl<'buf, M: method::Branch, SendStream: AsyncWrite> Replier<'buf, M, SendStream> {
-    pub fn new_with_buffer(stream: SendStream, buffer: &'buf mut Vec<u8>) -> Self {
+impl<'buf, M: method::Branch, SendStream: BytesWriteStream> Replier<M, SendStream> {
+    pub fn new(stream: SendStream) -> Self {
         Self {
             stream,
-            buffer,
             _marker: PhantomData,
         }
     }
 
-    pub fn map<Descendant: method::Branch>(self) -> Replier<'buf, Descendant, SendStream> {
-        let Self { stream, buffer, .. } = self;
+    pub fn map<Descendant: method::Branch>(self) -> Replier<Descendant, SendStream> {
+        let Self { stream, .. } = self;
         Replier {
             stream,
-            buffer,
             _marker: PhantomData,
         }
     }
@@ -47,11 +47,9 @@ impl<Res> Receipt<Res> {
     }
 }
 
-impl<'a, M: method::Branch, SendStream: AsyncWrite> super::Replier<M>
-    for Replier<'a, M, SendStream>
-{
-    type Receipt<'buf, Res> = Receipt<Res>;
-    type Error = std::io::Error;
+impl<M: method::Branch, SendStream: BytesWriteStream> super::Replier<M> for Replier<M, SendStream> {
+    type Receipt<Res> = Receipt<Res>;
+    type Error = SendStream::Error;
 
     async fn reply_with_branch<
         'buf,
@@ -59,33 +57,32 @@ impl<'a, M: method::Branch, SendStream: AsyncWrite> super::Replier<M>
         DescendantHandler: method::handler::BranchHandler<Descendant>,
     >(
         self,
-        request: Descendant::Req<'buf>,
+        request: method::ReqOf<'buf, Descendant>,
         handler: &mut DescendantHandler,
-    ) -> Result<Self::Receipt<'buf, <M>::Res<'buf>>, Self::Error> {
-        let mapped_replier = self.map();
-        let res = handler.handle(request, mapped_replier).await?;
+    ) -> Result<Self::Receipt<method::ResOf<'buf, M>>, Self::Error> {
+        let mapped_replier: Replier<Descendant, SendStream> = self.map();
+        let res: Receipt<_> = handler.handle(request, mapped_replier).await?;
         Ok(res.map(Descendant::res_to_parent))
     }
 
     async fn reply_with_leaf<
         'buf,
-        Descendant: method::Leaf + method::Descendant<M>,
+        Descendant: method::Leaf + method::Descendant<M> + method::Loopback,
         DescendantHandler: method::handler::LeafHandler<Descendant>,
     >(
         mut self,
-        request: Descendant::Req<'buf>,
+        request: method::ReqOf<'buf, Descendant>,
         handler: &mut DescendantHandler,
-    ) -> Result<Self::Receipt<'buf, <M>::Res<'buf>>, Self::Error>
+    ) -> Result<Self::Receipt<ResOf<'buf, M>>, Self::Error>
     where
-        Descendant::Res<'buf>: minicbor::Encode<()> + minicbor::CborLen<()>,
+        ResOf<'buf, Descendant>: minicbor::Encode<()> + minicbor::CborLen<()>,
     {
         let res = handler.handle(request).await;
-        self.buffer.clear();
-        let len = res.cbor_len(&mut ());
-        self.buffer.reserve(len);
 
-        minicbor::encode(&res, &mut self.buffer).unwrap();
-        pin!(self.stream).write_all(self.buffer).await?;
+        let mut buffer = Vec::with_capacity(res.cbor_len(&mut ()));
+
+        minicbor::encode(&res, &mut buffer).unwrap();
+        self.stream.try_put(buffer.into()).await?;
         Ok(Receipt(Descendant::res_to_parent(res)))
     }
 }

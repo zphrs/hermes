@@ -7,63 +7,61 @@ pub enum Error<Replier, Handler> {
 
 pub mod replier;
 
-pub trait BranchHandler<M: method::Branch = Self> {
-    fn handle<'a, Replier: replier::Replier<M>>(
-        &mut self,
-        request: ReqOf<'a, M>,
-        replier: Replier,
-    ) -> impl Future<Output = Result<Replier::Receipt<'a, ResOf<'a, M>>, Replier::Error>>;
+pub use replier::Replier;
+mod bh {
+    use crate::traits::{
+        Replier,
+        method::{self, Loopback, ReqOf, ResOf},
+    };
+
+    pub trait BranchHandler<M: method::Branch = Self> {
+        fn handle<'a, R: Replier<M>>(
+            &mut self,
+            request: ReqOf<'a, M>,
+            replier: R,
+        ) -> impl Future<Output = Result<R::Receipt<ResOf<'a, M>>, R::Error>>;
+    }
 }
-pub trait LeafHandler<M: method::Leaf = Self> {
+
+pub use bh::BranchHandler;
+
+pub trait LeafHandler<M: method::Leaf + method::Loopback = Self> {
     fn handle<'a>(&mut self, request: ReqOf<'a, M>) -> impl Future<Output = ResOf<'a, M>>;
 }
 
-pub mod root_method {
-    use std::marker::PhantomData;
-
-    use crate::traits::method::{
-        self, Descendant, Method, ReqOf, ResOf,
-        handler::{BranchHandler, LeafHandler, replier},
-        has_descendants,
+pub mod transition {
+    use crate::traits::{
+        method::{self, ReqOf, ResOf},
+        replier::{Replier, transition},
+        state::WrapperCredit,
     };
 
-    pub struct RootMethod<M: method::Method>(PhantomData<M>);
+    pub type HandleTransitionResult<'a, NextHandler, TR, M> =
+        Result<(<TR as Replier<M>>::Receipt<ResOf<'a, M>>, NextHandler), <TR as Replier<M>>::Error>;
 
-    impl<M: method::Method> Method for RootMethod<M> {
-        type Req<'buf> = ReqOf<'buf, M>;
+    pub trait BranchHandler<M: method::Branch + method::Transitions = Self> {
+        type NextHandler;
 
-        type Res<'buf> = ResOf<'buf, M>;
-
-        type Transitions = M::Transitions;
-
-        type HasDescendants = has_descendants::True;
+        fn handle_transition<'a, TR: transition::Replier<M>>(
+            self,
+            request: ReqOf<'a, M>,
+            replier: TR,
+        ) -> impl Future<Output = HandleTransitionResult<'a, Self::NextHandler, TR, M>>;
     }
 
-    impl<M: method::Method> Descendant<RootMethod<M>> for M {
-        fn req_from_parent<'buf>(req: ReqOf<'buf, RootMethod<M>>) -> ReqOf<'buf, Self> {
-            req
-        }
+    pub trait LeafHandler<M: method::Leaf + method::Transitions = Self> {
+        type NextHandler;
 
-        fn res_to_parent<'buf>(res: ResOf<'buf, RootMethod<M>>) -> ResOf<'buf, Self> {
-            res
-        }
-    }
-
-    pub struct RootHandler<Handler>(pub Handler);
-
-    impl<M: method::Leaf, Handler: LeafHandler<M>> BranchHandler<RootMethod<M>> for RootHandler<Handler>
-    where
-        for<'a> ResOf<'a, M>: minicbor::CborLen<()> + minicbor::Encode<()>,
-    {
-        async fn handle<'a, Replier: replier::Replier<RootMethod<M>>>(
+        fn handle_transition<'a>(
             &mut self,
-            request: ReqOf<'a, RootMethod<M>>,
-            replier: Replier,
-        ) -> Result<Replier::Receipt<'a, ResOf<'a, RootMethod<M>>>, Replier::Error> {
-            replier.reply_with_leaf(request, &mut self.0).await
-        }
+            request: ReqOf<'a, M>,
+            wrapper_credit: WrapperCredit<M>,
+        ) -> impl Future<Output = (ResOf<'a, M>, Self::NextHandler)>;
     }
 }
+pub use transition::BranchHandler as TransitionBranchHandler;
+pub use transition::LeafHandler as TransitionLeafHandler;
+pub mod root_method;
 
 #[cfg(test)]
 mod tests;

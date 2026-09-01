@@ -1,4 +1,3 @@
-
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -28,8 +27,8 @@ impl AsyncUdpSocket for EndToEndSocket {
         self.sock
             .lock()
             .unwrap()
-            .try_send_to(transmit.contents, transmit.destination)
-            .map(|_| ())
+            .try_send_to(transmit.contents, transmit.destination)?;
+        Ok(())
     }
 
     fn poll_recv(

@@ -339,8 +339,8 @@ impl Sim {
 
         while !Sim::tick()? {
             tick_count += 1;
-            tracing::debug!(tick_count);
-            if tick_count % 100 == 0 {
+            tracing::trace!(tick_count);
+            if tick_count % 50 == 0 {
                 let elapsed = last_log_time.elapsed();
                 let iter = f();
                 let total_count = iter.len();
