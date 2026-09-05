@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use crate::{
     cursor::transition::SharedCredit,
     traits::{
-        self, BranchHandler,
+        self,
         markers::{Client, NotApplicable, Server},
         role, state,
     },

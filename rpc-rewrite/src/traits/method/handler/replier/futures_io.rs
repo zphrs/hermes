@@ -1,6 +1,5 @@
-use std::{convert::Infallible, marker::PhantomData, pin::pin};
+use std::{convert::Infallible, marker::PhantomData};
 
-use futures::io::AsyncWrite;
 use minicbor::CborLen;
 
 use crate::traits::{
@@ -13,7 +12,7 @@ pub struct Replier<M: method::Branch, SendStream: BytesWriteStream> {
     _marker: PhantomData<M>,
 }
 
-impl<'buf, M: method::Branch, SendStream: BytesWriteStream> Replier<M, SendStream> {
+impl<M: method::Branch, SendStream: BytesWriteStream> Replier<M, SendStream> {
     pub fn new(stream: SendStream) -> Self {
         Self {
             stream,

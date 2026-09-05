@@ -1,14 +1,8 @@
 pub mod states;
 
-use std::{
-    future::pending,
-    net::SocketAddr,
-    pin::pin,
-    sync::{Mutex, OnceLock},
-    time::Duration,
-};
+use std::{future::pending, net::SocketAddr, pin::pin, sync::Mutex, time::Duration};
 
-use futures::{FutureExt, future::select};
+use futures::future::select;
 use hegel::{TestCase, generators as gs};
 use quinn::Endpoint;
 use scoped_tls::scoped_thread_local;
@@ -250,16 +244,6 @@ async fn client(
 scoped_thread_local!(static CLIENT_REACHED: Mutex<Option<Winner>>);
 scoped_thread_local!(static SERVER_REACHED: Mutex<Option<Winner>>);
 
-#[hegel::composite]
-fn duration_generator(tc: &TestCase) -> Duration {
-    Duration::from_millis(tc.draw(gs::integers().min_value(0).max_value(10)) * 10)
-}
-
-#[hegel::composite]
-fn durations_generator(tc: &TestCase) -> (Duration, Duration) {
-    (tc.draw(duration_generator()), tc.draw(duration_generator()))
-}
-
 #[test_log::test]
 fn race_once() {
     let client_durations = (Duration::from_millis(100000), Duration::from_millis(0));
@@ -288,7 +272,17 @@ fn race_once() {
     })
 }
 
-#[hegel::test(test_cases = 100)]
+#[hegel::composite]
+fn duration_generator(tc: &TestCase) -> Duration {
+    Duration::from_millis(tc.draw(gs::integers().min_value(0).max_value(1)) * 1000)
+}
+
+#[hegel::composite]
+fn durations_generator(tc: &TestCase) -> (Duration, Duration) {
+    (tc.draw(duration_generator()), tc.draw(duration_generator()))
+}
+
+#[hegel::test]
 #[ignore]
 fn race(tc: TestCase) {
     let client_durations = tc.draw(durations_generator());

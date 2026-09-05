@@ -29,8 +29,16 @@ pub trait Replier<M: method::Branch> {
 
 pub mod transition {
     use crate::traits::method::{self, ReqOf, ResOf};
+    pub type ReplyResult<'req, Replier, M, DescendantHandler, Descendant> = Result<
+        (
+            <Replier as super::Replier<M>>::Receipt<ResOf<'req, M>>,
+            <DescendantHandler as method::handler::transition::LeafHandler<Descendant>>::NextHandler,
+        ),
+        <Replier as super::Replier<M>>::Error,
+    >;
 
     pub trait Replier<M: method::Branch + method::Transitions>: super::Replier<M> {
+        #[allow(clippy::type_complexity)]
         fn reply_with_leaf<
             'req,
             Descendant: method::Leaf + method::Descendant<M> + method::Transitions,

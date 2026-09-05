@@ -184,7 +184,6 @@ pub enum Won<PRes, RRes, NextHandler> {
 pub struct SharedCredit<State, Role, C> {
     _marker: PhantomData<(State, Role)>,
     connection: C,
-    in_tiebreak: bool,
 }
 
 impl<State, Role, C> SharedCredit<State, Role, C> {
@@ -251,7 +250,6 @@ inline_fn!(definite_tiebreak, processor, recv_fut, {
                     Won::Processor { res, next_handler },
                     SharedCredit {
                         connection,
-                        in_tiebreak: true,
                         _marker: PhantomData,
                     },
                 ))
@@ -269,7 +267,6 @@ inline_fn!(definite_tiebreak, processor, recv_fut, {
                     Won::Requester { res: res.reply },
                     SharedCredit {
                         connection,
-                        in_tiebreak: true,
                         _marker: PhantomData,
                     },
                 ))
@@ -298,12 +295,28 @@ where
     }
 }
 
+pub type RequesterTransitionResult<
+    'rbuf,
+    State,
+    Role,
+    C,
+    PRes,
+    RequesterMethod,
+    NextHandler,
+    ProcessorError,
+> = Result<
+    (
+        Won<PRes, ResOf<'rbuf, RequesterMethod>, NextHandler>,
+        SharedCredit<State, Role, C>,
+    ),
+    NextError<C, ProcessorError>,
+>;
+
 #[instrument(skip_all)]
 #[expect(private_bounds, reason = "role")]
 pub async fn next_with_requester_transition<
     'pbuf,
     'rbuf,
-    'rreq,
     Role: role::Sealed,
     State,
     C: traits::Connection,
@@ -323,12 +336,15 @@ pub async fn next_with_requester_transition<
         RequesterMethod,
     >,
     processor: ProcessorFut<Fut>,
-) -> Result<
-    (
-        Won<PRes, ResOf<'rbuf, RequesterMethod>, NextHandler>,
-        SharedCredit<State, Role, C>,
-    ),
-    NextError<C, ProcessorError>,
+) -> RequesterTransitionResult<
+    'rbuf,
+    State,
+    Role,
+    C,
+    PRes,
+    RequesterMethod,
+    NextHandler,
+    ProcessorError,
 >
 where
     for<'a> ResOf<'a, RequesterMethod>: minicbor::Decode<'a, ()>,
@@ -377,7 +393,6 @@ where
                 Won::Requester { res: reply },
                 SharedCredit {
                     _marker: PhantomData,
-                    in_tiebreak,
                     connection,
                 },
             ))
@@ -391,6 +406,23 @@ where
         }
     }
 }
+
+pub type WithProcessorTransitionResult<
+    'rbuf,
+    State,
+    Role,
+    C,
+    PRes,
+    NextHandler,
+    RequesterMethod,
+    RequesterError,
+> = Result<
+    (
+        Won<PRes, ResOf<'rbuf, RequesterMethod>, NextHandler>,
+        SharedCredit<State, Role, C>,
+    ),
+    NextError<C, RequesterError>,
+>;
 
 #[instrument(skip_all)]
 #[expect(private_bounds, reason = "role")]
@@ -421,12 +453,15 @@ pub async fn next_with_processor_transition<
             RequesterError,
         >,
     >,
-) -> Result<
-    (
-        Won<PRes, ResOf<'rbuf, RequesterMethod>, NextHandler>,
-        SharedCredit<State, Role, C>,
-    ),
-    NextError<C, RequesterError>,
+) -> WithProcessorTransitionResult<
+    'rbuf,
+    State,
+    Role,
+    C,
+    PRes,
+    NextHandler,
+    RequesterMethod,
+    RequesterError,
 >
 where
     ResOf<'rbuf, RequesterMethod>: minicbor::Decode<'rbuf, ()>,
@@ -459,7 +494,6 @@ where
                 Won::Processor { res, next_handler },
                 SharedCredit {
                     connection,
-                    in_tiebreak: false,
                     _marker: PhantomData,
                 },
             ))

@@ -1,6 +1,6 @@
 use bytes::Bytes;
 
-use crate::traits::io::{BytesReadStream, BytesWriteStream, Stopped};
+use crate::traits::io::{BytesReadStream, BytesWriteStream};
 
 /// will return if maxlen is hit or if the end of the stream is reached.
 pub(crate) async fn read_to_end<B: BytesReadStream>(

@@ -11,7 +11,7 @@ pub use replier::Replier;
 mod bh {
     use crate::traits::{
         Replier,
-        method::{self, Loopback, ReqOf, ResOf},
+        method::{self, ReqOf, ResOf},
     };
 
     pub trait BranchHandler<M: method::Branch = Self> {

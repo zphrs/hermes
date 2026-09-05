@@ -13,7 +13,7 @@ pub use buffers::Buffers;
 use futures::FutureExt;
 use std::{
     convert::Infallible,
-    future::{Pending, Ready, pending, ready},
+    future::{Pending, pending},
     marker::PhantomData,
 };
 

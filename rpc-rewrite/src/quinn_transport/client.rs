@@ -1,5 +1,5 @@
 use super::skip_server_verification::SkipServerVerification;
-use quinn::{ClientConfig, TransportConfig, VarInt, crypto::rustls::QuicClientConfig, rustls};
+use quinn::{ClientConfig, TransportConfig, crypto::rustls::QuicClientConfig, rustls};
 use std::sync::Arc;
 
 /// Builds default quinn client config and trusts given certificates.

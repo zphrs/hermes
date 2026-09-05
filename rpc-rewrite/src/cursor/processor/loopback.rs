@@ -84,19 +84,17 @@ impl<
 
     pub fn handle_loopback_requests<'buffer>(
         self,
-    ) -> super::ProcessorFut<
-        impl Future<
-            Output = HandleLoopbackError<
-                C,
-                <replier::futures_io::Replier<RootMethod, C::SendStream> as traits::Replier<
-                    RootMethod,
-                >>::Error,
-            >,
-        >,
-    >
+    ) -> super::ProcessorFut<impl Future<Output = HandleLoopbackRequestsError<C, RootMethod>>>
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
     {
         super::ProcessorFut(Box::pin(self.handle_loopback_requests_inner()))
     }
 }
+
+pub type HandleLoopbackRequestsError<C, RootMethod> = HandleLoopbackError<
+    C,
+    <replier::futures_io::Replier<RootMethod, <C as traits::Connection>::SendStream> as traits::Replier<
+        RootMethod,
+    >>::Error,
+>;

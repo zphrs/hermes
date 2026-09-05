@@ -7,7 +7,7 @@ use crate::{
     io::{read_to_end, write_all},
     traits::{
         Connection, Method,
-        io::{BytesReadStream, BytesWriteStream, Stopped},
+        io::{BytesReadStream, BytesWriteStream},
         method::{Notification, ReqOf},
     },
 };

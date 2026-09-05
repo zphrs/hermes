@@ -19,7 +19,7 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 anyhow = "1.0.104"
-dens = { path = "../dens", features = ["deterministic-getrandom"] }
+dens = { path = "../dens" }
 hegeltest = "0.39.4"
 rcgen = "0.14.10"
 scoped-tls = "1.0.1"
