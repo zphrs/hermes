@@ -1,10 +1,30 @@
 # Hermes
 
-A peer-to-peer delay-tolerant network (DTN).
+A peer-to-peer delay-tolerant network (DTN) overlaid on top of IP.
+
+It strives to allow applications that can continue to work at least a century
+into the future. We base our design on technology that has lived for the past 
+half-century in order to inform what might still be in use a century later. 
+Namely, cryptographic primitives like signatures and encryption, the internet
+protocol (both IPv4 and IPv6), UDP, and distributed hash tables. While we strive
+to only assume aspects of the environment that have survived for the past 
+half-century, 
 
 Essentially it defines a set of protocols to enable devices to send messages to
 one another, even if two communicating devices are never online at the same time
 and even if both are behind firewalls and network address translators (NATs).
+
+This project defines protocols via a reference rust implementation and strongly
+typed RPC call structures. Eventually it might be codified into a proper
+specification but ultimately that effort will only be worthwhile to start once
+the reference implementation is stable.
+
+This project defines protocols because protocols are typically designed to work
+between any machines adhering to the protocol, are written in any language, make
+minimal external assumptions about the environment, and allow for both forward
+and backward compatibility. This matters because the goal is to design an
+overlay network that can facilitate message delivery regardless of which
+machines are following the protocol.
 
 ## Structure
 

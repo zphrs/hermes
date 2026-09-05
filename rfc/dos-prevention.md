@@ -152,8 +152,6 @@ proof-of-storage technique addresses the disincentive of replication, there's
 still no incentive to actively replicate to other nodes, rather now there's
 simply no disincentive to do so.
 
-<!-- CONTINUE PROOF READING FROM HERE -->
-
 To actively incentivize replication, each replicator will wrap the message body
 in another layer of encryption so that any node who got the message from them,
 directly or indirectly, must give them credit when finally delivering the
