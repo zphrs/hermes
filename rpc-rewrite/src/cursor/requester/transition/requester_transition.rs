@@ -21,20 +21,12 @@ pub struct Sent<'buf, RootRequest, Recv: BytesReadStream, M> {
     _marker: PhantomData<M>,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum RecvError<Recv: BytesReadStream> {
-    #[error("decode: {0}")]
-    Decode(#[from] minicbor::decode::Error),
-    #[error("read: {0}")]
-    Read(Recv::Error),
-}
-
-impl<'buf, State, Role, C: Connection, RootRequest, Recv: BytesReadStream, M: Method>
-    RequesterTransition<State, Role, C, Sent<'buf, RootRequest, Recv, M>>
+impl<'buf, State, Role, C: Connection, RootRequest, M: Method>
+    RequesterTransition<State, Role, C, Sent<'buf, RootRequest, C::RecvStream, M>>
 {
     pub(crate) fn new_sent(
         connection: C,
-        recv: Recv,
+        recv: C::RecvStream,
         root_request: RootRequest,
         buf: &'buf mut Vec<u8>,
     ) -> Self {
@@ -53,23 +45,21 @@ impl<'buf, State, Role, C: Connection, RootRequest, Recv: BytesReadStream, M: Me
         &self.2.root_request
     }
 
-    pub(crate) async fn recv(
+    pub(crate) async fn receive(
         self,
     ) -> Result<
         (
             TransitionReply<ResOf<'buf, M>>,
             RequesterTransition<State, Role, C, Finished>,
         ),
-        RecvError<Recv>,
+        crate::io::read::Error<C::RecvStream>,
     >
     where
         ResOf<'buf, M>: minicbor::Decode<'buf, ()>,
     {
-        crate::io::read_to_end(self.2.recv, self.2.buf, usize::MAX)
-            .await
-            .map_err(RecvError::Read)?;
+        let res: TransitionReply<ResOf<'buf, M>> =
+            crate::io::read::read(self.2.buf, self.2.recv).await?;
         // recv dropped here
-        let res: TransitionReply<ResOf<'_, M>> = minicbor::decode(self.2.buf)?;
         Ok((res, RequesterTransition(self.0, self.1, Finished(()))))
     }
 }
@@ -77,7 +67,7 @@ impl<'buf, State, Role, C: Connection, RootRequest, Recv: BytesReadStream, M: Me
 pub struct Finished(());
 
 impl<State, Role, C: Connection> RequesterTransition<State, Role, C, Finished> {
-    pub fn into_conn(self) -> C {
+    pub(crate) fn into_conn(self) -> C {
         self.1
     }
 }

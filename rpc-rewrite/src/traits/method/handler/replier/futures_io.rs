@@ -1,7 +1,5 @@
 use std::{convert::Infallible, marker::PhantomData};
 
-use minicbor::CborLen;
-
 use crate::traits::{
     io::BytesWriteStream,
     method::{self, ResOf},
@@ -48,7 +46,7 @@ impl<Res> Receipt<Res> {
 
 impl<M: method::Branch, SendStream: BytesWriteStream> super::Replier<M> for Replier<M, SendStream> {
     type Receipt<Res> = Receipt<Res>;
-    type Error = SendStream::Error;
+    type Error = crate::io::write::Error<SendStream>;
 
     async fn reply_with_branch<
         'buf,
@@ -69,7 +67,7 @@ impl<M: method::Branch, SendStream: BytesWriteStream> super::Replier<M> for Repl
         Descendant: method::Leaf + method::Descendant<M> + method::Loopback,
         DescendantHandler: method::handler::LeafHandler<Descendant>,
     >(
-        mut self,
+        self,
         request: method::ReqOf<'buf, Descendant>,
         handler: &mut DescendantHandler,
     ) -> Result<Self::Receipt<ResOf<'buf, M>>, Self::Error>
@@ -78,10 +76,8 @@ impl<M: method::Branch, SendStream: BytesWriteStream> super::Replier<M> for Repl
     {
         let res = handler.handle(request).await;
 
-        let mut buffer = Vec::with_capacity(res.cbor_len(&mut ()));
+        crate::io::write::write(&res, self.stream).await?;
 
-        minicbor::encode(&res, &mut buffer).unwrap();
-        self.stream.try_put(buffer.into()).await?;
         Ok(Receipt(Descendant::res_to_parent(res)))
     }
 }

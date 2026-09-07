@@ -1,14 +1,11 @@
-use std::{convert::Infallible, future::ready, net::SocketAddr};
+use std::{convert::Infallible, future::ready, net::SocketAddr, pin::pin};
 
 use anyhow::{Context, anyhow};
 
 use crate::{
     cursor::{
         Cursor,
-        transition::{
-            RequesterOrRequesterTransition, Won, next_with_processor_transition,
-            next_with_requester_transition,
-        },
+        transition::{RequesterOrRequesterTransition, Won, next},
     },
     traits::{
         handler::root_method::RootHandler,
@@ -28,7 +25,7 @@ async fn server(endpoint: quinn::Endpoint) -> anyhow::Result<()> {
     // we expect an error out here
     let processor_transition = processor.handle_transition_request(&mut buf).await?;
     let requester = RequesterOrRequesterTransition::from(requester);
-    let (won, cursor_credit) = next_with_processor_transition(
+    let (won, cursor_credit) = next::with_processor_transition(
         processor_transition,
         ready(Result::<_, Infallible>::Ok(requester)),
     )
@@ -55,7 +52,7 @@ async fn client(endpoint: quinn::Endpoint, server_addr: SocketAddr) -> anyhow::R
         .request_transition::<a::Method>((), &mut read_buf)
         .await?;
     let (won, cursor_credit) =
-        next_with_requester_transition(requester_transition, processor.into())
+        next::with_requester_transition(requester_transition, pin!(processor.into()))
             .await
             .with_context(|| anyhow!("client"))?;
 

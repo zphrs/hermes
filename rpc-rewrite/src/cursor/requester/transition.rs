@@ -53,7 +53,7 @@ impl<State, Role, RootMethod: crate::traits::Method, C: traits::io::Connection>
         read_into.reserve(minicbor::len(&root_request));
         let mut buf = Vec::with_capacity(minicbor::len(&root_request));
         minicbor::encode::<&ReqOf<RootMethod>, _>(&root_request, &mut buf)?;
-        crate::io::write_all(send, buf.into(), false)
+        crate::io::write_bytes(send, buf.into(), false)
             .await
             .map_err(RequestTransitionError::Write)?;
         // send dropped here

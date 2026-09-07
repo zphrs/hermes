@@ -8,7 +8,7 @@ use crate::traits::{
     method::{self, Descendant, ReqOf, ResOf},
 };
 
-use super::utilities::{read_to_end, write_all};
+use super::utilities::{read_into_buf, write_bytes};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error<C: Connection> {
@@ -41,12 +41,12 @@ where
     {
         let mut buf = Vec::with_capacity(minicbor::len(&root_method));
         minicbor::encode::<&ReqOf<'request, RootMethod>, _>(&root_method, &mut buf)?;
-        write_all(send, buf.into(), false)
+        write_bytes(send, buf.into(), false)
             .await
             .map_err(Error::Write)?;
     }
 
-    read_to_end(recv, buf, usize::MAX)
+    read_into_buf(recv, buf, usize::MAX)
         .await
         .map_err(Error::Read)?;
     // recv dropped here

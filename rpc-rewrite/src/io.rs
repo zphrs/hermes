@@ -1,8 +1,8 @@
 pub(crate) mod notify;
+pub(crate) mod read;
 pub mod request;
-pub mod respond;
 pub(crate) mod utilities;
+pub(crate) mod write;
 
 pub(crate) use request::request;
-pub(crate) use respond::respond;
-pub(crate) use utilities::{read_to_end, write_all};
+pub(crate) use utilities::{read_into_buf, write_bytes};

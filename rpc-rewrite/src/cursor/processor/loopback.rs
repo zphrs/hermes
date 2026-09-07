@@ -2,28 +2,15 @@
 
 use super::Processor;
 
-use crate::traits::{
-    self, Receipt as _, handler,
-    io::BytesReadStream,
-    method::{self, ReqOf, ResOf},
-    replier,
+use crate::{
+    io::read::read,
+    traits::{
+        self, Receipt as _, handler,
+        method::{self, ReqOf, ResOf},
+        replier,
+    },
 };
 use std::convert::Infallible;
-
-#[derive(Debug, thiserror::Error)]
-pub enum HandleLoopbackError<C: traits::Connection, Replier> {
-    #[error("accept: {0}")]
-    Accept(C::AcceptError),
-    #[error("io: {0}")]
-    Respond(#[from] crate::io::respond::Error<Replier, <C::RecvStream as BytesReadStream>::Error>),
-}
-
-impl<C: traits::Connection, Replier> From<Infallible> for HandleLoopbackError<C, Replier> {
-    fn from(value: Infallible) -> Self {
-        // we match to prove that `value` cannot be constructed
-        match value {}
-    }
-}
 
 impl<
     State,
@@ -38,11 +25,12 @@ impl<
         write: &'buf mut Vec<u8>,
     ) -> Result<
         ResOf<'buf, RootMethod>,
-        HandleLoopbackError<
+        super::Error<
             C,
             <replier::futures_io::Replier<RootMethod, C::SendStream> as traits::Replier<
                 RootMethod,
             >>::Error,
+            Infallible,
         >,
     >
     where
@@ -52,25 +40,27 @@ impl<
             .connection
             .accept_stream()
             .await
-            .map_err(HandleLoopbackError::Accept)?;
+            .map_err(super::Error::Accept)?;
 
         let (send, recv) = stream;
 
         let replier = replier::futures_io::Replier::new(send);
-        let receipt: replier::futures_io::Receipt<_> =
-            crate::io::respond(write, recv, replier, &mut self.handler).await?;
+        let handler: &mut Handler = &mut self.handler;
 
-        Ok(receipt.finalize().await?)
+        write.clear();
+        let request: ReqOf<RootMethod> = read(write, recv).await?;
+        let receipt = handler
+            .handle::<_>(request, replier)
+            .await
+            .map_err(super::Error::Replier)?;
+
+        match receipt.finalize().await {
+            Ok(res) => Ok(res),
+            Err(e) => match e {},
+        }
     }
 
-    async fn handle_loopback_requests_inner<'buffer>(
-        mut self,
-    ) -> HandleLoopbackError<
-        C,
-        <replier::futures_io::Replier<RootMethod, C::SendStream> as traits::Replier<
-            RootMethod,
-        >>::Error,
-    >
+    async fn handle_loopback_requests_inner<'buffer>(mut self) -> HandleLoopbackError<C, RootMethod>
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
     {
@@ -84,17 +74,18 @@ impl<
 
     pub fn handle_loopback_requests<'buffer>(
         self,
-    ) -> super::ProcessorFut<impl Future<Output = HandleLoopbackRequestsError<C, RootMethod>>>
+    ) -> super::ProcessorFut<impl Future<Output = HandleLoopbackError<C, RootMethod>>>
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
     {
-        super::ProcessorFut(Box::pin(self.handle_loopback_requests_inner()))
+        super::ProcessorFut::new(self.handle_loopback_requests_inner())
     }
 }
 
-pub type HandleLoopbackRequestsError<C, RootMethod> = HandleLoopbackError<
+pub type HandleLoopbackError<C, RootMethod> = super::Error<
     C,
     <replier::futures_io::Replier<RootMethod, <C as traits::Connection>::SendStream> as traits::Replier<
         RootMethod,
     >>::Error,
+    Infallible,
 >;

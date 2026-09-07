@@ -62,6 +62,3 @@ pub mod transition {
 pub use transition::BranchHandler as TransitionBranchHandler;
 pub use transition::LeafHandler as TransitionLeafHandler;
 pub mod root_method;
-
-#[cfg(test)]
-mod tests;

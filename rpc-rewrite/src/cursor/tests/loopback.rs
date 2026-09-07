@@ -53,7 +53,7 @@ async fn server(endpoint: quinn::Endpoint) -> anyhow::Result<()> {
     let cursor = Cursor::<ping::State, markers::Server, _>::new(connection);
     let (processor, _requester) = cursor.into_processor_and_requester(RootHandler(ping::Method));
 
-    // we expect an error out here
+    // we expect an error out here once connection drops
     let _err = processor.handle_loopback_requests().await;
 
     Ok(())

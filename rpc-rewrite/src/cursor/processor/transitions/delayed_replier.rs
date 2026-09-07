@@ -1,7 +1,7 @@
 use std::{convert::Infallible, marker::PhantomData};
 
 use crate::{
-    io::write_all,
+    io::write_bytes,
     traits::{
         self,
         handler::BranchHandler,
@@ -222,7 +222,7 @@ impl<Res, SendStream: BytesWriteStream> traits::Receipt<Res> for Receipt<Res, Se
         if let Some(in_tiebreak) = self.in_tiebreak {
             TransitionReply::<Infallible>::set_in_tiebreak(self.buffer.as_mut_slice(), in_tiebreak);
         }
-        write_all(self.stream, self.buffer.into(), false).await?;
+        write_bytes(self.stream, self.buffer.into(), false).await?;
         Ok(self.res)
     }
 }

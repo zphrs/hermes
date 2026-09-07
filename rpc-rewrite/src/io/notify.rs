@@ -1,87 +1,91 @@
-use std::convert::Infallible;
-
-use bytes::Bytes;
 use minicbor::{CborLen, Decode, Encode};
 
-use crate::{
-    io::{read_to_end, write_all},
-    traits::{
-        Connection, Method,
-        io::{BytesReadStream, BytesWriteStream},
-        method::{Notification, ReqOf},
-    },
+use super::read::{self, read};
+use crate::traits::{
+    Connection,
+    method::{Notification, ReqOf},
 };
 
-#[derive(Debug, thiserror::Error)]
-pub enum SendError<C: Connection> {
-    #[error("encode: {0}")]
-    Encode(#[from] minicbor::encode::Error<Infallible>),
-    #[error("io: {0}")]
-    Write(<C::SendStream as BytesWriteStream>::Error),
-    #[error("open stream: {0}")]
-    Open(C::OpenUniError),
-}
+mod error {
+    use crate::traits::Connection;
 
-#[derive(thiserror::Error)]
-pub enum ReceiveError<C: Connection> {
-    #[error("encode: {0}")]
-    Decode(#[from] minicbor::decode::Error),
-    #[error("io: {0}")]
-    Read(<C::RecvStream as BytesReadStream>::Error),
-    #[error("accept stream: {0}")]
-    Accept(C::AcceptUniError),
-}
+    /// notification follows these steps:
+    /// 1. open unidirectional stream
+    /// 2. [`Write`] notification
+    #[derive(thiserror::Error)]
+    pub enum Send<C: Connection> {
+        #[error("stream could not be opened")]
+        Open(#[source] C::OpenUniError),
+        #[error("could not write notification")]
+        Write(#[from] super::super::write::Error<C::SendStream>),
+    }
 
-impl<C: Connection> std::fmt::Debug for ReceiveError<C>
-where
-    C::AcceptUniError: std::fmt::Debug,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Decode(arg0) => f.debug_tuple("Decode").field(arg0).finish(),
-            Self::Read(arg0) => f.debug_tuple("Read").field(arg0).finish(),
-            Self::Accept(arg0) => f.debug_tuple("Accept").field(arg0).finish(),
+    impl<C: Connection> std::fmt::Debug for Send<C>
+    where
+        C::OpenUniError: std::fmt::Debug,
+    {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Open(arg0) => f.debug_tuple("Open").field(arg0).finish(),
+                Self::Write(arg0) => f.debug_tuple("Write").field(arg0).finish(),
+            }
+        }
+    }
+    /// 1. accept unidirectional stream
+    /// 2. [`Read`] notification
+    #[derive(thiserror::Error)]
+    pub enum Receive<C: Connection> {
+        #[error("could not accept stream")]
+        Accept(#[source] C::AcceptUniError),
+        #[error("could not read notification")]
+        Read(#[from] super::read::Error<C::RecvStream>),
+    }
+
+    impl<C: Connection> std::fmt::Debug for Receive<C>
+    where
+        C::AcceptUniError: std::fmt::Debug,
+    {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Accept(arg0) => f.debug_tuple("Accept").field(arg0).finish(),
+                Self::Read(arg0) => f.debug_tuple("Read").field(arg0).finish(),
+            }
         }
     }
 }
+pub use error::Receive as ReceiveError;
+pub use error::Send as SendError;
 
 pub async fn send<'request, RootMethod: Notification, C: Connection>(
     request: ReqOf<'request, RootMethod>,
     connection: &C,
-) -> Result<(), SendError<C>>
+) -> Result<(), error::Send<C>>
 where
     ReqOf<'request, RootMethod>: CborLen<()> + Encode<()>,
 {
     let send = connection
         .open_uni_stream()
         .await
-        .map_err(SendError::Open)?;
+        .map_err(error::Send::Open)?;
 
-    let mut buf = Vec::with_capacity(minicbor::len(&request));
-    minicbor::encode(request, &mut buf)?;
-    write_all(send, Bytes::from(buf), core::cfg!(test))
-        .await
-        .map_err(SendError::Write)?;
+    super::write::write::<RootMethod::Req<'request>, _>(&request, send).await?;
 
     Ok(())
 }
 
-pub async fn receive<'buf, RootMethod: Method, C: Connection>(
+pub async fn receive<'buf, RootMethod: Notification, C: Connection>(
     buf: &'buf mut Vec<u8>,
     conn: &C,
-) -> Result<ReqOf<'buf, RootMethod>, ReceiveError<C>>
+) -> Result<ReqOf<'buf, RootMethod>, error::Receive<C>>
 where
     ReqOf<'buf, RootMethod>: Decode<'buf, ()>,
 {
     let recv = conn
         .accept_uni_stream()
         .await
-        .map_err(ReceiveError::Accept)?;
+        .map_err(error::Receive::Accept)?;
     buf.clear();
-    read_to_end(recv, buf, usize::MAX)
-        .await
-        .map_err(ReceiveError::Read)?;
-    Ok(minicbor::decode(buf)?)
+    Ok(read::<RootMethod::Req<'buf>, _>(buf, recv).await?)
 }
 
 #[cfg(test)]

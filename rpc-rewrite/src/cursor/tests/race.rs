@@ -16,10 +16,7 @@ use crate::{
             harness,
             race::states::entrypoint::{self, ClientRequestWins, ServerRequestWins},
         },
-        transition::{
-            RequesterOrRequesterTransition, next_with_processor_transition,
-            next_with_requester_transition, tiebreak,
-        },
+        transition::{RequesterOrRequesterTransition, next, tiebreak},
     },
     traits::{
         handler::{TransitionLeafHandler, root_method::RootHandler},
@@ -66,7 +63,7 @@ async fn server(
 
     let (processor, requester) = e_cursor.into_processor_and_requester(RootHandler(ServerHandler));
     let mut buf = Vec::new();
-    let mut processor_fut = processor.handle_transition_request(&mut buf);
+    let mut processor_fut = pin!(processor.handle_transition_request(&mut buf));
     let mut read_into = Vec::new();
     let need_requester = tokio::sync::Notify::new();
     let to_requester = oneshot::channel();
@@ -98,7 +95,7 @@ async fn server(
             trace!("processor won");
             let p_transition = processor_transition?;
             need_requester.notify_one();
-            let (winner, credit) = next_with_processor_transition(p_transition, async move {
+            let (winner, credit) = next::with_processor_transition(p_transition, async move {
                 let res = match select(requester_fut, to_requester.1).await {
                     futures::future::Either::Left((requester_transition, _)) => {
                         RequesterOrRequesterTransition::RequesterTransition(requester_transition?)
@@ -116,7 +113,7 @@ async fn server(
         crate::cursor::transition::TiebreakResult::Requester(requester_transition) => {
             trace!("requester won");
             let (winner, credit) =
-                next_with_requester_transition(requester_transition?, processor_fut).await?;
+                next::with_requester_transition(requester_transition?, processor_fut).await?;
 
             (winner, credit)
         }
@@ -171,7 +168,7 @@ async fn client(
 
     let (processor, requester) = e_cursor.into_processor_and_requester(RootHandler(ClientHandler));
     let mut buf = Vec::new();
-    let mut processor_fut = processor.handle_transition_request(&mut buf);
+    let mut processor_fut = pin!(processor.handle_transition_request(&mut buf));
     let mut read_into = Vec::new();
     let need_requester = tokio::sync::Notify::new();
     let to_requester = oneshot::channel();
@@ -203,7 +200,7 @@ async fn client(
             trace!("processor won");
             let p_transition = processor_transition?;
             need_requester.notify_one();
-            let (winner, credit) = next_with_processor_transition(p_transition, async move {
+            let (winner, credit) = next::with_processor_transition(p_transition, async move {
                 let res = match select(requester_fut, to_requester.1).await {
                     futures::future::Either::Left((requester_transition, _)) => {
                         RequesterOrRequesterTransition::RequesterTransition(requester_transition?)
@@ -221,7 +218,7 @@ async fn client(
         crate::cursor::transition::TiebreakResult::Requester(requester_transition) => {
             trace!("requester won");
             let (winner, credit) =
-                next_with_requester_transition(requester_transition?, processor_fut).await?;
+                next::with_requester_transition(requester_transition?, processor_fut).await?;
 
             (winner, credit)
         }
