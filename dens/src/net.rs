@@ -124,7 +124,7 @@ mod tests {
 
     use bytes::BytesMut;
     use tokio::time::sleep;
-    use tracing::{info, trace};
+    use tracing::{Instrument, info, info_span, trace};
 
     use crate::{
         Machine, OsMock, Sim,
@@ -176,6 +176,7 @@ mod tests {
                 match c1_addr {
                     Some(c1_addr_inner) => {
                         let mut buf = BytesMut::new();
+                        trace!("waiting for c2");
                         let Ok((_, addr)) = socket.recv_buf_from(&mut buf).await else {
                             continue;
                         };
@@ -189,10 +190,12 @@ mod tests {
                         c1_addr = None;
                     }
                     None => {
+                        trace!("waiting for c1");
                         let mut buf = BytesMut::new();
                         let Ok((_, addr)) = socket.recv_buf_from(&mut buf).await else {
                             continue;
                         };
+
                         c1_addr = Some(addr);
                     }
                 }
@@ -221,7 +224,7 @@ mod tests {
             })
             .into_ref();
             // need to assign public ip address manually to avoid colliding with
-            // the nat ip addresses in other words, we need an ip that is not an
+            // the nat ip addresses. In other words, we need an ip that is not an
             // internal network ip address
             let (server_addr, _) = server.get().borrow().connect_to_net(net);
             info!("server address: {server_addr}");
@@ -263,50 +266,55 @@ mod tests {
             ));
             let server = create_server();
             let server_addr = Ipv4Addr::from_octets([192, 0, 2, 0]);
-            server.get().borrow().connect_to_net(net);
+            server
+                .get()
+                .borrow()
+                .connect_to_net_with_ipv4(net, server_addr);
             info!("server address: {server_addr}");
             let nat1 = Sim::add_machine(nat::EasyNat::new(net));
             trace!("inited server");
-            let c1 = OsMock::new(move || async move {
-                let socket = holepunch(server_addr).await?;
-                trace!("c1 hole punched");
-                let mut buf = BytesMut::new();
+            let c1 = OsMock::new(move || {
+                async move {
+                    let socket = holepunch(server_addr).await?;
+                    trace!("c1 hole punched");
+                    let mut buf = BytesMut::new();
 
-                socket.send(b"hello client 2").await?;
-                // wait for send from c2
-                sleep(Duration::from_millis(8)).await;
-                socket.try_recv_buf(&mut buf)?;
-                assert_eq!(b"hello client 1", &buf[..]);
-                Ok(())
+                    socket.send(b"hello client 2").await?;
+                    // wait for send from c2
+                    sleep(Duration::from_millis(8)).await;
+                    socket.try_recv_buf(&mut buf)?;
+                    assert_eq!(b"hello client 1", &buf[..]);
+                    Ok(())
+                }
+                .instrument(info_span!("c1"))
             })
             .into_ref();
             c1.get().borrow().connect_to_net(nat1.get().borrow().lan());
 
             let nat2 = Sim::add_machine(nat::EasyNat::new(net));
 
-            let c2 = OsMock::new(move || async move {
-                let socket = holepunch(server_addr).await?;
+            let c2 = OsMock::new(move || {
+                async move {
+                    let socket = holepunch(server_addr).await?;
 
-                // now we're hole punched
-                trace!("c2 hole punched");
+                    // now we're hole punched
+                    trace!("c2 hole punched");
 
-                let mut buf = BytesMut::new();
-                // wait for send from c1
-                sleep(Duration::from_millis(4)).await;
-                socket.try_recv_buf(&mut buf)?;
-                assert_eq!(b"hello client 2", &buf[..]);
-                socket.send(b"hello client 1").await?;
+                    let mut buf = BytesMut::new();
+                    // wait for send from c1
+                    sleep(Duration::from_millis(4)).await;
+                    socket.try_recv_buf(&mut buf)?;
+                    assert_eq!(b"hello client 2", &buf[..]);
+                    socket.send(b"hello client 1").await?;
 
-                Ok(())
+                    Ok(())
+                }
+                .instrument(info_span!("c2"))
             })
             .into_ref();
             c2.get().borrow().connect_to_net(nat2.get().borrow().lan());
-            for _ in 0..300 {
-                Sim::tick().unwrap();
-            }
-            // both clients should hang since both are behind a hard nat
-            assert!(c1.get().borrow().is_idle());
-            assert!(c2.get().borrow().is_idle());
+            let machines = [c1, c2];
+            Sim::run_until_idle(|| machines.iter()).unwrap();
         });
     }
 
@@ -324,7 +332,10 @@ mod tests {
             ));
             let server = create_server();
             let server_addr = Ipv4Addr::from_octets([192, 0, 2, 0]);
-            server.get().borrow().connect_to_net(net);
+            server
+                .get()
+                .borrow()
+                .connect_to_net_with_ipv4(net, server_addr);
             info!("server address: {server_addr}");
             let nat1 = Sim::add_machine(nat::HardNat::new(net));
             trace!("inited server");
@@ -365,9 +376,8 @@ mod tests {
             for _ in 0..500 {
                 Sim::tick().unwrap();
             }
-            // both clients should hang since both are behind a hard nat
-            assert!(c1.get().borrow().is_idle());
-            assert!(c2.get().borrow().is_idle());
+            let machines = [c1, c2];
+            Sim::run_until_idle(|| machines.iter()).unwrap();
         });
     }
 }
