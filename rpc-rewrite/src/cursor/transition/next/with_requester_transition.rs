@@ -24,7 +24,7 @@ use crate::{
         },
     },
     io::notify,
-    traits::{self, Method, method::ResOf, role},
+    traits::{Method, method::ResOf, role},
 };
 
 pub type Result<'rbuf, State, Role, C, PRes, RequesterMethod, NextHandler, ProcessorError> =
@@ -45,7 +45,7 @@ pub async fn with_requester_transition<
     'rbuf,
     Role: role::Sealed,
     State,
-    C: traits::Connection,
+    C: crate::io::Connection,
     PRes,
     NextHandler,
     RequesterRootRequest,

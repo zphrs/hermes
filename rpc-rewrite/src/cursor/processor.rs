@@ -3,10 +3,7 @@ pub mod loopback;
 pub mod processor_fut;
 pub mod transitions;
 
-use crate::traits::{
-    self, Connection,
-    method::{self},
-};
+use crate::{io::Connection, traits::method};
 pub use buffers::Buffers;
 pub use processor_fut::ProcessorFut;
 use std::{fmt::Debug, marker::PhantomData};
@@ -43,13 +40,13 @@ where
     }
 }
 
-pub struct Processor<State, Role, RootMethod: method::Branch, C: traits::Connection, Handler> {
+pub struct Processor<State, Role, RootMethod: method::Branch, C: Connection, Handler> {
     connection: C,
     handler: Handler,
     _marker: PhantomData<(State, Role, RootMethod)>,
 }
 
-impl<State, Role, RootMethod: method::Branch, C: traits::Connection, Handler>
+impl<State, Role, RootMethod: method::Branch, C: Connection, Handler>
     Processor<State, Role, RootMethod, C, Handler>
 {
     pub(crate) fn new(connection: C, handler: Handler) -> Self {

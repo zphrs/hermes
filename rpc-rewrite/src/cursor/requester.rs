@@ -2,25 +2,25 @@ pub mod transition;
 
 use std::{fmt::Debug, marker::PhantomData};
 
-use crate::traits::{
-    self,
-    method::{Descendant, Leaf, Loopback, ReqOf, ResOf},
+use crate::{
+    io::Connection,
+    traits::method::{Descendant, Leaf, Loopback, ReqOf, ResOf},
 };
 
-pub struct Requester<State, Role, RootMethod: crate::traits::Method, C: traits::io::Connection> {
+pub struct Requester<State, Role, RootMethod: crate::traits::Method, C: Connection> {
     connection: C,
     _marker: PhantomData<(State, Role, RootMethod)>,
 }
 
 #[derive(thiserror::Error)]
-pub enum RequestLoopbackError<C: traits::io::Connection> {
+pub enum RequestLoopbackError<C: Connection> {
     #[error("opening: {0}")]
     Open(C::OpenError),
     #[error("request: {0}")]
     Request(#[from] crate::io::request::Error<C>),
 }
 
-impl<C: traits::io::Connection> std::fmt::Debug for RequestLoopbackError<C>
+impl<C: Connection> std::fmt::Debug for RequestLoopbackError<C>
 where
     C::OpenError: Debug,
     crate::io::request::Error<C>: Debug,
@@ -33,7 +33,7 @@ where
     }
 }
 
-impl<State, Role, RootMethod: crate::traits::Method, C: traits::io::Connection>
+impl<State, Role, RootMethod: crate::traits::Method, C: Connection>
     Requester<State, Role, RootMethod, C>
 {
     pub(crate) fn new(connection: C) -> Self {

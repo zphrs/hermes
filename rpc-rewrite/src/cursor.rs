@@ -2,15 +2,15 @@ use std::marker::PhantomData;
 
 use crate::{
     cursor::transition::SharedCredit,
+    io,
     traits::{
-        self,
         markers::{Client, NotApplicable, Server},
         role, state,
     },
 };
 
 #[expect(private_bounds, reason = "for role")]
-pub struct Cursor<State: crate::traits::State, Role: role::Sealed, C: traits::io::Connection> {
+pub struct Cursor<State: crate::traits::State, Role: role::Sealed, C: io::Connection> {
     connection: C,
     _state: state::Wrapper<State>,
     _marker: PhantomData<Role>,
@@ -24,7 +24,7 @@ pub type ServerRequester<State, C> =
 
 pub type ServerPair<State, C, H> = (ServerProcessor<State, C, H>, ServerRequester<State, C>);
 
-impl<State: crate::traits::State, C: traits::Connection + Clone> Cursor<State, Server, C> {
+impl<State: crate::traits::State, C: io::Connection + Clone> Cursor<State, Server, C> {
     pub fn into_processor_and_requester<H>(self, handler: H) -> ServerPair<State, C, H> {
         (
             processor::Processor::new(self.connection.clone(), handler),
@@ -41,7 +41,7 @@ pub type ClientRequester<State, C> =
 
 pub type ClientPair<State, C, H> = (ClientProcessor<State, C, H>, ClientRequester<State, C>);
 
-impl<State: crate::traits::State, C: traits::Connection + Clone> Cursor<State, Client, C> {
+impl<State: crate::traits::State, C: io::Connection + Clone> Cursor<State, Client, C> {
     pub fn into_processor_and_requester<H>(self, handler: H) -> ClientPair<State, C, H> {
         (
             processor::Processor::new(self.connection.clone(), handler),
@@ -51,7 +51,7 @@ impl<State: crate::traits::State, C: traits::Connection + Clone> Cursor<State, C
 }
 
 #[expect(private_bounds, reason = "for role")]
-impl<State: crate::traits::state::Entrypoint, Role: role::Sealed, C: traits::io::Connection>
+impl<State: crate::traits::state::Entrypoint, Role: role::Sealed, C: io::Connection>
     Cursor<State, Role, C>
 {
     pub fn new(connection: C) -> Self {
@@ -66,7 +66,7 @@ impl<State: crate::traits::state::Entrypoint, Role: role::Sealed, C: traits::io:
 // no need for entrypoint bound on struct if the caller has a wrapper because
 // a wrapper can only be created via a transition response
 #[expect(private_bounds, reason = "for role")]
-impl<State: state::State, Role: role::Sealed, C: traits::io::Connection> Cursor<State, Role, C> {
+impl<State: state::State, Role: role::Sealed, C: io::Connection> Cursor<State, Role, C> {
     pub fn from_cursor_credit<OldState>(
         cursor_credit: SharedCredit<OldState, Role, C>,
         new_state: state::Wrapper<State>,
@@ -85,7 +85,7 @@ impl<State: state::State, Role: role::Sealed, C: traits::io::Connection> Cursor<
 impl<
     State: state::State<ClientHandles = NotApplicable, ServerHandles = NotApplicable>,
     Role: role::Sealed,
-    C: traits::io::Connection,
+    C: io::Connection,
 > Cursor<State, Role, C>
 {
     pub async fn wait_to_close(self) -> Result<(), C::CloseError> {

@@ -1,14 +1,13 @@
 use std::marker::PhantomData;
 
-use crate::traits::{self, Receipt, io::BytesWriteStream};
+use crate::{
+    io::{self, BytesWriteStream},
+    traits::Receipt,
+};
 
-pub struct ProcessorTransition<State, Role, C: traits::Connection, T>(
-    PhantomData<(State, Role)>,
-    C,
-    T,
-);
+pub struct ProcessorTransition<State, Role, C: io::Connection, T>(PhantomData<(State, Role)>, C, T);
 
-impl<State, Role, C: traits::Connection, T> ProcessorTransition<State, Role, C, T> {
+impl<State, Role, C: io::Connection, T> ProcessorTransition<State, Role, C, T> {
     pub fn conn(&self) -> &C {
         &self.1
     }
@@ -19,7 +18,7 @@ pub struct ReplyPrimed<Res, SendStream: BytesWriteStream, NextHandler> {
     next_handler: NextHandler,
 }
 
-impl<State, Role, C: traits::Connection, Res, SendStream: BytesWriteStream, NextHandler>
+impl<State, Role, C: io::Connection, Res, SendStream: BytesWriteStream, NextHandler>
     ProcessorTransition<State, Role, C, ReplyPrimed<Res, SendStream, NextHandler>>
 {
     pub(crate) fn new(
@@ -68,7 +67,7 @@ impl<State, Role, C: traits::Connection, Res, SendStream: BytesWriteStream, Next
 
 pub struct Finished(());
 
-impl<State, Role, C: traits::Connection> ProcessorTransition<State, Role, C, Finished> {
+impl<State, Role, C: io::Connection> ProcessorTransition<State, Role, C, Finished> {
     pub(crate) fn into_conn(self) -> C {
         self.1
     }

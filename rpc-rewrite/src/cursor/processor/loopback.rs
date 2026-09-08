@@ -1,6 +1,7 @@
 //! Processor implementation for when the root method cannot transition to any other states.
 
 use super::Processor;
+use crate::io::Connection;
 
 use crate::{
     io::read::read,
@@ -16,7 +17,7 @@ impl<
     State,
     Role,
     RootMethod: method::Branch + method::Loopback,
-    C: traits::Connection,
+    C: Connection,
     Handler: handler::BranchHandler<RootMethod>,
 > Processor<State, Role, RootMethod, C, Handler>
 {
@@ -84,7 +85,7 @@ impl<
 
 pub type HandleLoopbackError<C, RootMethod> = super::Error<
     C,
-    <replier::futures_io::Replier<RootMethod, <C as traits::Connection>::SendStream> as traits::Replier<
+    <replier::futures_io::Replier<RootMethod, <C as Connection>::SendStream> as traits::Replier<
         RootMethod,
     >>::Error,
     Infallible,

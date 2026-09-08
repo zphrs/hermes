@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 
 use futures::future::select;
 
-use crate::traits;
+use crate::io;
 
 use super::{
     processor::transitions::processor_transition::{self, ProcessorTransition},
@@ -18,7 +18,7 @@ type RequesterTransitionEntrypoint<'buf, State, Role, C, RootRequest, M> = Reque
     State,
     Role,
     C,
-    requester_transition::Sent<'buf, RootRequest, <C as traits::Connection>::RecvStream, M>,
+    requester_transition::Sent<'buf, RootRequest, <C as io::Connection>::RecvStream, M>,
 >;
 
 pub use requester_or_requester_transition::RequesterOrRequesterTransition;
@@ -26,7 +26,7 @@ pub type ProcessorTransitionEntrypoint<State, Role, C, Res, NextHandler> = Proce
     State,
     Role,
     C,
-    processor_transition::ReplyPrimed<Res, <C as traits::Connection>::SendStream, NextHandler>,
+    processor_transition::ReplyPrimed<Res, <C as io::Connection>::SendStream, NextHandler>,
 >;
 
 pub async fn tiebreak<
@@ -34,7 +34,7 @@ pub async fn tiebreak<
     'rreq,
     State,
     Role,
-    C: traits::Connection,
+    C: io::Connection,
     Res,
     NextHandler,
     RootRequest,
@@ -84,7 +84,7 @@ pub enum TiebreakResult<
     'rbuf,
     State,
     Role,
-    C: traits::Connection,
+    C: io::Connection,
     Res,
     NextHandler,
     RootRequest,

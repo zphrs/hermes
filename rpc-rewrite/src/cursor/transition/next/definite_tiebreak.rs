@@ -4,8 +4,8 @@ use crate::{
         requester::transition::{RequesterTransition, requester_transition::Finished},
         transition::{ProcessorTransitionEntrypoint, SharedCredit, Won, next::ProcessorSacrificed},
     },
-    io::{notify, read, write},
-    traits::{Connection, role},
+    io::{Connection, notify, read, write},
+    traits::role,
 };
 
 use std::marker::PhantomData;
@@ -20,7 +20,7 @@ pub enum Error<C: Connection> {
     #[error("could not notify of sacrifice")]
     SendNotification(#[from] crate::io::notify::SendError<C>),
     #[error("while waiting for notification of transition")]
-    ReceiveNotification(#[from] crate::io::notify::ReceiveError<C>),
+    ReceiveNotification(#[from] crate::io::notify::RecvError<C>),
 }
 pub(super) async fn definite_tiebreak_fn<
     State,

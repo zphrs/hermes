@@ -7,7 +7,7 @@ use crate::{
         notify::{self},
         write,
     },
-    traits::{self, Method, method::ResOf, role},
+    traits::{Method, method::ResOf, role},
 };
 
 use std::{marker::PhantomData, pin::pin};
@@ -29,7 +29,7 @@ pub async fn with_processor_transition<
     'rreq,
     Role: role::Sealed,
     State,
-    C: traits::Connection,
+    C: crate::io::Connection,
     PRes,
     NextHandler,
     RequesterRootMethod: Method,

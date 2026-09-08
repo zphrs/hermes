@@ -1,26 +1,24 @@
 use minicbor::{CborLen, Decode, Encode};
 
+use super::Connection;
 use super::read::{self, read};
-use crate::traits::{
-    Connection,
-    method::{Notification, ReqOf},
-};
+use crate::traits::method::{Notification, ReqOf};
 
 mod error {
-    use crate::traits::Connection;
+    use super::Connection;
 
     /// notification follows these steps:
     /// 1. open unidirectional stream
     /// 2. [`Write`] notification
     #[derive(thiserror::Error)]
-    pub enum Send<C: Connection> {
+    pub enum SendError<C: Connection> {
         #[error("stream could not be opened")]
         Open(#[source] C::OpenUniError),
         #[error("could not write notification")]
         Write(#[from] super::super::write::Error<C::SendStream>),
     }
 
-    impl<C: Connection> std::fmt::Debug for Send<C>
+    impl<C: Connection> std::fmt::Debug for SendError<C>
     where
         C::OpenUniError: std::fmt::Debug,
     {
@@ -34,14 +32,14 @@ mod error {
     /// 1. accept unidirectional stream
     /// 2. [`Read`] notification
     #[derive(thiserror::Error)]
-    pub enum Receive<C: Connection> {
+    pub enum RecvError<C: Connection> {
         #[error("could not accept stream")]
         Accept(#[source] C::AcceptUniError),
         #[error("could not read notification")]
         Read(#[from] super::read::Error<C::RecvStream>),
     }
 
-    impl<C: Connection> std::fmt::Debug for Receive<C>
+    impl<C: Connection> std::fmt::Debug for RecvError<C>
     where
         C::AcceptUniError: std::fmt::Debug,
     {
@@ -53,20 +51,20 @@ mod error {
         }
     }
 }
-pub use error::Receive as ReceiveError;
-pub use error::Send as SendError;
+pub use error::RecvError;
+pub use error::SendError;
 
 pub async fn send<'request, RootMethod: Notification, C: Connection>(
     request: ReqOf<'request, RootMethod>,
     connection: &C,
-) -> Result<(), error::Send<C>>
+) -> Result<(), SendError<C>>
 where
     ReqOf<'request, RootMethod>: CborLen<()> + Encode<()>,
 {
     let send = connection
         .open_uni_stream()
         .await
-        .map_err(error::Send::Open)?;
+        .map_err(SendError::Open)?;
 
     super::write::write::<RootMethod::Req<'request>, _>(&request, send).await?;
 
@@ -76,14 +74,11 @@ where
 pub async fn receive<'buf, RootMethod: Notification, C: Connection>(
     buf: &'buf mut Vec<u8>,
     conn: &C,
-) -> Result<ReqOf<'buf, RootMethod>, error::Receive<C>>
+) -> Result<ReqOf<'buf, RootMethod>, RecvError<C>>
 where
     ReqOf<'buf, RootMethod>: Decode<'buf, ()>,
 {
-    let recv = conn
-        .accept_uni_stream()
-        .await
-        .map_err(error::Receive::Accept)?;
+    let recv = conn.accept_uni_stream().await.map_err(RecvError::Accept)?;
     buf.clear();
     Ok(read::<RootMethod::Req<'buf>, _>(buf, recv).await?)
 }

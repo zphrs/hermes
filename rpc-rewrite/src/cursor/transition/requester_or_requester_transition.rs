@@ -1,6 +1,7 @@
 use crate::{
     cursor::transition::RequesterTransitionEntrypoint,
-    traits::{self, Method, markers::NotApplicable, method::ReqOf},
+    io,
+    traits::{Method, markers::NotApplicable, method::ReqOf},
 };
 
 use super::super::requester;
@@ -11,7 +12,7 @@ pub enum RequesterOrRequesterTransition<
     State,
     Role,
     RootMethod: Method,
-    C: traits::Connection,
+    C: io::Connection,
     M,
 > {
     Requester(requester::Requester<State, Role, RootMethod, C>),
@@ -20,7 +21,7 @@ pub enum RequesterOrRequesterTransition<
     ),
 }
 
-impl<'buf, 'req, State, Role, RootMethod: Method, C: traits::Connection>
+impl<'buf, 'req, State, Role, RootMethod: Method, C: io::Connection>
     From<requester::Requester<State, Role, RootMethod, C>>
     for RequesterOrRequesterTransition<'buf, 'req, State, Role, RootMethod, C, NotApplicable>
 {
@@ -29,7 +30,7 @@ impl<'buf, 'req, State, Role, RootMethod: Method, C: traits::Connection>
     }
 }
 
-impl<'buf, 'req, State, Role, RootMethod: Method, C: traits::Connection>
+impl<'buf, 'req, State, Role, RootMethod: Method, C: io::Connection>
     RequesterOrRequesterTransition<'buf, 'req, State, Role, RootMethod, C, NotApplicable>
 {
     pub async fn immediate_requester(
@@ -39,7 +40,7 @@ impl<'buf, 'req, State, Role, RootMethod: Method, C: traits::Connection>
     }
 }
 
-impl<'buf, 'req, State, Role, RootMethod: Method, C: traits::Connection, M>
+impl<'buf, 'req, State, Role, RootMethod: Method, C: io::Connection, M>
     RequesterOrRequesterTransition<'buf, 'req, State, Role, RootMethod, C, M>
 {
     pub fn conn(&self) -> &C {

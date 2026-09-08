@@ -7,7 +7,7 @@ use std::convert::Infallible;
 use bytes::Bytes;
 use minicbor::{CborLen, Encode};
 
-use crate::{io::write_bytes, traits::io::BytesWriteStream};
+use super::BytesWriteStream;
 
 #[derive(thiserror::Error)]
 pub enum Error<S: BytesWriteStream> {
@@ -26,13 +26,28 @@ impl<S: BytesWriteStream> std::fmt::Debug for Error<S> {
     }
 }
 
+/// moves send to allow for pinning and to allow for dropping `send` after
+/// write_all succeeds
+pub(crate) async fn bytes<B: BytesWriteStream>(
+    mut send: B,
+    buf: Bytes,
+    assert_stopped: bool,
+) -> Result<(), B::Error> {
+    send.try_put(buf).await?;
+    if assert_stopped {
+        send.finish();
+        send.stopped().await;
+    }
+    Ok(())
+}
+
 pub async fn write<Message: CborLen<()> + Encode<()>, SendStream: BytesWriteStream>(
     request: &Message,
     send: SendStream,
 ) -> Result<(), Error<SendStream>> {
     let mut buf = Vec::with_capacity(minicbor::len(request));
     minicbor::encode(request, &mut buf)?;
-    write_bytes(send, Bytes::from(buf), core::cfg!(test))
+    bytes(send, Bytes::from(buf), core::cfg!(test))
         .await
         .map_err(Error::Send)?;
     Ok(())

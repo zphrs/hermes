@@ -3,8 +3,9 @@ use std::convert::Infallible;
 use super::Processor;
 use crate::{
     cursor::processor::ProcessorFut,
+    io::Connection,
     traits::{
-        self, Connection,
+        self,
         handler::TransitionBranchHandler,
         method::{self, ReqOf, ResOf},
     },
@@ -31,7 +32,7 @@ impl<
     State,
     Role,
     RootMethod: method::Branch + method::Transitions,
-    C: traits::Connection,
+    C: Connection,
     Handler: TransitionBranchHandler<RootMethod>,
 > Processor<State, Role, RootMethod, C, Handler>
 {

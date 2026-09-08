@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::{cursor::transition::next::definite_tiebreak, traits::Connection};
+use crate::{cursor::transition::next::definite_tiebreak, io::Connection};
 
 #[derive(thiserror::Error)]
 pub enum NextError<C: Connection, FutErr> {
@@ -11,7 +11,7 @@ pub enum NextError<C: Connection, FutErr> {
     #[error("accept uni stream: {0}")]
     SendNotification(#[from] crate::io::notify::SendError<C>),
     #[error("open uni stream: {0}")]
-    RecvNotification(#[from] crate::io::notify::ReceiveError<C>),
+    RecvNotification(#[from] crate::io::notify::RecvError<C>),
     #[error("while resolving future: {0}")]
     Fut(FutErr),
 }

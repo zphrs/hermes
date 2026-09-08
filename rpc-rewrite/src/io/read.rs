@@ -4,7 +4,8 @@
 
 use minicbor::Decode;
 
-use crate::{io::read_into_buf, traits::io::BytesReadStream};
+use super::BytesReadStream;
+
 #[derive(thiserror::Error)]
 pub enum Error<RecvStream: BytesReadStream> {
     #[error(transparent)]
@@ -22,6 +23,23 @@ impl<RecvStream: BytesReadStream> std::fmt::Debug for Error<RecvStream> {
     }
 }
 
+/// will return if maxlen is hit or if the end of the stream is reached.
+async fn read_into_buf<B: BytesReadStream>(
+    mut recv: B,
+    buf: &mut impl for<'a> Extend<&'a u8>,
+    max_length: usize,
+) -> Result<(), B::Error> {
+    let mut so_far = 0usize;
+    while let Some(bytes) = recv.try_next().await? {
+        if bytes.len() + so_far >= max_length {
+            return Ok(());
+        }
+        buf.extend(bytes.iter());
+        so_far += bytes.len();
+    }
+
+    Ok(())
+}
 pub async fn read<'buf, Message, RecvStream: BytesReadStream>(
     buf: &'buf mut Vec<u8>,
     recv: RecvStream,
