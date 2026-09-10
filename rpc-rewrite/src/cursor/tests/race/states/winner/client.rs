@@ -1,4 +1,4 @@
-use crate::{cursor, markers::NotApplicable};
+use crate::{cursor, marker::NotApplicable};
 
 pub struct State;
 

@@ -1,4 +1,4 @@
-use crate::markers::{Client, Server};
+use crate::marker::{Client, Server};
 
 pub enum Role {
     Client,

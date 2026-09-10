@@ -1,5 +1,5 @@
 use crate::cursor;
-use crate::markers::NotApplicable;
+use crate::marker::NotApplicable;
 
 pub struct State;
 

@@ -2,14 +2,14 @@ use std::net::SocketAddr;
 
 use super::super::Cursor;
 use super::{accept_client, connect_to_server};
-use crate::markers::{self, not_applicable};
+use crate::marker::{self, not_applicable};
 use crate::method::handler::root_method::RootHandler;
 
 mod ping {
     use minicbor::bytes::ByteSlice;
 
     use crate::{
-        markers::{False, NotApplicable},
+        marker::{False, NotApplicable},
         method::{self, LeafHandler, handler::root_method::RootMethod},
     };
 
@@ -47,7 +47,7 @@ mod ping {
 
 async fn server(endpoint: quinn::Endpoint) -> anyhow::Result<()> {
     let connection = accept_client(&endpoint).await?;
-    let cursor = Cursor::<ping::State, markers::Server, _>::new(connection);
+    let cursor = Cursor::<ping::State, marker::Server, _>::new(connection);
     let (processor, _requester) = cursor.into_processor_and_requester(RootHandler(ping::Method));
 
     // we expect an error out here once connection drops
@@ -58,7 +58,7 @@ async fn server(endpoint: quinn::Endpoint) -> anyhow::Result<()> {
 
 async fn client(endpoint: quinn::Endpoint, server_addr: SocketAddr) -> anyhow::Result<()> {
     let connection = connect_to_server(&endpoint, server_addr).await?;
-    let cursor = Cursor::<ping::State, markers::Client, _>::new(connection);
+    let cursor = Cursor::<ping::State, marker::Client, _>::new(connection);
 
     let (_processor, requester) = cursor.into_processor_and_requester(not_applicable::Handler);
     let mut read_buf = Vec::new();

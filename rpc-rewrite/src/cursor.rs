@@ -7,7 +7,7 @@ pub use state::State;
 use crate::{
     cursor::transition::SharedCredit,
     io,
-    markers::{Client, NotApplicable, Server},
+    marker::{Client, NotApplicable, Server},
 };
 
 #[expect(private_bounds, reason = "for role")]

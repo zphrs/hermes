@@ -94,7 +94,7 @@ mod tests {
     use crate::{
         Method,
         io::notify,
-        markers::{False, NotApplicable},
+        marker::{False, NotApplicable},
         quinn_transport::create_endpoint,
     };
 

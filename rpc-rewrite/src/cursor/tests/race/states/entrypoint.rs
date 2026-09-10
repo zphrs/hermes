@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::{
     cursor::state,
-    markers::{False, True},
+    marker::{False, True},
     method::handler::root_method::RootMethod,
 };
 

@@ -16,7 +16,7 @@ impl<M: method::Method> Method for RootMethod<M> {
 
     type Transitions = M::Transitions;
 
-    type HasDescendants = crate::markers::True;
+    type HasDescendants = crate::marker::True;
 }
 
 impl<M: method::Method> Descendant<RootMethod<M>> for M {

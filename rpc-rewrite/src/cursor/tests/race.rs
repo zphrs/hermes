@@ -19,7 +19,7 @@ use crate::{
         },
         transition::{RequesterOrRequesterTransition, next, tiebreak},
     },
-    markers::{Client, Server, not_applicable},
+    marker::{Client, Server, not_applicable},
     method::{
         self,
         handler::{TransitionLeafHandler, root_method::RootHandler},

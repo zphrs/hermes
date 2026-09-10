@@ -3,7 +3,7 @@ use std::{
     future::{Pending, pending},
 };
 
-use crate::{io, markers::NotApplicable, method};
+use crate::{io, marker::NotApplicable, method};
 
 use super::{
     Processor,

@@ -7,7 +7,7 @@
 //! - no need for types to have a definite maximum size
 
 mod io;
-pub mod markers;
+pub mod marker;
 pub mod method;
 #[cfg(test)]
 mod quinn_transport;

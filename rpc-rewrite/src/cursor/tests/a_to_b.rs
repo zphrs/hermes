@@ -8,7 +8,7 @@ use crate::{
         Cursor,
         transition::{RequesterOrRequesterTransition, Won, next},
     },
-    markers::{self, not_applicable},
+    marker::{self, not_applicable},
     method::handler::root_method::RootHandler,
 };
 
@@ -17,7 +17,7 @@ mod b;
 impl state::Entrypoint for a::State {}
 async fn server(endpoint: quinn::Endpoint) -> anyhow::Result<()> {
     let connection = super::accept_client(&endpoint).await?;
-    let a_cursor = Cursor::<a::State, markers::Server, _>::new(connection);
+    let a_cursor = Cursor::<a::State, marker::Server, _>::new(connection);
     let (processor, requester) = a_cursor.into_processor_and_requester(RootHandler(a::Method));
     let mut buf = Vec::new();
     // we expect an error out here
@@ -42,7 +42,7 @@ async fn server(endpoint: quinn::Endpoint) -> anyhow::Result<()> {
 
 async fn client(endpoint: quinn::Endpoint, server_addr: SocketAddr) -> anyhow::Result<()> {
     let connection = super::connect_to_server(&endpoint, server_addr).await?;
-    let cursor = Cursor::<a::State, markers::Client, _>::new(connection);
+    let cursor = Cursor::<a::State, marker::Client, _>::new(connection);
 
     let (processor, requester) = cursor.into_processor_and_requester(not_applicable::Handler);
     let mut read_buf = Vec::new();

@@ -1,7 +1,7 @@
 use crate::{
     cursor::transition::RequesterTransitionEntrypoint,
     io,
-    markers::NotApplicable,
+    marker::NotApplicable,
     method::{Method, ReqOf},
 };
 
