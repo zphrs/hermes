@@ -1,7 +1,5 @@
-use crate::traits::{
-    Method,
-    markers::{False, NotApplicable},
-};
+use crate::markers::{False, NotApplicable};
+use crate::traits::Method;
 
 pub(crate) struct ProcessorSacrificed;
 

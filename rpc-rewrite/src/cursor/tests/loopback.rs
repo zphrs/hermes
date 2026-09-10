@@ -2,18 +2,15 @@ use std::net::SocketAddr;
 
 use super::super::Cursor;
 use super::{accept_client, connect_to_server};
-use crate::traits::{
-    handler::root_method::RootHandler,
-    markers::{self, not_applicable},
-};
+use crate::markers::{self, not_applicable};
+use crate::traits::handler::root_method::RootHandler;
 
 mod ping {
     use minicbor::bytes::ByteSlice;
 
-    use crate::traits::{
-        self, LeafHandler,
-        handler::root_method::RootMethod,
+    use crate::{
         markers::{False, NotApplicable},
+        traits::{self, LeafHandler, handler::root_method::RootMethod},
     };
 
     pub struct Method;

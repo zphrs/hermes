@@ -18,9 +18,9 @@ use crate::{
         },
         transition::{RequesterOrRequesterTransition, next, tiebreak},
     },
+    markers::{Client, Server, not_applicable},
     traits::{
         handler::{TransitionLeafHandler, root_method::RootHandler},
-        markers::{Client, Server, not_applicable},
         state,
     },
 };

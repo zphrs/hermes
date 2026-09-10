@@ -1,4 +1,4 @@
-use crate::traits::markers::{False, True};
+use crate::markers::{False, True};
 
 pub(super) trait Sealed {}
 

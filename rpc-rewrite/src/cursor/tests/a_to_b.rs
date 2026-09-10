@@ -7,11 +7,8 @@ use crate::{
         Cursor,
         transition::{RequesterOrRequesterTransition, Won, next},
     },
-    traits::{
-        handler::root_method::RootHandler,
-        markers::{self, not_applicable},
-        state,
-    },
+    markers::{self, not_applicable},
+    traits::{handler::root_method::RootHandler, state},
 };
 
 mod a;

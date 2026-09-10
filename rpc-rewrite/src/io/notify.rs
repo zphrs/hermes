@@ -93,11 +93,9 @@ mod tests {
 
     use crate::{
         io::notify,
+        markers::{False, NotApplicable},
         quinn_transport::create_endpoint,
-        traits::{
-            Method,
-            markers::{False, NotApplicable},
-        },
+        traits::Method,
     };
 
     pub struct Notify;

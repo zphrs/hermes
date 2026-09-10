@@ -1,7 +1,8 @@
 use crate::{
     cursor::transition::RequesterTransitionEntrypoint,
     io,
-    traits::{Method, markers::NotApplicable, method::ReqOf},
+    markers::NotApplicable,
+    traits::{Method, method::ReqOf},
 };
 
 use super::super::requester;

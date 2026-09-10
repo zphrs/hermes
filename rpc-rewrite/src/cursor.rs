@@ -3,10 +3,8 @@ use std::marker::PhantomData;
 use crate::{
     cursor::transition::SharedCredit,
     io,
-    traits::{
-        markers::{Client, NotApplicable, Server},
-        role, state,
-    },
+    markers::{Client, NotApplicable, Server},
+    traits::{role, state},
 };
 
 #[expect(private_bounds, reason = "for role")]

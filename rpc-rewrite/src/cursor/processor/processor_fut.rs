@@ -5,7 +5,8 @@ use std::{
 
 use crate::{
     io,
-    traits::{self, markers::NotApplicable},
+    markers::NotApplicable,
+    traits::{self},
 };
 
 use super::{

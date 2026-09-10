@@ -1,7 +1,7 @@
+use crate::markers::{False, NotApplicable, True, not_applicable};
 use crate::traits::{
     self,
     handler::{TransitionLeafHandler, root_method::RootMethod},
-    markers::{False, NotApplicable, True, not_applicable},
     method::{ReqOf, ResOf},
     state,
 };

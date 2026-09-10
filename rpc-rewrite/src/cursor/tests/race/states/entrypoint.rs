@@ -2,12 +2,8 @@ use std::time::Duration;
 
 use crate::{
     cursor::tests::race::states,
-    traits::{
-        self,
-        handler::root_method::RootMethod,
-        markers::{False, True},
-        state,
-    },
+    markers::{False, True},
+    traits::{self, handler::root_method::RootMethod, state},
 };
 
 pub struct State;

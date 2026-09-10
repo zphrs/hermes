@@ -2,7 +2,6 @@ use std::marker::PhantomData;
 
 use crate::traits::{
     handler::{TransitionBranchHandler, TransitionLeafHandler},
-    markers::True,
     method::{
         self, Descendant, Method, ReqOf, ResOf,
         handler::{BranchHandler, LeafHandler, replier},
@@ -18,7 +17,7 @@ impl<M: method::Method> Method for RootMethod<M> {
 
     type Transitions = M::Transitions;
 
-    type HasDescendants = True;
+    type HasDescendants = crate::markers::True;
 }
 
 impl<M: method::Method> Descendant<RootMethod<M>> for M {

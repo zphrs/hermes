@@ -1,4 +1,3 @@
-pub mod markers;
 pub mod method;
 pub mod role;
 pub mod state;

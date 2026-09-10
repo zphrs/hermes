@@ -1,4 +1,4 @@
-use crate::traits::{self, markers::NotApplicable};
+use crate::{markers::NotApplicable, traits};
 
 pub struct State;
 
