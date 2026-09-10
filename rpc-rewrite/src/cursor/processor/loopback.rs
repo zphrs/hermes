@@ -24,7 +24,7 @@ impl<
         ResOf<'buf, RootMethod>,
         super::Error<
             C,
-            <replier::futures_io::Replier<RootMethod, C::SendStream> as replier::Replier<
+            <replier::immediate::Replier<RootMethod, C::SendStream> as replier::Replier<
                 RootMethod,
             >>::Error,
             Infallible,
@@ -41,7 +41,7 @@ impl<
 
         let (send, recv) = stream;
 
-        let replier = replier::futures_io::Replier::new(send);
+        let replier = replier::immediate::Replier::new(send);
         let handler: &mut Handler = &mut self.handler;
 
         write.clear();
@@ -81,7 +81,7 @@ impl<
 
 pub type HandleLoopbackError<C, RootMethod> = super::Error<
     C,
-    <replier::futures_io::Replier<RootMethod, <C as Connection>::SendStream> as replier::Replier<
+    <replier::immediate::Replier<RootMethod, <C as Connection>::SendStream> as replier::Replier<
         RootMethod,
     >>::Error,
     Infallible,

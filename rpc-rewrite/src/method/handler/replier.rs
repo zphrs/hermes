@@ -66,4 +66,4 @@ pub trait Receipt<Res> {
     fn finalize(self) -> impl Future<Output = Result<Res, Self::Error>>;
 }
 
-pub mod futures_io;
+pub mod immediate;
