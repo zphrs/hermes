@@ -1,14 +1,11 @@
 use std::marker::PhantomData;
 
-use crate::traits::{
-    Method,
-    method::{self, ResOf},
-};
+use crate::method::{self, Method, ResOf};
 
 pub trait State {
-    type ClientHandles: super::method::Branch;
+    type ClientHandles: crate::method::Branch;
 
-    type ServerHandles: super::method::Branch;
+    type ServerHandles: crate::method::Branch;
 }
 
 pub struct Wrapper<S: State>(PhantomData<S>);

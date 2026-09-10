@@ -1,16 +1,14 @@
 use std::time::Duration;
 
 use crate::{
-    cursor::tests::race::states,
+    cursor::state,
     markers::{False, True},
-    traits::{self, handler::root_method::RootMethod, state},
+    method::handler::root_method::RootMethod,
 };
 
 pub struct State;
 
-impl state::Entrypoint for states::entrypoint::State {}
-
-impl traits::State for State {
+impl state::State for State {
     type ClientHandles = RootMethod<ServerRequestWins>;
 
     type ServerHandles = RootMethod<ClientRequestWins>;
@@ -18,7 +16,7 @@ impl traits::State for State {
 
 pub struct ServerRequestWins;
 
-impl traits::Method for ServerRequestWins {
+impl crate::Method for ServerRequestWins {
     type Req<'buf> = Duration;
 
     type Res<'buf> = state::Wrapper<super::winner::server::State>;
@@ -30,7 +28,7 @@ impl traits::Method for ServerRequestWins {
 
 pub struct ClientRequestWins;
 
-impl traits::Method for ClientRequestWins {
+impl crate::Method for ClientRequestWins {
     type Req<'buf> = Duration;
 
     type Res<'buf> = state::Wrapper<super::winner::client::State>;

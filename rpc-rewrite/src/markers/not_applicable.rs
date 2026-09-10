@@ -1,7 +1,4 @@
-use crate::traits::{
-    Method, Replier,
-    method::{ReqOf, ResOf},
-};
+use crate::method::{Method, Replier, ReqOf, ResOf};
 
 /// intentionally impossible to construct so that it can serve
 /// as a marker trait whenever a [Method], [Req](Method::Req), or [Res](Method::Res) should be
@@ -50,7 +47,7 @@ impl Method for NotApplicable {
 /// (as the request type can never be constructed)
 pub struct Handler;
 
-impl crate::traits::BranchHandler<NotApplicable> for Handler {
+impl crate::method::BranchHandler<NotApplicable> for Handler {
     async fn handle<'a, R: Replier<NotApplicable>>(
         &mut self,
         request: ReqOf<'a, NotApplicable>,

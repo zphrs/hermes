@@ -8,8 +8,10 @@
 
 mod io;
 pub mod markers;
+pub mod method;
 #[cfg(test)]
 mod quinn_transport;
-pub mod traits;
 
 pub mod cursor;
+
+pub use method::Method;

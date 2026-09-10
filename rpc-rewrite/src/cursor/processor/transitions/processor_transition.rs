@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::{
     io::{self, BytesWriteStream},
-    traits::Receipt,
+    method::replier::Receipt as _,
 };
 
 pub struct ProcessorTransition<State, Role, C: io::Connection, T>(PhantomData<(State, Role)>, C, T);

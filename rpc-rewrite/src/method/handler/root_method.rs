@@ -1,11 +1,10 @@
 use std::marker::PhantomData;
 
-use crate::traits::{
-    handler::{TransitionBranchHandler, TransitionLeafHandler},
-    method::{
-        self, Descendant, Method, ReqOf, ResOf,
-        handler::{BranchHandler, LeafHandler, replier},
-    },
+use crate::method::handler::{TransitionBranchHandler, TransitionLeafHandler};
+
+use crate::method::{
+    self, Descendant, Method, ReqOf, ResOf,
+    handler::{BranchHandler, LeafHandler, replier},
 };
 
 pub struct RootMethod<M: method::Method>(PhantomData<M>);

@@ -1,4 +1,4 @@
-use crate::traits::method::{self, ReqOf, ResOf};
+use crate::method::{self, ReqOf, ResOf};
 
 pub trait Replier<M: method::Branch> {
     type Receipt<Res>: Receipt<Res>;
@@ -28,7 +28,7 @@ pub trait Replier<M: method::Branch> {
 }
 
 pub mod transition {
-    use crate::traits::method::{self, ReqOf, ResOf};
+    use crate::method::{self, ReqOf, ResOf};
     pub type ReplyResult<'req, Replier, M, DescendantHandler, Descendant> = Result<
         (
             <Replier as super::Replier<M>>::Receipt<ResOf<'req, M>>,

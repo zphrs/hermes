@@ -4,11 +4,7 @@ use super::Processor;
 use crate::{
     cursor::processor::ProcessorFut,
     io::Connection,
-    traits::{
-        self,
-        handler::TransitionBranchHandler,
-        method::{self, ReqOf, ResOf},
-    },
+    method::{self, ReqOf, ResOf, handler::TransitionBranchHandler, replier::Replier},
 };
 
 pub mod delayed_replier;
@@ -64,7 +60,7 @@ impl<
         >,
         super::Error<
             C,
-            <DelayedReplier<RootMethod, C::SendStream> as traits::Replier<RootMethod>>::Error,
+            <DelayedReplier<RootMethod, C::SendStream> as Replier<RootMethod>>::Error,
             Infallible,
         >,
     >

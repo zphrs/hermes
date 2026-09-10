@@ -4,7 +4,7 @@ use super::Requester;
 use crate::{
     cursor::requester::transition::requester_transition::Sent,
     io::{self, BytesWriteStream, Connection},
-    traits::method::{self, ReqOf, ResOf},
+    method::{self, ReqOf, ResOf},
 };
 
 use std::convert::Infallible;
@@ -21,9 +21,7 @@ pub enum RequestTransitionError<C: Connection> {
     Encode(#[from] minicbor::encode::Error<Infallible>),
 }
 
-impl<State, Role, RootMethod: crate::traits::Method, C: Connection>
-    Requester<State, Role, RootMethod, C>
-{
+impl<State, Role, RootMethod: method::Method, C: Connection> Requester<State, Role, RootMethod, C> {
     pub async fn request_transition<
         'req,
         'buf,

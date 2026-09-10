@@ -1,4 +1,4 @@
-use crate::traits::method::{Method, ReqOf, ResOf};
+use super::{Method, ReqOf, ResOf};
 pub trait Descendant<Parent: Method>: Method {
     fn req_to_parent<'buf>(req: ReqOf<'buf, Self>) -> ReqOf<'buf, Parent>;
     fn res_to_parent<'buf>(res: ResOf<'buf, Self>) -> ResOf<'buf, Parent>;

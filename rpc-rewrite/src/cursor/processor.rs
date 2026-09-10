@@ -3,7 +3,7 @@ pub mod loopback;
 pub mod processor_fut;
 pub mod transitions;
 
-use crate::{io::Connection, traits::method};
+use crate::{io::Connection, method};
 pub use buffers::Buffers;
 pub use processor_fut::ProcessorFut;
 use std::{fmt::Debug, marker::PhantomData};

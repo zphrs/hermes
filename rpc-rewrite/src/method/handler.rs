@@ -1,20 +1,18 @@
-use crate::traits::method::{self, ReqOf, ResOf};
+pub mod replier;
+pub use replier::Replier;
+
+use super::{ReqOf, ResOf};
 
 pub enum Error<Replier, Handler> {
     Replier(Replier),
     Handler(Handler),
 }
 
-pub mod replier;
+mod branch_handler {
+    use super::replier::Replier;
+    use super::{ReqOf, ResOf};
 
-pub use replier::Replier;
-mod bh {
-    use crate::traits::{
-        Replier,
-        method::{self, ReqOf, ResOf},
-    };
-
-    pub trait BranchHandler<M: method::Branch = Self> {
+    pub trait BranchHandler<M: super::super::Branch = Self> {
         fn handle<'a, R: Replier<M>>(
             &mut self,
             request: ReqOf<'a, M>,
@@ -23,23 +21,22 @@ mod bh {
     }
 }
 
-pub use bh::BranchHandler;
+pub use branch_handler::BranchHandler;
 
-pub trait LeafHandler<M: method::Leaf + method::Loopback = Self> {
+pub trait LeafHandler<M: super::Leaf + super::Loopback = Self> {
     fn handle<'a>(&mut self, request: ReqOf<'a, M>) -> impl Future<Output = ResOf<'a, M>>;
 }
 
 pub mod transition {
-    use crate::traits::{
-        method::{self, ReqOf, ResOf},
-        replier::{Replier, transition},
-        state::WrapperCredit,
-    };
+    use super::replier::{Replier, transition};
+    use crate::cursor::state::WrapperCredit;
+
+    use super::{ReqOf, ResOf};
 
     pub type HandleTransitionResult<'a, NextHandler, TR, M> =
         Result<(<TR as Replier<M>>::Receipt<ResOf<'a, M>>, NextHandler), <TR as Replier<M>>::Error>;
 
-    pub trait BranchHandler<M: method::Branch + method::Transitions = Self> {
+    pub trait BranchHandler<M: crate::method::Branch + crate::method::Transitions = Self> {
         type NextHandler;
 
         fn handle_transition<'a, TR: transition::Replier<M>>(
@@ -49,7 +46,7 @@ pub mod transition {
         ) -> impl Future<Output = HandleTransitionResult<'a, Self::NextHandler, TR, M>>;
     }
 
-    pub trait LeafHandler<M: method::Leaf + method::Transitions = Self> {
+    pub trait LeafHandler<M: crate::method::Leaf + crate::method::Transitions = Self> {
         type NextHandler;
 
         fn handle_transition<'a>(

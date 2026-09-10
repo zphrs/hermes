@@ -1,8 +1,8 @@
-use crate::{markers::NotApplicable, traits};
+use crate::{cursor, markers::NotApplicable};
 
 pub struct State;
 
-impl traits::State for State {
+impl cursor::State for State {
     type ClientHandles = NotApplicable;
     type ServerHandles = NotApplicable;
 }

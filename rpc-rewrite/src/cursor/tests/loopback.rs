@@ -3,19 +3,19 @@ use std::net::SocketAddr;
 use super::super::Cursor;
 use super::{accept_client, connect_to_server};
 use crate::markers::{self, not_applicable};
-use crate::traits::handler::root_method::RootHandler;
+use crate::method::handler::root_method::RootHandler;
 
 mod ping {
     use minicbor::bytes::ByteSlice;
 
     use crate::{
         markers::{False, NotApplicable},
-        traits::{self, LeafHandler, handler::root_method::RootMethod},
+        method::{self, LeafHandler, handler::root_method::RootMethod},
     };
 
     pub struct Method;
 
-    impl traits::Method for Method {
+    impl method::Method for Method {
         type Req<'buf> = &'buf ByteSlice;
 
         type Res<'buf> = &'buf ByteSlice;
@@ -28,17 +28,17 @@ mod ping {
     impl LeafHandler for Method {
         async fn handle<'a>(
             &mut self,
-            request: traits::method::ReqOf<'a, Self>,
-        ) -> traits::method::ResOf<'a, Self> {
+            request: method::ReqOf<'a, Self>,
+        ) -> method::ResOf<'a, Self> {
             request
         }
     }
 
     pub struct State;
 
-    impl traits::state::Entrypoint for State {}
+    impl crate::cursor::state::Entrypoint for State {}
 
-    impl traits::State for State {
+    impl crate::cursor::State for State {
         type ClientHandles = NotApplicable;
 
         type ServerHandles = RootMethod<Method>;

@@ -7,6 +7,7 @@ pub use descendant::Descendant;
 use crate::markers::NotApplicable;
 
 pub mod handler;
+pub use handler::replier;
 
 pub trait Method {
     type Req<'buf>;
@@ -37,3 +38,7 @@ impl<T: Method<HasDescendants = crate::markers::False> + ?Sized> Leaf for T {}
 pub trait Notification: for<'a> Method<Res<'a> = NotApplicable> {}
 
 impl<T: for<'a> Method<Res<'a> = NotApplicable> + ?Sized> Notification for T {}
+
+pub use handler::{
+    BranchHandler, LeafHandler, Replier, TransitionBranchHandler, TransitionLeafHandler,
+};

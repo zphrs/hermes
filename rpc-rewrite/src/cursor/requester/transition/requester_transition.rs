@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use crate::{
     cursor::processor::transitions::delayed_replier::TransitionReply,
     io::{BytesReadStream, Connection},
-    traits::{Method, method::ResOf},
+    method::{Method, ResOf},
 };
 
 pub struct RequesterTransition<State, Role, C: Connection, T>(PhantomData<(State, Role)>, C, T);

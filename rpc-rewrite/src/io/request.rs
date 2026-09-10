@@ -2,7 +2,7 @@ use minicbor::{CborLen, Decode, Encode};
 
 use crate::{
     io,
-    traits::method::{self, Descendant, ReqOf, ResOf},
+    method::{self, Descendant, ReqOf, ResOf},
 };
 
 use super::Connection;

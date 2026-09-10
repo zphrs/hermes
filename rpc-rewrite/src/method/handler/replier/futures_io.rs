@@ -1,9 +1,8 @@
 use std::{convert::Infallible, marker::PhantomData};
 
-use crate::{
-    io::BytesWriteStream,
-    traits::method::{self, ResOf},
-};
+use crate::io::BytesWriteStream;
+
+use crate::method::{self, ResOf};
 
 pub struct Replier<M: method::Branch, SendStream: BytesWriteStream> {
     stream: SendStream,

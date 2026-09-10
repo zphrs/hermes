@@ -4,10 +4,10 @@ use std::{fmt::Debug, marker::PhantomData};
 
 use crate::{
     io::Connection,
-    traits::method::{Descendant, Leaf, Loopback, ReqOf, ResOf},
+    method::{Descendant, Leaf, Loopback, ReqOf, ResOf},
 };
 
-pub struct Requester<State, Role, RootMethod: crate::traits::Method, C: Connection> {
+pub struct Requester<State, Role, RootMethod: crate::Method, C: Connection> {
     connection: C,
     _marker: PhantomData<(State, Role, RootMethod)>,
 }
@@ -33,9 +33,7 @@ where
     }
 }
 
-impl<State, Role, RootMethod: crate::traits::Method, C: Connection>
-    Requester<State, Role, RootMethod, C>
-{
+impl<State, Role, RootMethod: crate::Method, C: Connection> Requester<State, Role, RootMethod, C> {
     pub(crate) fn new(connection: C) -> Self {
         Self {
             connection,

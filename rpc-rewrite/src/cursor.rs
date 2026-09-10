@@ -1,14 +1,17 @@
+pub mod role;
+pub mod state;
 use std::marker::PhantomData;
+
+pub use state::State;
 
 use crate::{
     cursor::transition::SharedCredit,
     io,
     markers::{Client, NotApplicable, Server},
-    traits::{role, state},
 };
 
 #[expect(private_bounds, reason = "for role")]
-pub struct Cursor<State: crate::traits::State, Role: role::Sealed, C: io::Connection> {
+pub struct Cursor<State: state::State, Role: role::Sealed, C: io::Connection> {
     connection: C,
     _state: state::Wrapper<State>,
     _marker: PhantomData<Role>,
@@ -22,7 +25,7 @@ pub type ServerRequester<State, C> =
 
 pub type ServerPair<State, C, H> = (ServerProcessor<State, C, H>, ServerRequester<State, C>);
 
-impl<State: crate::traits::State, C: io::Connection + Clone> Cursor<State, Server, C> {
+impl<State: state::State, C: io::Connection + Clone> Cursor<State, Server, C> {
     pub fn into_processor_and_requester<H>(self, handler: H) -> ServerPair<State, C, H> {
         (
             processor::Processor::new(self.connection.clone(), handler),
@@ -39,7 +42,7 @@ pub type ClientRequester<State, C> =
 
 pub type ClientPair<State, C, H> = (ClientProcessor<State, C, H>, ClientRequester<State, C>);
 
-impl<State: crate::traits::State, C: io::Connection + Clone> Cursor<State, Client, C> {
+impl<State: state::State, C: io::Connection + Clone> Cursor<State, Client, C> {
     pub fn into_processor_and_requester<H>(self, handler: H) -> ClientPair<State, C, H> {
         (
             processor::Processor::new(self.connection.clone(), handler),
@@ -49,9 +52,7 @@ impl<State: crate::traits::State, C: io::Connection + Clone> Cursor<State, Clien
 }
 
 #[expect(private_bounds, reason = "for role")]
-impl<State: crate::traits::state::Entrypoint, Role: role::Sealed, C: io::Connection>
-    Cursor<State, Role, C>
-{
+impl<State: state::Entrypoint, Role: role::Sealed, C: io::Connection> Cursor<State, Role, C> {
     pub fn new(connection: C) -> Self {
         Self {
             connection,

@@ -15,6 +15,7 @@ use crate::{
                 processor_transition::{self, ProcessorTransition},
             },
         },
+        role,
         transition::{
             NextError, RequesterTransitionEntrypoint, SharedCredit, Won,
             next::{
@@ -24,7 +25,7 @@ use crate::{
         },
     },
     io::notify,
-    traits::{Method, method::ResOf, role},
+    method::{Method, ResOf},
 };
 
 pub type Result<'rbuf, State, Role, C, PRes, RequesterMethod, NextHandler, ProcessorError> =

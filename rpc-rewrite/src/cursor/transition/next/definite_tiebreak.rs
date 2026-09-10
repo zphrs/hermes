@@ -2,10 +2,10 @@ use crate::{
     cursor::{
         processor::transitions::delayed_replier::TransitionReply,
         requester::transition::{RequesterTransition, requester_transition::Finished},
+        role,
         transition::{ProcessorTransitionEntrypoint, SharedCredit, Won, next::ProcessorSacrificed},
     },
     io::{Connection, notify, read, write},
-    traits::role,
 };
 
 use std::marker::PhantomData;

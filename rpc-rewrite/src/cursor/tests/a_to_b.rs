@@ -3,12 +3,13 @@ use std::{convert::Infallible, future::ready, net::SocketAddr, pin::pin};
 use anyhow::{Context, anyhow};
 
 use crate::{
+    cursor::state,
     cursor::{
         Cursor,
         transition::{RequesterOrRequesterTransition, Won, next},
     },
     markers::{self, not_applicable},
-    traits::{handler::root_method::RootHandler, state},
+    method::handler::root_method::RootHandler,
 };
 
 mod a;

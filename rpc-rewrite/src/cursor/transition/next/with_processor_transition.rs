@@ -3,11 +3,12 @@ use super::super::{
     next::ProcessorSacrificed,
 };
 use crate::{
+    cursor::role,
     io::{
         notify::{self},
         write,
     },
-    traits::{Method, method::ResOf, role},
+    method::{Method, ResOf},
 };
 
 use std::{marker::PhantomData, pin::pin};

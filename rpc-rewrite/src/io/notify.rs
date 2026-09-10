@@ -2,7 +2,7 @@ use minicbor::{CborLen, Decode, Encode};
 
 use super::Connection;
 use super::read::{self, read};
-use crate::traits::method::{Notification, ReqOf};
+use crate::method::{Notification, ReqOf};
 
 mod error {
     use super::Connection;
@@ -92,10 +92,10 @@ mod tests {
     use tracing::{info, trace};
 
     use crate::{
+        Method,
         io::notify,
         markers::{False, NotApplicable},
         quinn_transport::create_endpoint,
-        traits::Method,
     };
 
     pub struct Notify;

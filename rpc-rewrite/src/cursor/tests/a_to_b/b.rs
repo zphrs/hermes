@@ -1,9 +1,9 @@
+use crate::cursor;
 use crate::markers::NotApplicable;
-use crate::traits;
 
 pub struct State;
 
-impl traits::State for State {
+impl cursor::State for State {
     type ClientHandles = NotApplicable;
 
     type ServerHandles = NotApplicable;

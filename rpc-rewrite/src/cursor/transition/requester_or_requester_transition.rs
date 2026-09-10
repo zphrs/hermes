@@ -2,7 +2,7 @@ use crate::{
     cursor::transition::RequesterTransitionEntrypoint,
     io,
     markers::NotApplicable,
-    traits::{Method, method::ReqOf},
+    method::{Method, ReqOf},
 };
 
 use super::super::requester;

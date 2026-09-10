@@ -12,6 +12,7 @@ use tracing::trace;
 use crate::{
     cursor::{
         Cursor,
+        state::{self, WrapperCredit},
         tests::{
             harness,
             race::states::entrypoint::{self, ClientRequestWins, ServerRequestWins},
@@ -19,9 +20,9 @@ use crate::{
         transition::{RequesterOrRequesterTransition, next, tiebreak},
     },
     markers::{Client, Server, not_applicable},
-    traits::{
+    method::{
+        self,
         handler::{TransitionLeafHandler, root_method::RootHandler},
-        state,
     },
 };
 
@@ -38,10 +39,10 @@ impl TransitionLeafHandler<entrypoint::ClientRequestWins> for ServerHandler {
 
     async fn handle_transition<'a>(
         &mut self,
-        duration: crate::traits::method::ReqOf<'a, entrypoint::ClientRequestWins>,
-        wrapper_credit: crate::traits::state::WrapperCredit<entrypoint::ClientRequestWins>,
+        duration: method::ReqOf<'a, entrypoint::ClientRequestWins>,
+        wrapper_credit: WrapperCredit<entrypoint::ClientRequestWins>,
     ) -> (
-        crate::traits::method::ResOf<'a, entrypoint::ClientRequestWins>,
+        method::ResOf<'a, entrypoint::ClientRequestWins>,
         Self::NextHandler,
     ) {
         tokio::time::sleep(duration).await;
@@ -141,10 +142,10 @@ impl TransitionLeafHandler<entrypoint::ServerRequestWins> for ClientHandler {
 
     async fn handle_transition<'a>(
         &mut self,
-        duration: crate::traits::method::ReqOf<'a, entrypoint::ServerRequestWins>,
-        wrapper_credit: crate::traits::state::WrapperCredit<entrypoint::ServerRequestWins>,
+        duration: method::ReqOf<'a, entrypoint::ServerRequestWins>,
+        wrapper_credit: WrapperCredit<entrypoint::ServerRequestWins>,
     ) -> (
-        crate::traits::method::ResOf<'a, entrypoint::ServerRequestWins>,
+        method::ResOf<'a, entrypoint::ServerRequestWins>,
         Self::NextHandler,
     ) {
         tokio::time::sleep(duration).await;

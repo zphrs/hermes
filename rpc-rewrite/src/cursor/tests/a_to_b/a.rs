@@ -1,13 +1,12 @@
+use crate::cursor::state;
 use crate::markers::{False, NotApplicable, True, not_applicable};
-use crate::traits::{
-    self,
+use crate::method::{
+    self, ReqOf, ResOf,
     handler::{TransitionLeafHandler, root_method::RootMethod},
-    method::{ReqOf, ResOf},
-    state,
 };
 
 pub struct Method;
-impl traits::Method for Method {
+impl method::Method for Method {
     type Req<'buf> = ();
 
     type Res<'buf> = state::Wrapper<super::b::State>;
@@ -34,7 +33,7 @@ impl TransitionLeafHandler for Method {
 
 pub struct State;
 
-impl traits::State for State {
+impl state::State for State {
     type ClientHandles = NotApplicable;
 
     type ServerHandles = RootMethod<Method>;

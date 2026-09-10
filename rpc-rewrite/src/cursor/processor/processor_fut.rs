@@ -3,11 +3,7 @@ use std::{
     future::{Pending, pending},
 };
 
-use crate::{
-    io,
-    markers::NotApplicable,
-    traits::{self},
-};
+use crate::{io, markers::NotApplicable, method};
 
 use super::{
     Processor,
@@ -37,7 +33,7 @@ impl<Fut> ProcessorFut<Fut> {
 }
 /// Convenience conversion to convert a Processor into a ProcessorFut.
 /// Polling this future is always a no-op.
-impl<State, Role, RootMethod: traits::method::Branch, C: io::Connection, Handler>
+impl<State, Role, RootMethod: method::Branch, C: io::Connection, Handler>
     From<Processor<State, Role, RootMethod, C, Handler>>
     for ProcessorFut<
         Pending<

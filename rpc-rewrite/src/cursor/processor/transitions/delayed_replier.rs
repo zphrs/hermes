@@ -1,13 +1,12 @@
 use std::{convert::Infallible, marker::PhantomData};
 
 use crate::{
+    cursor::state::WrapperCredit,
     io::{BytesWriteStream, write},
-    traits::{
-        self,
-        handler::BranchHandler,
-        method::{self, ResOf, handler},
-        replier,
-        state::WrapperCredit,
+    method::{
+        self, ResOf,
+        handler::{self, BranchHandler},
+        replier::{self, Replier},
     },
 };
 
@@ -70,9 +69,7 @@ impl<M: method::Branch, SendStream: BytesWriteStream> DelayedReplier<M, SendStre
     }
 }
 
-impl<M: method::Branch, SendStream: BytesWriteStream> traits::Replier<M>
-    for DelayedReplier<M, SendStream>
-{
+impl<M: method::Branch, SendStream: BytesWriteStream> Replier<M> for DelayedReplier<M, SendStream> {
     type Receipt<Res> = Receipt<Res, SendStream>;
 
     type Error = minicbor::encode::Error<Infallible>;
@@ -214,7 +211,7 @@ impl<Res, SendStream: BytesWriteStream> Receipt<Res, SendStream> {
     }
 }
 
-impl<Res, SendStream: BytesWriteStream> traits::Receipt<Res> for Receipt<Res, SendStream> {
+impl<Res, SendStream: BytesWriteStream> replier::Receipt<Res> for Receipt<Res, SendStream> {
     type Error = SendStream::Error;
 
     async fn finalize(mut self) -> Result<Res, Self::Error> {

@@ -5,11 +5,7 @@ use crate::io::Connection;
 
 use crate::{
     io::read::read,
-    traits::{
-        self, Receipt as _, handler,
-        method::{self, ReqOf, ResOf},
-        replier,
-    },
+    method::{self, ReqOf, ResOf, handler, replier, replier::Receipt},
 };
 use std::convert::Infallible;
 
@@ -28,7 +24,7 @@ impl<
         ResOf<'buf, RootMethod>,
         super::Error<
             C,
-            <replier::futures_io::Replier<RootMethod, C::SendStream> as traits::Replier<
+            <replier::futures_io::Replier<RootMethod, C::SendStream> as replier::Replier<
                 RootMethod,
             >>::Error,
             Infallible,
@@ -85,7 +81,7 @@ impl<
 
 pub type HandleLoopbackError<C, RootMethod> = super::Error<
     C,
-    <replier::futures_io::Replier<RootMethod, <C as Connection>::SendStream> as traits::Replier<
+    <replier::futures_io::Replier<RootMethod, <C as Connection>::SendStream> as replier::Replier<
         RootMethod,
     >>::Error,
     Infallible,
