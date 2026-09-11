@@ -8,20 +8,15 @@ use tracing::{instrument, trace};
 
 use crate::{
     cursor::{
-        processor::{
-            ProcessorFut,
-            transitions::{
-                delayed_replier::TransitionReply,
-                processor_transition::{self, ProcessorTransition},
-            },
-        },
+        processor::{self, ProcessorFut, transition::delayed_replier::TransitionReply},
         role,
         transition::{
-            NextError, RequesterTransitionEntrypoint, SharedCredit, Won,
+            NextError, SharedCredit, Won,
             next::{
                 ProcessorSacrificed,
                 definite_tiebreak::{self},
             },
+            requester_transition,
         },
     },
     io::notify,
@@ -54,7 +49,7 @@ pub async fn with_requester_transition<
     Fut,
     ProcessorError,
 >(
-    requester: RequesterTransitionEntrypoint<
+    requester: requester_transition::Entrypoint<
         'rbuf,
         State,
         Role,
@@ -68,12 +63,7 @@ where
     for<'a> ResOf<'a, RequesterMethod>: minicbor::Decode<'a, ()>,
     Fut: Future<
         Output = std::result::Result<
-            ProcessorTransition<
-                State,
-                Role,
-                C,
-                processor_transition::ReplyPrimed<PRes, C::SendStream, NextHandler>,
-            >,
+            processor::transition::Entrypoint<State, Role, C, PRes, NextHandler>,
             ProcessorError,
         >,
     >,

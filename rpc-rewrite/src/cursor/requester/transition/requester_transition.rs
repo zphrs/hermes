@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::{
-    cursor::processor::transitions::delayed_replier::TransitionReply,
+    cursor::processor::transition::delayed_replier::TransitionReply,
     io::{BytesReadStream, Connection},
     method::{Method, ResOf},
 };
@@ -21,6 +21,9 @@ pub struct Sent<'buf, RootRequest, Recv: BytesReadStream, M> {
     buf: &'buf mut Vec<u8>,
     _marker: PhantomData<M>,
 }
+
+pub type Entrypoint<'buf, State, Role, C, RootRequest, M> =
+    RequesterTransition<State, Role, C, Sent<'buf, RootRequest, <C as Connection>::RecvStream, M>>;
 
 impl<'buf, State, Role, C: Connection, RootRequest, M: Method>
     RequesterTransition<State, Role, C, Sent<'buf, RootRequest, C::RecvStream, M>>

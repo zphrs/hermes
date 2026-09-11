@@ -24,6 +24,8 @@ type HandleTransitionRequestResult<'a, State, Role, C, RootMethod, Handler> = Re
     super::Error<C, minicbor::encode::Error<Infallible>, Infallible>,
 >;
 
+pub use processor_transition::{Entrypoint, Finished, ProcessorTransition, ReplyPrimed};
+
 impl<
     State,
     Role,
@@ -91,6 +93,4 @@ impl<
     }
 }
 
-pub mod processor_transition;
-
-use processor_transition::ProcessorTransition;
+mod processor_transition;

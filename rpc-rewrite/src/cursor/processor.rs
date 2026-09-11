@@ -1,7 +1,7 @@
 pub mod buffers;
 pub mod loopback;
 pub mod processor_fut;
-pub mod transitions;
+pub mod transition;
 
 use crate::{io::Connection, method};
 pub use buffers::Buffers;

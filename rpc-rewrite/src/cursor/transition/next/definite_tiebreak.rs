@@ -1,9 +1,9 @@
 use crate::{
     cursor::{
-        processor::transitions::delayed_replier::TransitionReply,
+        processor::{self, transition::delayed_replier::TransitionReply},
         requester::transition::{RequesterTransition, requester_transition::Finished},
         role,
-        transition::{ProcessorTransitionEntrypoint, SharedCredit, Won, next::ProcessorSacrificed},
+        transition::{SharedCredit, Won, next::ProcessorSacrificed},
     },
     io::{Connection, notify, read, write},
 };
@@ -30,7 +30,7 @@ pub(super) async fn definite_tiebreak_fn<
     RRes,
     NextHandler,
 >(
-    mut processor_transition: ProcessorTransitionEntrypoint<State, Role, C, PRes, NextHandler>,
+    mut processor_transition: processor::transition::Entrypoint<State, Role, C, PRes, NextHandler>,
     recv_fut: impl Future<
         Output = Result<
             (

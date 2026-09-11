@@ -7,27 +7,9 @@ pub use tiebreak::tiebreak;
 
 use std::marker::PhantomData;
 
-use crate::io;
-
-use super::{
-    processor::transitions::processor_transition::{self, ProcessorTransition},
-    requester::transition::{RequesterTransition, requester_transition},
-};
-
-pub type RequesterTransitionEntrypoint<'buf, State, Role, C, RootRequest, M> = RequesterTransition<
-    State,
-    Role,
-    C,
-    requester_transition::Sent<'buf, RootRequest, <C as io::Connection>::RecvStream, M>,
->;
+use super::requester::transition::requester_transition;
 
 pub use requester_or_requester_transition::RequesterOrRequesterTransition;
-pub type ProcessorTransitionEntrypoint<State, Role, C, Res, NextHandler> = ProcessorTransition<
-    State,
-    Role,
-    C,
-    processor_transition::ReplyPrimed<Res, <C as io::Connection>::SendStream, NextHandler>,
->;
 
 pub enum Won<PRes, RRes, NextHandler> {
     Processor {

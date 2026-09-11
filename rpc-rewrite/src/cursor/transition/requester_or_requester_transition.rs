@@ -1,5 +1,5 @@
 use crate::{
-    cursor::transition::RequesterTransitionEntrypoint,
+    cursor::transition::requester_transition,
     io,
     marker::NotApplicable,
     method::{Method, ReqOf},
@@ -18,7 +18,7 @@ pub enum RequesterOrRequesterTransition<
 > {
     Requester(requester::Requester<State, Role, RootMethod, C>),
     RequesterTransition(
-        RequesterTransitionEntrypoint<'buf, State, Role, C, ReqOf<'req, RootMethod>, M>,
+        requester_transition::Entrypoint<'buf, State, Role, C, ReqOf<'req, RootMethod>, M>,
     ),
 }
 

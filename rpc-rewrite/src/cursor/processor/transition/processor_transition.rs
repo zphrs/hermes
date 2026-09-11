@@ -18,6 +18,13 @@ pub struct ReplyPrimed<Res, SendStream: BytesWriteStream, NextHandler> {
     next_handler: NextHandler,
 }
 
+pub type Entrypoint<State, Role, C, Res, NextHandler> = ProcessorTransition<
+    State,
+    Role,
+    C,
+    ReplyPrimed<Res, <C as io::Connection>::SendStream, NextHandler>,
+>;
+
 impl<State, Role, C: io::Connection, Res, SendStream: BytesWriteStream, NextHandler>
     ProcessorTransition<State, Role, C, ReplyPrimed<Res, SendStream, NextHandler>>
 {

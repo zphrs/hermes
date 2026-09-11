@@ -6,15 +6,10 @@ use crate::{
     Method,
     cursor::{
         self,
-        processor::{
-            ProcessorFut,
-            transitions::processor_transition::{self, ProcessorTransition},
-        },
+        processor::{self, ProcessorFut},
+        requester::transition::requester_transition,
         role,
-        transition::{
-            ProcessorTransitionEntrypoint, RequesterOrRequesterTransition,
-            RequesterTransitionEntrypoint, Won, next,
-        },
+        transition::{RequesterOrRequesterTransition, Won, next},
     },
     io,
     method::ResOf,
@@ -44,7 +39,7 @@ pub async fn tiebreak<
     eventual_processor: &mut (
              impl Future<
         Output = Result<
-            ProcessorTransitionEntrypoint<State, Role, C, ProcessorRes, NextHandler>,
+            processor::transition::Entrypoint<State, Role, C, ProcessorRes, NextHandler>,
             ProcessorError,
         >,
     > + Unpin
@@ -52,7 +47,7 @@ pub async fn tiebreak<
     eventual_requester: &mut (
              impl Future<
         Output = Result<
-            RequesterTransitionEntrypoint<'rbuf, State, Role, C, RootRequest, RequesterMethod>,
+            requester_transition::Entrypoint<'rbuf, State, Role, C, RootRequest, RequesterMethod>,
             RequesterError,
         >,
     > + Unpin
@@ -88,11 +83,11 @@ pub enum With<
 }
 
 pub struct WithProcessor<State, Role, C: io::Connection, Res, NextHandler>(
-    ProcessorTransitionEntrypoint<State, Role, C, Res, NextHandler>,
+    processor::transition::Entrypoint<State, Role, C, Res, NextHandler>,
 );
 
 pub struct WithRequester<'rbuf, State, Role, C: io::Connection, RootRequest, M>(
-    RequesterTransitionEntrypoint<'rbuf, State, Role, C, RootRequest, M>,
+    requester_transition::Entrypoint<'rbuf, State, Role, C, RootRequest, M>,
 );
 
 #[expect(private_bounds, reason = "role")]
@@ -113,12 +108,7 @@ impl<'rbuf, State, Role: role::Sealed, C: io::Connection, RootRequest, M: Method
         for<'a> ResOf<'a, M>: minicbor::Decode<'a, ()>,
         Fut: Future<
             Output = std::result::Result<
-                ProcessorTransition<
-                    State,
-                    Role,
-                    C,
-                    processor_transition::ReplyPrimed<ProcessorRes, C::SendStream, NextHandler>,
-                >,
+                processor::transition::Entrypoint<State, Role, C, ProcessorRes, NextHandler>,
                 ProcessorError,
             >,
         >,

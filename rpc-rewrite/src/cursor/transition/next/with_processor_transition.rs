@@ -1,9 +1,8 @@
 use super::super::{
-    NextError, ProcessorTransitionEntrypoint, RequesterOrRequesterTransition, SharedCredit, Won,
-    next::ProcessorSacrificed,
+    NextError, RequesterOrRequesterTransition, SharedCredit, Won, next::ProcessorSacrificed,
 };
 use crate::{
-    cursor::role,
+    cursor::{processor, role},
     io::{
         notify::{self},
         write,
@@ -37,7 +36,7 @@ pub async fn with_processor_transition<
     RequesterMethod: Method,
     RequesterError,
 >(
-    processor: ProcessorTransitionEntrypoint<State, Role, C, PRes, NextHandler>,
+    processor: processor::transition::Entrypoint<State, Role, C, PRes, NextHandler>,
     requester: impl Future<
         Output = std::result::Result<
             RequesterOrRequesterTransition<

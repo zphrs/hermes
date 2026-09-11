@@ -5,10 +5,7 @@ use std::{
 
 use crate::{io, marker::NotApplicable, method};
 
-use super::{
-    Processor,
-    transitions::processor_transition::{ProcessorTransition, ReplyPrimed},
-};
+use super::{Processor, transition};
 
 /// marker struct for any future that takes ownership of a [`Processor`].
 /// Dropping this future MUST drop the owned Processor as well.
@@ -36,17 +33,7 @@ impl<Fut> ProcessorFut<Fut> {
 impl<State, Role, RootMethod: method::Branch, C: io::Connection, Handler>
     From<Processor<State, Role, RootMethod, C, Handler>>
     for ProcessorFut<
-        Pending<
-            Result<
-                ProcessorTransition<
-                    State,
-                    Role,
-                    C,
-                    ReplyPrimed<NotApplicable, C::SendStream, Handler>,
-                >,
-                Infallible,
-            >,
-        >,
+        Pending<Result<transition::Entrypoint<State, Role, C, NotApplicable, Handler>, Infallible>>,
     >
 {
     fn from(_value: Processor<State, Role, RootMethod, C, Handler>) -> Self {
