@@ -17,7 +17,7 @@ use crate::{
             harness,
             race::states::entrypoint::{self, ClientRequestWins, ServerRequestWins},
         },
-        transition::{RequesterOrRequesterTransition, next, tiebreak},
+        transition::{RequesterOrRequesterTransition, tiebreak},
     },
     marker::{Client, Server, not_applicable},
     method::{
@@ -91,31 +91,39 @@ async fn server(
         }
     };
     let mut requester_fut = pin!(requester_fut);
-    let (winner, credit) = match tiebreak(&mut processor_fut, &mut requester_fut).await {
-        crate::cursor::transition::TiebreakResult::Processor(processor_transition) => {
+    // tiebreak call 1
+    let (winner, credit) = match tiebreak(&mut processor_fut, &mut requester_fut).await? {
+        // if processor won then extract processor_transition and create a
+        // future that resolves to RequesterOrRequesterTransition
+        // Then call next::with_processor_transition
+        tiebreak::With::Processor(processor_transition) => {
             trace!("processor won");
-            let p_transition = processor_transition?;
             need_requester.notify_one();
-            let (winner, credit) = next::with_processor_transition(p_transition, async move {
-                let res = match select(requester_fut, to_requester.1).await {
-                    futures::future::Either::Left((requester_transition, _)) => {
-                        RequesterOrRequesterTransition::RequesterTransition(requester_transition?)
-                    }
-                    futures::future::Either::Right((requester, _)) => {
-                        RequesterOrRequesterTransition::Requester(requester?)
-                    }
-                };
+            let (winner, credit) = processor_transition
+                .next(async move {
+                    let res = match select(requester_fut, to_requester.1).await {
+                        futures::future::Either::Left((requester_transition, _)) => {
+                            RequesterOrRequesterTransition::RequesterTransition(
+                                requester_transition?,
+                            )
+                        }
+                        futures::future::Either::Right((requester, _)) => {
+                            RequesterOrRequesterTransition::Requester(requester?)
+                        }
+                    };
 
-                anyhow::Ok(res)
-            })
-            .await?;
+                    anyhow::Ok(res)
+                })
+                .await?;
             (winner, credit)
         }
-        crate::cursor::transition::TiebreakResult::Requester(requester_transition) => {
+        // if requester won then extract requester_transition and provide
+        // processor_fut (since this thread is the one that handles processing
+        // requests)
+        // Then call next::with_requester_transition
+        tiebreak::With::Requester(requester_transition) => {
             trace!("requester won");
-            let (winner, credit) =
-                next::with_requester_transition(requester_transition?, processor_fut).await?;
-
+            let (winner, credit) = requester_transition.next(processor_fut).await?;
             (winner, credit)
         }
     };
@@ -196,30 +204,31 @@ async fn client(
         }
     };
     let mut requester_fut = pin!(requester_fut);
-    let (winner, credit) = match tiebreak(&mut processor_fut, &mut requester_fut).await {
-        crate::cursor::transition::TiebreakResult::Processor(processor_transition) => {
+    let (winner, credit) = match tiebreak(&mut processor_fut, &mut requester_fut).await? {
+        crate::cursor::transition::tiebreak::With::Processor(processor_transition) => {
             trace!("processor won");
-            let p_transition = processor_transition?;
             need_requester.notify_one();
-            let (winner, credit) = next::with_processor_transition(p_transition, async move {
-                let res = match select(requester_fut, to_requester.1).await {
-                    futures::future::Either::Left((requester_transition, _)) => {
-                        RequesterOrRequesterTransition::RequesterTransition(requester_transition?)
-                    }
-                    futures::future::Either::Right((requester, _)) => {
-                        RequesterOrRequesterTransition::Requester(requester?)
-                    }
-                };
+            let (winner, credit) = processor_transition
+                .next(async move {
+                    let res = match select(requester_fut, to_requester.1).await {
+                        futures::future::Either::Left((requester_transition, _)) => {
+                            RequesterOrRequesterTransition::RequesterTransition(
+                                requester_transition?,
+                            )
+                        }
+                        futures::future::Either::Right((requester, _)) => {
+                            RequesterOrRequesterTransition::Requester(requester?)
+                        }
+                    };
 
-                anyhow::Ok(res)
-            })
-            .await?;
+                    anyhow::Ok(res)
+                })
+                .await?;
             (winner, credit)
         }
-        crate::cursor::transition::TiebreakResult::Requester(requester_transition) => {
+        crate::cursor::transition::tiebreak::With::Requester(requester_transition) => {
             trace!("requester won");
-            let (winner, credit) =
-                next::with_requester_transition(requester_transition?, processor_fut).await?;
+            let (winner, credit) = requester_transition.next(processor_fut).await?;
 
             (winner, credit)
         }
