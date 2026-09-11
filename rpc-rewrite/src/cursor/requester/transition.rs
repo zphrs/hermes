@@ -3,22 +3,18 @@ pub mod requester_transition;
 use super::Requester;
 use crate::{
     cursor::requester::transition::requester_transition::Sent,
-    io::{self, BytesWriteStream, Connection},
+    io::{self, Connection},
     method::{self, ReqOf, ResOf},
 };
-
-use std::convert::Infallible;
 
 pub use requester_transition::RequesterTransition;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RequestTransitionError<C: Connection> {
-    #[error("opening: {0}")]
-    Open(C::OpenError),
-    #[error("io: {0}")]
-    Write(<C::SendStream as BytesWriteStream>::Error),
-    #[error("encode: {0}")]
-    Encode(#[from] minicbor::encode::Error<Infallible>),
+    #[error("could not open stream")]
+    Open(#[source] C::OpenError),
+    #[error("could not write request")]
+    Write(#[from] io::write::Error<C::SendStream>),
 }
 
 impl<State, Role, RootMethod: method::Method, C: Connection> Requester<State, Role, RootMethod, C> {
@@ -44,15 +40,8 @@ impl<State, Role, RootMethod: method::Method, C: Connection> Requester<State, Ro
             .await
             .map_err(RequestTransitionError::Open)?;
         let root_request = M::req_to_parent(request);
-        read_into.clear();
-        read_into.reserve(minicbor::len(&root_request));
-        let mut buf = Vec::with_capacity(minicbor::len(&root_request));
-        minicbor::encode::<&ReqOf<RootMethod>, _>(&root_request, &mut buf)?;
-        io::write::bytes(send, buf.into(), false)
-            .await
-            .map_err(RequestTransitionError::Write)?;
-        // send dropped here
-        read_into.clear();
+        crate::io::write(&root_request, send).await?;
+
         Ok(RequesterTransition::new_sent(
             self.connection,
             recv,
