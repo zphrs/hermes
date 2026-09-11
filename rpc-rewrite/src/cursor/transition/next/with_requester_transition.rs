@@ -60,7 +60,7 @@ pub async fn with_requester_transition<
     processor: Pin<&mut ProcessorFut<Fut>>,
 ) -> Result<'rbuf, State, Role, C, PRes, RequesterMethod, NextHandler, ProcessorError>
 where
-    for<'a> ResOf<'a, RequesterMethod>: minicbor::Decode<'a, ()>,
+    ResOf<'rbuf, RequesterMethod>: minicbor::Decode<'rbuf, ()>,
     Fut: Future<
         Output = std::result::Result<
             processor::transition::Entrypoint<State, Role, C, PRes, NextHandler>,

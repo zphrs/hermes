@@ -27,7 +27,13 @@ pub struct SharedCredit<State, Role, C> {
 }
 
 impl<State, Role, C> SharedCredit<State, Role, C> {
-    pub fn into_connection(self) -> C {
+    pub(crate) fn new(connection: C) -> Self {
+        Self {
+            _marker: PhantomData,
+            connection,
+        }
+    }
+    pub(crate) fn into_connection(self) -> C {
         self.connection
     }
 }

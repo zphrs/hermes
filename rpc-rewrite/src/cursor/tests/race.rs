@@ -64,7 +64,7 @@ async fn server(
 
     let (processor, requester) = e_cursor.into_processor_and_requester(RootHandler(ServerHandler));
     let mut buf = Vec::new();
-    let mut processor_fut = pin!(processor.handle_transition_request(&mut buf));
+    let mut processor_fut = pin!(processor.handle_concurrent_transition_request(&mut buf));
     let mut read_into = Vec::new();
     let need_requester = tokio::sync::Notify::new();
     let to_requester = oneshot::channel();
@@ -85,7 +85,7 @@ async fn server(
             futures::future::Either::Right(_) => {
                 // slept
                 requester
-                    .request_transition::<ServerRequestWins>(request, &mut read_into)
+                    .request_concurrent_transition::<ServerRequestWins>(request, &mut read_into)
                     .await
             }
         }
@@ -177,7 +177,7 @@ async fn client(
 
     let (processor, requester) = e_cursor.into_processor_and_requester(RootHandler(ClientHandler));
     let mut buf = Vec::new();
-    let mut processor_fut = pin!(processor.handle_transition_request(&mut buf));
+    let mut processor_fut = pin!(processor.handle_concurrent_transition_request(&mut buf));
     let mut read_into = Vec::new();
     let need_requester = tokio::sync::Notify::new();
     let to_requester = oneshot::channel();
@@ -198,7 +198,7 @@ async fn client(
             futures::future::Either::Right(_) => {
                 // slept
                 requester
-                    .request_transition::<ClientRequestWins>(request, &mut read_into)
+                    .request_concurrent_transition::<ClientRequestWins>(request, &mut read_into)
                     .await
             }
         }

@@ -1,14 +1,85 @@
-use std::convert::Infallible;
+use std::{convert::Infallible, fmt::Debug};
 
 use super::Processor;
 use crate::{
-    cursor::processor::ProcessorFut,
-    io::Connection,
-    method::{self, ReqOf, ResOf, handler::TransitionBranchHandler, replier::Replier},
+    cursor::{processor::ProcessorFut, requester::Requester, transition::SharedCredit},
+    io::{Connection, write},
+    marker::NotApplicable,
+    method::{self, ReqOf, ResOf, handler::TransitionBranchHandler},
 };
 
 pub mod delayed_replier;
 use delayed_replier::DelayedReplier;
+
+/// rpc processing follows these steps:
+/// 1. accept stream
+/// 2. [`Read`] request
+/// 3. handle request (currently is infallible)
+/// 4. reply response
+#[derive(thiserror::Error)]
+pub enum ConcurrentError<C: Connection, HandlerError> {
+    #[error("could not accept stream")]
+    Accept(#[source] C::AcceptError),
+    #[error("could not read request")]
+    Read(#[from] crate::io::read::Error<C::RecvStream>),
+    #[error("handler error: {0}")]
+    Handler(#[source] HandlerError),
+    #[error("could not encode response")]
+    Encode(#[from] minicbor::encode::Error<Infallible>),
+}
+
+impl<C: Connection, HandlerError: Debug> Debug for ConcurrentError<C, HandlerError>
+where
+    C::AcceptError: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Accept(arg0) => f.debug_tuple("Accept").field(arg0).finish(),
+            Self::Read(arg0) => f.debug_tuple("Read").field(arg0).finish(),
+            Self::Handler(arg0) => f.debug_tuple("Handler").field(arg0).finish(),
+            Self::Encode(arg0) => f.debug_tuple("Encode").field(arg0).finish(),
+        }
+    }
+}
+
+#[derive(thiserror::Error)]
+pub enum Error<C: Connection, HandlerError> {
+    #[error("could not accept stream")]
+    Accept(#[source] C::AcceptError),
+    #[error("could not read request")]
+    Read(#[from] crate::io::read::Error<C::RecvStream>),
+    #[error("handler error: {0}")]
+    Handler(#[source] HandlerError),
+    #[error("could not write response")]
+    Write(#[from] write::Error<C::SendStream>),
+}
+
+impl<C: Connection, HandlerError: Debug> Debug for Error<C, HandlerError>
+where
+    C::AcceptError: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Accept(arg0) => f.debug_tuple("Accept").field(arg0).finish(),
+            Self::Read(arg0) => f.debug_tuple("Read").field(arg0).finish(),
+            Self::Handler(arg0) => f.debug_tuple("Handler").field(arg0).finish(),
+            Self::Write(arg0) => f.debug_tuple("Write").field(arg0).finish(),
+        }
+    }
+}
+
+impl<C: Connection, HandlerError: Debug> From<ConcurrentError<C, HandlerError>>
+    for Error<C, HandlerError>
+{
+    fn from(value: ConcurrentError<C, HandlerError>) -> Self {
+        match value {
+            ConcurrentError::Accept(error) => Self::Accept(error),
+            ConcurrentError::Read(error) => Self::Read(error),
+            ConcurrentError::Handler(error) => Self::Handler(error),
+            ConcurrentError::Encode(error) => Self::Write(write::Error::Encode(error)),
+        }
+    }
+}
 
 type HandleTransitionRequestResult<'a, State, Role, C, RootMethod, Handler> = Result<
     ProcessorTransition<
@@ -21,7 +92,7 @@ type HandleTransitionRequestResult<'a, State, Role, C, RootMethod, Handler> = Re
             <Handler as TransitionBranchHandler<RootMethod>>::NextHandler,
         >,
     >,
-    super::Error<C, minicbor::encode::Error<Infallible>, Infallible>,
+    ConcurrentError<C, Infallible>,
 >;
 
 pub use processor_transition::{Entrypoint, Finished, ProcessorTransition, ReplyPrimed};
@@ -34,7 +105,7 @@ impl<
     Handler: TransitionBranchHandler<RootMethod>,
 > Processor<State, Role, RootMethod, C, Handler>
 {
-    pub fn handle_transition_request(
+    pub fn handle_concurrent_transition_request(
         self,
         write: &mut Vec<u8>,
     ) -> ProcessorFut<
@@ -43,10 +114,10 @@ impl<
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
     {
-        ProcessorFut::new(self.handle_transition_request_inner(write))
+        ProcessorFut::new(self.handle_concurrent_transition_request_inner(write))
     }
 
-    async fn handle_transition_request_inner(
+    async fn handle_concurrent_transition_request_inner(
         self,
         write: &mut Vec<u8>,
     ) -> Result<
@@ -60,11 +131,7 @@ impl<
                 Handler::NextHandler,
             >,
         >,
-        super::Error<
-            C,
-            <DelayedReplier<RootMethod, C::SendStream> as Replier<RootMethod>>::Error,
-            Infallible,
-        >,
+        ConcurrentError<C, Infallible>,
     >
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
@@ -73,7 +140,7 @@ impl<
             .connection
             .accept_stream()
             .await
-            .map_err(super::Error::Accept)?;
+            .map_err(ConcurrentError::Accept)?;
 
         let delayed_replier: DelayedReplier<RootMethod, _> = DelayedReplier::new(stream.0);
 
@@ -83,12 +150,48 @@ impl<
             .handler
             .handle_transition(request, delayed_replier)
             .await
-            .map_err(super::Error::Replier)?;
+            .map_err(ConcurrentError::Encode)?;
 
         Ok(ProcessorTransition::new(
             self.connection,
             delayed_receipt,
             next_handler,
+        ))
+    }
+
+    pub async fn handle_transition_request(
+        self,
+        write: &mut Vec<u8>,
+        requester: Requester<State, Role, NotApplicable, C>,
+    ) -> Result<
+        (
+            ResOf<'_, RootMethod>,
+            Handler::NextHandler,
+            SharedCredit<State, Role, C>,
+        ),
+        Error<C, Infallible>,
+    >
+    where
+        for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
+    {
+        let processor_transition = self
+            .handle_concurrent_transition_request_inner(write)
+            .await?;
+        // we're good to just transition; no tiebreak
+        assert!(
+            requester.conn().stable_id() == processor_transition.conn().stable_id(),
+            "requester and processor MUST both belong to the same connection"
+        );
+        let ((res, next_handler), processor_transition) = processor_transition
+            .reply()
+            .await
+            .map_err(write::Error::Send)?;
+        // can avoid notifying because the other side shouldn't be expecting
+        // a transition
+        Ok((
+            res,
+            next_handler,
+            SharedCredit::new(processor_transition.into_conn()),
         ))
     }
 }

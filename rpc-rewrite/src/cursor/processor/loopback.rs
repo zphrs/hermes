@@ -8,6 +8,34 @@ use crate::{
     method::{self, ReqOf, ResOf, handler, replier, replier::Receipt},
 };
 use std::convert::Infallible;
+use std::fmt::Debug;
+
+#[derive(thiserror::Error)]
+pub enum Error<C: Connection, HandlerError> {
+    #[error("could not accept stream")]
+    Accept(#[source] C::AcceptError),
+    #[error("could not read request")]
+    Read(#[from] crate::io::read::Error<C::RecvStream>),
+    #[error("handler request: {0}")]
+    Handler(#[source] HandlerError),
+    #[error("could not write response")]
+    Write(#[from] crate::io::write::Error<C::SendStream>),
+}
+
+impl<C: Connection, HandlerError> std::fmt::Debug for Error<C, HandlerError>
+where
+    C::AcceptError: Debug,
+    HandlerError: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Accept(arg0) => f.debug_tuple("Accept").field(arg0).finish(),
+            Self::Read(arg0) => f.debug_tuple("Read").field(arg0).finish(),
+            Self::Handler(arg0) => f.debug_tuple("Handler").field(arg0).finish(),
+            Self::Write(arg0) => f.debug_tuple("Write").field(arg0).finish(),
+        }
+    }
+}
 
 impl<
     State,
@@ -20,16 +48,7 @@ impl<
     pub async fn handle_loopback_request<'buf>(
         &mut self,
         write: &'buf mut Vec<u8>,
-    ) -> Result<
-        ResOf<'buf, RootMethod>,
-        super::Error<
-            C,
-            <replier::immediate::Replier<RootMethod, C::SendStream> as replier::Replier<
-                RootMethod,
-            >>::Error,
-            Infallible,
-        >,
-    >
+    ) -> Result<ResOf<'buf, RootMethod>, Error<C, Infallible>>
     where
         ReqOf<'buf, RootMethod>: minicbor::Decode<'buf, ()>,
     {
@@ -37,7 +56,7 @@ impl<
             .connection
             .accept_stream()
             .await
-            .map_err(super::Error::Accept)?;
+            .map_err(Error::Accept)?;
 
         let (send, recv) = stream;
 
@@ -46,10 +65,7 @@ impl<
 
         write.clear();
         let request: ReqOf<RootMethod> = read(write, recv).await?;
-        let receipt = handler
-            .handle::<_>(request, replier)
-            .await
-            .map_err(super::Error::Replier)?;
+        let receipt = handler.handle(request, replier).await?;
 
         match receipt.finalize().await {
             Ok(res) => Ok(res),
@@ -57,7 +73,7 @@ impl<
         }
     }
 
-    async fn handle_loopback_requests_inner<'buffer>(mut self) -> HandleLoopbackError<C, RootMethod>
+    async fn handle_loopback_requests_inner<'buffer>(mut self) -> Error<C, Infallible>
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
     {
@@ -71,18 +87,10 @@ impl<
 
     pub fn handle_loopback_requests<'buffer>(
         self,
-    ) -> super::ProcessorFut<impl Future<Output = HandleLoopbackError<C, RootMethod>>>
+    ) -> super::ProcessorFut<impl Future<Output = Error<C, Infallible>>>
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
     {
         super::ProcessorFut::new(self.handle_loopback_requests_inner())
     }
 }
-
-pub type HandleLoopbackError<C, RootMethod> = super::Error<
-    C,
-    <replier::immediate::Replier<RootMethod, <C as Connection>::SendStream> as replier::Replier<
-        RootMethod,
-    >>::Error,
-    Infallible,
->;
