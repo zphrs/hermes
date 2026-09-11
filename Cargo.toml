@@ -9,9 +9,9 @@ expect-test.opt-level = 3
 tracing-subscriber = { git = 'https://github.com/zphrs/tracing.git' }
 tracing = { git = 'https://github.com/zphrs/tracing.git' }
 tracing-core = { git = 'https://github.com/zphrs/tracing.git' }
-getrandom4 = { git = 'https://github.com/zphrs/getrandom-twizzler.git', package = 'getrandom', branch = "deterministic-testing" }
-getrandom3 = { git = 'https://github.com/zphrs/getrandom-twizzler.git', package = 'getrandom',  branch = "getrandom-v0.2" }
-getrandom2 = { git = 'https://github.com/zphrs/getrandom-twizzler.git', package = 'getrandom',  branch = "getrandom-v0.3.5" }
+getrandom4 = { git = 'https://github.com/zphrs/getrandom.git', package = 'getrandom', branch = "deterministic-testing" }
+getrandom3 = { git = 'https://github.com/zphrs/getrandom.git', package = 'getrandom',  branch = "getrandom-v0.3.5" }
+getrandom2 = { git = 'https://github.com/zphrs/getrandom.git', package = 'getrandom',  branch = "getrandom-v0.2" }
 
 [profile.dev.package.rpc]
 opt-level = 3
