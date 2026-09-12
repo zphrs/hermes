@@ -3,7 +3,7 @@ use crate::{
         processor::{self, transition::delayed_replier::TransitionReply},
         requester::transition::{RequesterTransition, requester_transition::Finished},
         role,
-        transition::{SharedCredit, Won, next::ProcessorSacrificed},
+        transition::{CursorCredit, Won, next::ProcessorSacrificed},
     },
     io::{Connection, notify, read, write},
 };
@@ -40,7 +40,7 @@ pub(super) async fn definite_tiebreak_fn<
             crate::io::read::Error<<C as Connection>::RecvStream>,
         >,
     >,
-) -> Result<(Won<PRes, RRes, NextHandler>, SharedCredit<State, Role, C>), Error<C>> {
+) -> Result<(Won<PRes, RRes, NextHandler>, CursorCredit<State, Role, C>), Error<C>> {
     match Role::as_enum() {
         role::Role::Client => {
             trace!("as client");
@@ -56,7 +56,7 @@ pub(super) async fn definite_tiebreak_fn<
             trace!("notified");
             Ok((
                 Won::Processor { res, next_handler },
-                SharedCredit {
+                CursorCredit {
                     connection,
                     _marker: PhantomData,
                 },
@@ -75,7 +75,7 @@ pub(super) async fn definite_tiebreak_fn<
 
             Ok((
                 Won::Requester { res: res.reply },
-                SharedCredit {
+                CursorCredit {
                     connection,
                     _marker: PhantomData,
                 },

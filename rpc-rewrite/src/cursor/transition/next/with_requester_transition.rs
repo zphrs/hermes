@@ -11,7 +11,7 @@ use crate::{
         processor::{self, ProcessorFut, transition::delayed_replier::TransitionReply},
         role,
         transition::{
-            NextError, SharedCredit, Won,
+            CursorCredit, NextError, Won,
             next::{
                 ProcessorSacrificed,
                 definite_tiebreak::{self},
@@ -27,7 +27,7 @@ pub type Result<'rbuf, State, Role, C, PRes, RequesterMethod, NextHandler, Proce
     std::result::Result<
         (
             Won<PRes, ResOf<'rbuf, RequesterMethod>, NextHandler>,
-            SharedCredit<State, Role, C>,
+            CursorCredit<State, Role, C>,
         ),
         NextError<C, ProcessorError>,
     >;
@@ -107,7 +107,7 @@ where
             }
             Ok((
                 Won::Requester { res: reply },
-                SharedCredit {
+                CursorCredit {
                     _marker: PhantomData,
                     connection,
                 },

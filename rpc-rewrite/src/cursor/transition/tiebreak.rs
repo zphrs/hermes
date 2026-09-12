@@ -100,7 +100,7 @@ impl<'rbuf, State, Role: role::Sealed, C: io::Connection, RootRequest, M: Method
     ) -> std::result::Result<
         (
             cursor::transition::Won<ProcessorRes, <M as Method>::Res<'rbuf>, NextHandler>,
-            cursor::transition::SharedCredit<State, Role, C>,
+            cursor::transition::CursorCredit<State, Role, C>,
         ),
         cursor::transition::next::NextError<C, ProcessorError>,
     >
@@ -147,7 +147,7 @@ impl<State, Role: role::Sealed, C: io::Connection, Res, NextHandler>
     ) -> Result<
         (
             Won<Res, <RequesterMethod as Method>::Res<'rbuf>, NextHandler>,
-            cursor::transition::SharedCredit<State, Role, C>,
+            cursor::transition::CursorCredit<State, Role, C>,
         ),
         cursor::transition::NextError<C, RequesterError>,
     >

@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 pub use state::State;
 
 use crate::{
-    cursor::transition::SharedCredit,
+    cursor::transition::CursorCredit,
     io,
     marker::{Client, NotApplicable, Server},
 };
@@ -67,7 +67,7 @@ impl<State: state::Entrypoint, Role: role::Sealed, C: io::Connection> Cursor<Sta
 #[expect(private_bounds, reason = "for role")]
 impl<State: state::State, Role: role::Sealed, C: io::Connection> Cursor<State, Role, C> {
     pub fn from_cursor_credit<OldState>(
-        cursor_credit: SharedCredit<OldState, Role, C>,
+        cursor_credit: CursorCredit<OldState, Role, C>,
         new_state: state::Wrapper<State>,
     ) -> Self {
         Self {

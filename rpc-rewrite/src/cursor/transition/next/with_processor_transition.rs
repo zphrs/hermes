@@ -1,5 +1,5 @@
 use super::super::{
-    NextError, RequesterOrRequesterTransition, SharedCredit, Won, next::ProcessorSacrificed,
+    CursorCredit, NextError, RequesterOrRequesterTransition, Won, next::ProcessorSacrificed,
 };
 use crate::{
     cursor::{processor, role},
@@ -17,7 +17,7 @@ pub type Result<'rbuf, State, Role, C, PRes, NextHandler, RequesterMethod, Reque
     std::result::Result<
         (
             Won<PRes, ResOf<'rbuf, RequesterMethod>, NextHandler>,
-            SharedCredit<State, Role, C>,
+            CursorCredit<State, Role, C>,
         ),
         NextError<C, RequesterError>,
     >;
@@ -77,7 +77,7 @@ where
 
             Ok((
                 Won::Processor { res, next_handler },
-                SharedCredit {
+                CursorCredit {
                     connection,
                     _marker: PhantomData,
                 },

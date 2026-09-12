@@ -21,12 +21,12 @@ pub enum Won<PRes, RRes, NextHandler> {
     },
 }
 
-pub struct SharedCredit<State, Role, C> {
+pub struct CursorCredit<State, Role, C> {
     _marker: PhantomData<(State, Role)>,
     connection: C,
 }
 
-impl<State, Role, C> SharedCredit<State, Role, C> {
+impl<State, Role, C> CursorCredit<State, Role, C> {
     pub(crate) fn new(connection: C) -> Self {
         Self {
             _marker: PhantomData,

@@ -2,7 +2,7 @@ use std::{convert::Infallible, fmt::Debug};
 
 use super::Processor;
 use crate::{
-    cursor::{processor::ProcessorFut, requester::Requester, transition::SharedCredit},
+    cursor::{processor::ProcessorFut, requester::Requester, transition::CursorCredit},
     io::{Connection, write},
     marker::NotApplicable,
     method::{self, ReqOf, ResOf, handler::TransitionBranchHandler},
@@ -167,7 +167,7 @@ impl<
         (
             ResOf<'_, RootMethod>,
             Handler::NextHandler,
-            SharedCredit<State, Role, C>,
+            CursorCredit<State, Role, C>,
         ),
         Error<C, Infallible>,
     >
@@ -191,7 +191,7 @@ impl<
         Ok((
             res,
             next_handler,
-            SharedCredit::new(processor_transition.into_conn()),
+            CursorCredit::new(processor_transition.into_conn()),
         ))
     }
 }

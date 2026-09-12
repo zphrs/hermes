@@ -6,7 +6,7 @@ use crate::{
         self,
         processor::{Processor, transition::delayed_replier::TransitionReply},
         requester::transition::requester_transition::Sent,
-        transition::SharedCredit,
+        transition::CursorCredit,
     },
     io::{self, Connection},
     marker::{NotApplicable, not_applicable},
@@ -86,7 +86,7 @@ impl<State, Role, RootMethod: method::Method, C: Connection> Requester<State, Ro
         request: ReqOf<'req, M>,
         read_into: &'buf mut Vec<u8>,
         processor: Processor<State, Role, NotApplicable, C, not_applicable::Handler>,
-    ) -> Result<(ResOf<'buf, M>, SharedCredit<State, Role, C>), RequestTransitionError<C>>
+    ) -> Result<(ResOf<'buf, M>, CursorCredit<State, Role, C>), RequestTransitionError<C>>
     where
         ReqOf<'req, RootMethod>: minicbor::CborLen<()> + minicbor::Encode<()>,
         ResOf<'buf, M>: minicbor::Decode<'buf, ()>,
@@ -106,7 +106,7 @@ impl<State, Role, RootMethod: method::Method, C: Connection> Requester<State, Ro
         if in_tiebreak {
             Err(RequestTransitionError::InTiebreak)?
         }
-        Ok((reply, SharedCredit::new(connection)))
+        Ok((reply, CursorCredit::new(connection)))
     }
 }
 
