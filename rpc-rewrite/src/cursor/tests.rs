@@ -1,4 +1,5 @@
 mod a_to_b;
+mod hybrid;
 mod loopback;
 mod race;
 
