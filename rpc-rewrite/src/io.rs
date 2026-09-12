@@ -54,11 +54,16 @@ pub trait Connection {
     type Id: PartialEq;
     fn stable_id(&self) -> Self::Id;
 
+    type WaitForCloseError;
+    fn wait_for_close(self) -> impl Future<Output = Result<(), Self::WaitForCloseError>>;
+
     type CloseError;
-    fn wait_for_close(self) -> impl Future<Output = Result<(), Self::CloseError>>;
+    fn close(self) -> impl Future<Output = Result<(), Self::CloseError>>;
 }
 
 mod quinn {
+    use std::convert::Infallible;
+
     use bytes::Bytes;
 
     impl super::Connection for quinn::Connection {
@@ -101,10 +106,18 @@ mod quinn {
             self.stable_id()
         }
 
-        type CloseError = quinn::ConnectionError;
-        async fn wait_for_close(self) -> Result<(), Self::CloseError> {
+        type WaitForCloseError = quinn::ConnectionError;
+        async fn wait_for_close(self) -> Result<(), Self::WaitForCloseError> {
             self.closed().await;
             Ok(())
+        }
+
+        type CloseError = Infallible;
+
+        fn close(self) -> impl Future<Output = Result<(), Self::CloseError>> {
+            quinn::Connection::close(&self, 0u32.into(), b"");
+
+            async { Ok(()) }
         }
     }
 

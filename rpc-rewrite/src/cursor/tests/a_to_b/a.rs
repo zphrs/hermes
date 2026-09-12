@@ -1,5 +1,5 @@
 use crate::cursor::state;
-use crate::marker::{False, NotApplicable, True, not_applicable};
+use crate::marker::{Loopback, NotApplicable, Transition, not_applicable};
 use crate::method::{
     self, ReqOf, ResOf,
     handler::{TransitionLeafHandler, root_method::RootMethod},
@@ -8,19 +8,16 @@ use crate::method::{
 pub struct Method;
 impl method::Method for Method {
     type Req<'buf> = ();
-
     type Res<'buf> = state::Wrapper<super::b::State>;
 
-    type Transitions = True;
-
-    type HasDescendants = False;
+    type Type = method::LeafTransition;
 }
 
 impl TransitionLeafHandler for Method {
     type NextHandler = not_applicable::Handler;
 
     async fn handle_transition<'a>(
-        &mut self,
+        self,
         (): ReqOf<'a, Self>,
         wrapper_credit: state::WrapperCredit<Self>,
     ) -> (ResOf<'a, Self>, Self::NextHandler) {
@@ -34,7 +31,9 @@ impl TransitionLeafHandler for Method {
 pub struct State;
 
 impl state::State for State {
+    type ClientBranchType = Loopback;
     type ClientHandles = NotApplicable;
 
-    type ServerHandles = RootMethod<Method>;
+    type ServerBranchType = Transition;
+    type ServerHandles = RootMethod<Method, Transition>;
 }

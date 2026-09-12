@@ -1,11 +1,16 @@
 use std::marker::PhantomData;
 
-use crate::method::{self, Method, ResOf};
+use crate::{
+    marker::BranchType,
+    method::{self, Branch, LeafTransition, Method, ResOf},
+};
 
 pub trait State {
-    type ClientHandles: crate::method::Branch;
+    type ClientBranchType: BranchType;
+    type ClientHandles: method::OfType<Branch<Self::ClientBranchType>>;
 
-    type ServerHandles: crate::method::Branch;
+    type ServerBranchType: BranchType;
+    type ServerHandles: method::OfType<Branch<Self::ServerBranchType>>;
 }
 
 pub struct Wrapper<S: State>(PhantomData<S>);
@@ -42,7 +47,7 @@ impl<S: State> Has<S> for Wrapper<S> {
     }
 }
 
-impl<M: method::Transitions + method::Leaf, S: State> From<WrapperCredit<M>> for Wrapper<S>
+impl<M: method::OfType<LeafTransition>, S: State> From<WrapperCredit<M>> for Wrapper<S>
 where
     for<'a> ResOf<'a, M>: Has<S>,
 {
@@ -56,7 +61,7 @@ impl<S: State> Wrapper<S> {
         Self(PhantomData)
     }
 
-    pub const fn from_wrapper_credit<M: method::Transitions + method::Leaf>(
+    pub const fn from_wrapper_credit<M: method::OfType<LeafTransition>>(
         _credit: WrapperCredit<M>,
     ) -> Self
     where

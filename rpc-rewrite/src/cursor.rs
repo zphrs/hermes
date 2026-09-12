@@ -80,15 +80,23 @@ impl<State: state::State, Role: role::Sealed, C: io::Connection> Cursor<State, R
 
 // no need for entrypoint bound on struct if the caller has a wrapper because
 // a wrapper can only be created via a transition response
-#[expect(private_bounds, reason = "for role")]
 impl<
     State: state::State<ClientHandles = NotApplicable, ServerHandles = NotApplicable>,
-    Role: role::Sealed,
     C: io::Connection,
-> Cursor<State, Role, C>
+> Cursor<State, Server, C>
 {
-    pub async fn wait_to_close(self) -> Result<(), C::CloseError> {
+    pub async fn wait_to_close(self) -> Result<(), C::WaitForCloseError> {
         self.connection.wait_for_close().await
+    }
+}
+
+impl<
+    State: state::State<ClientHandles = NotApplicable, ServerHandles = NotApplicable>,
+    C: io::Connection,
+> Cursor<State, Client, C>
+{
+    pub async fn close(self) -> Result<(), C::CloseError> {
+        self.connection.close().await
     }
 }
 

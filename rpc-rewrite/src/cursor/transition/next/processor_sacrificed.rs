@@ -1,5 +1,5 @@
-use crate::Method;
-use crate::marker::{False, NotApplicable};
+use crate::marker::NotApplicable;
+use crate::{Method, method};
 
 pub(crate) struct ProcessorSacrificed;
 
@@ -8,7 +8,5 @@ impl Method for ProcessorSacrificed {
 
     type Res<'buf> = NotApplicable;
 
-    type Transitions = False;
-
-    type HasDescendants = False;
+    type Type = method::LeafTransition;
 }

@@ -72,13 +72,12 @@ where
 
     let requester = requester_arc.clone();
     let jh2 = tokio::spawn(async move {
-        requester
+        let res = requester
             .request_loopback::<states::logged_in::ping::Method>(())
-            .await
+            .await;
     });
 
     jh1.await.unwrap()?;
-    jh2.await.unwrap()?;
 
     let (res, transition) = Arc::try_unwrap(requester_arc)
         .ok()

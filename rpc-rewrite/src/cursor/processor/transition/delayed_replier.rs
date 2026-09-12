@@ -1,12 +1,13 @@
 use std::{convert::Infallible, marker::PhantomData};
 
 use crate::{
+    Method,
     cursor::state::WrapperCredit,
     io::{BytesWriteStream, write},
+    marker,
     method::{
         self, ResOf,
-        handler::{self, BranchHandler},
-        replier::{self, Replier},
+        handler::replier::{self, Replier},
     },
 };
 
@@ -46,12 +47,12 @@ impl<T> TransitionReply<T> {
     }
 }
 
-pub(super) struct DelayedReplier<M: method::Branch, SendStream: BytesWriteStream> {
+pub(super) struct DelayedReplier<M, SendStream: BytesWriteStream> {
     stream: SendStream,
     _marker: PhantomData<M>,
 }
 
-impl<M: method::Branch, SendStream: BytesWriteStream> DelayedReplier<M, SendStream> {
+impl<M, SendStream: BytesWriteStream> DelayedReplier<M, SendStream> {
     pub fn new(stream: SendStream) -> Self {
         Self {
             stream,
@@ -60,7 +61,7 @@ impl<M: method::Branch, SendStream: BytesWriteStream> DelayedReplier<M, SendStre
         }
     }
 
-    pub fn map<Descendant: method::Branch>(self) -> DelayedReplier<Descendant, SendStream> {
+    pub fn map<Descendant>(self) -> DelayedReplier<Descendant, SendStream> {
         let Self { stream, .. } = self;
         DelayedReplier {
             stream,
@@ -69,63 +70,47 @@ impl<M: method::Branch, SendStream: BytesWriteStream> DelayedReplier<M, SendStre
     }
 }
 
-impl<M: method::Branch, SendStream: BytesWriteStream> Replier<M> for DelayedReplier<M, SendStream> {
+impl<M: Method, SendStream: BytesWriteStream> Replier<M> for DelayedReplier<M, SendStream> {
     type Receipt<Res> = Receipt<Res, SendStream>;
 
     type Error = minicbor::encode::Error<Infallible>;
 
     async fn reply_with_branch<
-        'buf,
-        Descendant: method::Branch + method::Descendant<M>,
-        DescendantHandler: BranchHandler<Descendant>,
+        'req,
+        BT: marker::BranchType,
+        Descendant: method::OfType<method::Branch<BT>> + method::Descendant<M>,
+        DescendantHandler: method::handler::BranchHandler<Descendant>,
     >(
         self,
-        request: method::ReqOf<'buf, Descendant>,
+        request: method::ReqOf<'req, Descendant>,
         handler: &mut DescendantHandler,
-    ) -> Result<Self::Receipt<ResOf<'buf, M>>, Self::Error> {
+    ) -> Result<Self::Receipt<ResOf<'req, M>>, Self::Error> {
         let mapped_replier = self.map();
         let res: Receipt<_, _> = handler.handle(request, mapped_replier).await?;
         Ok(res.map(Descendant::res_to_parent))
     }
-
-    async fn reply_with_leaf<
-        'buf,
-        Descendant: method::Leaf + method::Descendant<M> + method::Loopback,
-        DescendantHandler: handler::LeafHandler<Descendant>,
-    >(
-        self,
-        request: method::ReqOf<'buf, Descendant>,
-        handler: &mut DescendantHandler,
-    ) -> Result<Self::Receipt<ResOf<'buf, M>>, Self::Error>
-    where
-        ResOf<'buf, Descendant>: minicbor::Encode<()> + minicbor::CborLen<()>,
-    {
-        let res = handler.handle(request).await;
-
-        let receipt = Receipt::new(self.stream, res, true)?.map(Descendant::res_to_parent);
-        Ok(receipt)
-    }
 }
-impl<M: method::Branch + method::Transitions, SendStream: BytesWriteStream>
+
+impl<M: method::OfType<method::Branch<method::Transition>>, SendStream: BytesWriteStream>
     replier::transition::Replier<M> for DelayedReplier<M, SendStream>
 {
-    async fn reply_with_leaf<
-        'buf,
-        Descendant: method::Leaf + method::Descendant<M> + method::Transitions,
+    async fn transition_with_leaf<
+        'req,
+        Descendant: method::OfType<method::LeafTransition> + method::Descendant<M>,
         DescendantHandler: method::handler::transition::LeafHandler<Descendant>,
     >(
         self,
-        request: method::ReqOf<'buf, Descendant>,
-        mut handler: DescendantHandler,
+        request: method::ReqOf<'req, Descendant>,
+        handler: DescendantHandler,
     ) -> Result<
         (
-            Self::Receipt<ResOf<'buf, M>>,
+            Receipt<ResOf<'req, M>, SendStream>,
             DescendantHandler::NextHandler,
         ),
         Self::Error,
     >
     where
-        ResOf<'buf, Descendant>: minicbor::Encode<()> + minicbor::CborLen<()>,
+        ResOf<'req, Descendant>: minicbor::Encode<()> + minicbor::CborLen<()>,
     {
         let res = handler
             .handle_transition(request, WrapperCredit::new())
@@ -144,7 +129,7 @@ pub struct Receipt<Res, SendStream: BytesWriteStream> {
 }
 
 impl<Res, SendStream: BytesWriteStream> Receipt<Res, SendStream> {
-    fn new(
+    pub(crate) fn new(
         stream: SendStream,
         res: Res,
         in_transition: bool,
@@ -174,7 +159,7 @@ impl<Res, SendStream: BytesWriteStream> Receipt<Res, SendStream> {
         }
     }
 
-    fn map<T>(self, mapper: impl FnOnce(Res) -> T) -> Receipt<T, SendStream> {
+    pub(crate) fn map<T>(self, mapper: impl FnOnce(Res) -> T) -> Receipt<T, SendStream> {
         let Self {
             stream,
             buffer,

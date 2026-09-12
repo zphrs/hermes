@@ -1,10 +1,10 @@
-pub mod can_transition;
 mod descendant;
-pub mod has_descendants;
 
 pub use descendant::Descendant;
 
-use crate::marker::NotApplicable;
+use crate::marker::{self, MethodType, NotApplicable};
+
+pub use marker::{Branch, CanTransition, Leaf, Loopback, Transition};
 
 pub mod handler;
 pub use handler::replier;
@@ -14,26 +14,17 @@ pub trait Method {
     type Res<'buf>;
     /// whether a request can transition
     #[expect(private_bounds)]
-    type Transitions: can_transition::Sealed;
-    /// whether a method contains a sub-method
-    #[expect(private_bounds)]
-    type HasDescendants: has_descendants::Sealed;
+    type Type: MethodType;
 }
 
 pub type ReqOf<'buf, M> = <M as Method>::Req<'buf>;
 pub type ResOf<'buf, M> = <M as Method>::Res<'buf>;
 
-pub trait Loopback: Method<Transitions = crate::marker::False> {}
-pub trait Transitions: Method<Transitions = crate::marker::True> {}
+pub type LeafLoopback = Leaf<Loopback>;
 
-impl<T: Method<Transitions = crate::marker::False> + ?Sized> Loopback for T {}
-impl<T: Method<Transitions = crate::marker::True> + ?Sized> Transitions for T {}
+pub type LeafTransition = Leaf<Transition>;
 
-pub trait Branch: Method<HasDescendants = crate::marker::True> {}
-pub trait Leaf: Method<HasDescendants = crate::marker::False> {}
-
-impl<T: Method<HasDescendants = crate::marker::True> + ?Sized> Branch for T {}
-impl<T: Method<HasDescendants = crate::marker::False> + ?Sized> Leaf for T {}
+pub type BranchCanTransition = Branch<CanTransition>;
 
 pub trait Notification: for<'a> Method<Res<'a> = NotApplicable> {}
 
@@ -42,3 +33,7 @@ impl<T: for<'a> Method<Res<'a> = NotApplicable> + ?Sized> Notification for T {}
 pub use handler::{
     BranchHandler, LeafHandler, Replier, TransitionBranchHandler, TransitionLeafHandler,
 };
+
+pub trait OfType<Type>: Method<Type = Type> {}
+
+impl<Type, T: Method<Type = Type> + ?Sized> OfType<Type> for T {}

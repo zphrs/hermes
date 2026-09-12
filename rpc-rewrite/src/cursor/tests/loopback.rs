@@ -2,17 +2,40 @@ use std::net::SocketAddr;
 
 use super::super::Cursor;
 use super::{accept_client, connect_to_server};
-use crate::marker::{self, not_applicable};
+use crate::Method;
+use crate::marker::{self, Leaf, Loopback, not_applicable};
 use crate::method::handler::root_method::RootHandler;
+
+pub enum RootRequest {
+    A(ARequest),
+    B(BRequest),
+}
+
+pub struct ARequest;
+
+pub struct AMethod;
+
+pub struct BMethod;
+
+impl Method for AMethod {
+    type Req<'buf> = ARequest;
+
+    type Res<'buf> = ();
+
+    type Type = Leaf<Loopback>;
+}
+
+pub struct BRequest;
 
 mod ping {
     use minicbor::bytes::ByteSlice;
 
     use crate::{
-        marker::{False, NotApplicable},
+        marker::{Loopback, NotApplicable},
         method::{self, LeafHandler, handler::root_method::RootMethod},
     };
 
+    #[derive(Clone)]
     pub struct Method;
 
     impl method::Method for Method {
@@ -20,9 +43,7 @@ mod ping {
 
         type Res<'buf> = &'buf ByteSlice;
 
-        type Transitions = False;
-
-        type HasDescendants = False;
+        type Type = method::LeafLoopback;
     }
 
     impl LeafHandler for Method {
@@ -39,9 +60,11 @@ mod ping {
     impl crate::cursor::state::Entrypoint for State {}
 
     impl crate::cursor::State for State {
+        type ClientBranchType = Loopback;
         type ClientHandles = NotApplicable;
 
-        type ServerHandles = RootMethod<Method>;
+        type ServerBranchType = Loopback;
+        type ServerHandles = RootMethod<Method, Loopback>;
     }
 }
 

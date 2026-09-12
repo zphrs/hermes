@@ -1,4 +1,8 @@
-use crate::method::{Method, Replier, ReqOf, ResOf};
+use crate::{
+    cursor,
+    marker::Loopback,
+    method::{self, Method, Replier, ReqOf, ResOf},
+};
 
 /// intentionally impossible to construct so that it can serve
 /// as a marker trait whenever a [Method], [Req](Method::Req), or [Res](Method::Res) should be
@@ -38,9 +42,7 @@ impl Method for NotApplicable {
 
     type Res<'buf> = NotApplicable;
 
-    type Transitions = super::False;
-
-    type HasDescendants = super::True;
+    type Type = method::Branch<Loopback>;
 }
 
 /// for when you need a handler that will never actually be invoked
@@ -55,4 +57,12 @@ impl crate::method::BranchHandler<NotApplicable> for Handler {
     ) -> Result<R::Receipt<ResOf<'a, NotApplicable>>, R::Error> {
         match request {}
     }
+}
+
+impl cursor::State for NotApplicable {
+    type ClientBranchType = Loopback;
+    type ClientHandles = NotApplicable;
+
+    type ServerBranchType = Loopback;
+    type ServerHandles = NotApplicable;
 }

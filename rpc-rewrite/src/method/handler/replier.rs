@@ -1,47 +1,66 @@
-use crate::method::{self, ReqOf, ResOf};
+use crate::{
+    Method,
+    marker::BranchType,
+    method::{self, ReqOf, ResOf},
+};
 
-pub trait Replier<M: method::Branch> {
+pub trait Replier<M: Method> {
     type Receipt<Res>: Receipt<Res>;
     type Error;
 
     fn reply_with_branch<
         'req,
-        Descendant: method::Branch + method::Descendant<M>,
+        BT: BranchType,
+        Descendant: method::OfType<method::Branch<BT>> + method::Descendant<M>,
         DescendantHandler: method::handler::BranchHandler<Descendant>,
     >(
         self,
         request: ReqOf<'req, Descendant>,
         handler: &mut DescendantHandler,
     ) -> impl Future<Output = Result<Self::Receipt<ResOf<'req, M>>, Self::Error>>;
+}
 
-    fn reply_with_leaf<
-        'req,
-        Descendant: method::Leaf + method::Descendant<M> + method::Loopback,
-        DescendantHandler: method::handler::LeafHandler<Descendant>,
-    >(
-        self,
-        request: ReqOf<'req, Descendant>,
-        handler: &mut DescendantHandler,
-    ) -> impl Future<Output = Result<Self::Receipt<ResOf<'req, M>>, Self::Error>>
-    where
-        ResOf<'req, Descendant>: minicbor::Encode<()> + minicbor::CborLen<()>;
+pub mod loopback {
+    use crate::{
+        Method,
+        method::{self, LeafLoopback, ReqOf, ResOf},
+    };
+
+    pub trait Replier<M: Method>: super::Replier<M> {
+        fn reply_with_leaf<
+            'req,
+            Descendant: method::OfType<LeafLoopback> + method::Descendant<M>,
+            DescendantHandler: method::handler::LeafHandler<Descendant>,
+        >(
+            self,
+            request: ReqOf<'req, Descendant>,
+            handler: &mut DescendantHandler,
+        ) -> impl Future<Output = Result<Self::Receipt<ResOf<'req, M>>, Self::Error>>
+        where
+            ResOf<'req, Descendant>: minicbor::Encode<()> + minicbor::CborLen<()>;
+    }
 }
 
 pub mod transition {
-    use crate::method::{self, ReqOf, ResOf};
-    pub type ReplyResult<'req, Replier, M, DescendantHandler, Descendant> = Result<
+
+    use crate::{
+        Method,
+        method::{self, ReqOf, ResOf},
+    };
+
+    pub type ReplyResult<'req, R, M, DescendantHandler, Descendant> = Result<
         (
-            <Replier as super::Replier<M>>::Receipt<ResOf<'req, M>>,
+            <R as super::Replier<M>>::Receipt<ResOf<'req, M>>,
             <DescendantHandler as method::handler::transition::LeafHandler<Descendant>>::NextHandler,
         ),
-        <Replier as super::Replier<M>>::Error,
+        <R as super::Replier<M>>::Error,
     >;
 
-    pub trait Replier<M: method::Branch + method::Transitions>: super::Replier<M> {
+    pub trait Replier<M: Method>: super::Replier<M> {
         #[allow(clippy::type_complexity)]
-        fn reply_with_leaf<
+        fn transition_with_leaf<
             'req,
-            Descendant: method::Leaf + method::Descendant<M> + method::Transitions,
+            Descendant: method::OfType<method::LeafTransition> + method::Descendant<M>,
             DescendantHandler: method::handler::transition::LeafHandler<Descendant>,
         >(
             self,

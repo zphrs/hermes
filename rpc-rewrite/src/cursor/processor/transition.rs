@@ -4,7 +4,7 @@ use super::Processor;
 use crate::{
     cursor::{processor::ProcessorFut, requester::Requester, transition::CursorCredit},
     io::{Connection, write},
-    marker::NotApplicable,
+    marker::{Branch, NotApplicable, Transition},
     method::{self, ReqOf, ResOf, handler::TransitionBranchHandler},
 };
 
@@ -42,6 +42,9 @@ where
     }
 }
 
+/// differs from [`ConcurrentError`] only by replacing Write with Encode because
+/// the handle_transition_request function calls finalize() which writes the
+/// response to the wire.
 #[derive(thiserror::Error)]
 pub enum Error<C: Connection, HandlerError> {
     #[error("could not accept stream")]
@@ -100,7 +103,7 @@ pub use processor_transition::{Entrypoint, Finished, ProcessorTransition, ReplyP
 impl<
     State,
     Role,
-    RootMethod: method::Branch + method::Transitions,
+    RootMethod: method::OfType<Branch<Transition>>,
     C: Connection,
     Handler: TransitionBranchHandler<RootMethod>,
 > Processor<State, Role, RootMethod, C, Handler>

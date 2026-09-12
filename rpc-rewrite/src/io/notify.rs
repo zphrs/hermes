@@ -92,9 +92,7 @@ mod tests {
     use tracing::{info, trace};
 
     use crate::{
-        Method,
-        io::notify,
-        marker::{False, NotApplicable},
+        Method, io::notify, marker::NotApplicable, method::LeafLoopback,
         quinn_transport::create_endpoint,
     };
 
@@ -105,9 +103,7 @@ mod tests {
 
         type Res<'buf> = NotApplicable;
 
-        type Transitions = False;
-
-        type HasDescendants = False;
+        type Type = LeafLoopback;
     }
 
     async fn server(connection: quinn::Connection) -> anyhow::Result<()> {

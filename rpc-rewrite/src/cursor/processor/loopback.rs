@@ -7,8 +7,11 @@ use crate::{
     io::read::read,
     method::{self, ReqOf, ResOf, handler, replier, replier::Receipt},
 };
+use futures::{FutureExt, StreamExt, select, stream::FuturesUnordered};
 use std::convert::Infallible;
 use std::fmt::Debug;
+use std::future::Future;
+use std::pin::pin;
 
 #[derive(thiserror::Error)]
 pub enum Error<C: Connection, HandlerError> {
@@ -40,9 +43,9 @@ where
 impl<
     State,
     Role,
-    RootMethod: method::Branch + method::Loopback,
+    RootMethod: method::OfType<method::Branch<method::Loopback>>,
     C: Connection,
-    Handler: handler::BranchHandler<RootMethod>,
+    Handler: handler::loopback::BranchHandler<RootMethod>,
 > Processor<State, Role, RootMethod, C, Handler>
 {
     pub async fn handle_loopback_request<'buf>(
@@ -65,7 +68,7 @@ impl<
 
         write.clear();
         let request: ReqOf<RootMethod> = read(write, recv).await?;
-        let receipt = handler.handle(request, replier).await?;
+        let receipt = handler.handle_loopback(request, replier).await?;
 
         match receipt.finalize().await {
             Ok(res) => Ok(res),
@@ -73,14 +76,52 @@ impl<
         }
     }
 
-    async fn handle_loopback_requests_inner<'buffer>(mut self) -> Error<C, Infallible>
+    async fn handle_loopback_stream(
+        stream: (C::SendStream, C::RecvStream),
+        mut handler: Handler,
+    ) -> Result<(), Error<C, Infallible>>
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
     {
+        let (send, recv) = stream;
+        let replier = replier::immediate::Replier::new(send);
         let mut buffer = Vec::new();
+
+        buffer.clear();
+        let request: ReqOf<RootMethod> = read(&mut buffer, recv).await?;
+        let receipt = handler.handle_loopback(request, replier).await?;
+
+        match receipt.finalize().await {
+            Ok(_) => Ok(()),
+            Err(e) => match e {},
+        }
+    }
+
+    async fn handle_loopback_requests_inner(self) -> Error<C, Infallible>
+    where
+        for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
+        Handler: Clone,
+    {
+        let mut js = FuturesUnordered::new();
+        let mut stream_fut = pin!(self.connection.accept_stream().fuse());
+
         loop {
-            if let Err(e) = self.handle_loopback_request(&mut buffer).await {
-                return e;
+            select! {
+                stream = &mut stream_fut => {
+                    match stream {
+                        Ok(stream) => {
+                            let handler = self.handler.clone();
+                            stream_fut.set(self.connection.accept_stream().fuse());
+                            js.push(Self::handle_loopback_stream(stream, handler));
+                        }
+                        Err(e) => return Error::Accept(e),
+                    }
+                }
+                res = js.select_next_some() => {
+                    if let Err(e) = res {
+                        return e;
+                    }
+                }
             }
         }
     }
@@ -90,6 +131,7 @@ impl<
     ) -> super::ProcessorFut<impl Future<Output = Error<C, Infallible>>>
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
+        Handler: Clone,
     {
         super::ProcessorFut::new(self.handle_loopback_requests_inner())
     }

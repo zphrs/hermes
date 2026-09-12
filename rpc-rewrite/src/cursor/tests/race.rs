@@ -38,7 +38,7 @@ impl TransitionLeafHandler<entrypoint::ClientRequestWins> for ServerHandler {
     type NextHandler = not_applicable::Handler;
 
     async fn handle_transition<'a>(
-        &mut self,
+        self,
         duration: method::ReqOf<'a, entrypoint::ClientRequestWins>,
         wrapper_credit: WrapperCredit<entrypoint::ClientRequestWins>,
     ) -> (
@@ -149,7 +149,7 @@ impl TransitionLeafHandler<entrypoint::ServerRequestWins> for ClientHandler {
     type NextHandler = not_applicable::Handler;
 
     async fn handle_transition<'a>(
-        &mut self,
+        self,
         duration: method::ReqOf<'a, entrypoint::ServerRequestWins>,
         wrapper_credit: WrapperCredit<entrypoint::ServerRequestWins>,
     ) -> (

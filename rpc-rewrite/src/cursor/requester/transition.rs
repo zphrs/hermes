@@ -10,7 +10,7 @@ use crate::{
     },
     io::{self, Connection},
     marker::{NotApplicable, not_applicable},
-    method::{self, ReqOf, ResOf},
+    method::{self, LeafTransition, ReqOf, ResOf},
 };
 
 pub use requester_transition::RequesterTransition;
@@ -48,7 +48,7 @@ impl<State, Role, RootMethod: method::Method, C: Connection> Requester<State, Ro
     pub async fn request_concurrent_transition<
         'req,
         'buf,
-        M: method::Descendant<RootMethod> + method::Leaf + method::Transitions,
+        M: method::Descendant<RootMethod> + method::OfType<LeafTransition>,
     >(
         self,
         request: ReqOf<'req, M>,
@@ -80,7 +80,7 @@ impl<State, Role, RootMethod: method::Method, C: Connection> Requester<State, Ro
     pub async fn request_transition<
         'req,
         'buf,
-        M: method::Descendant<RootMethod> + method::Leaf + method::Transitions,
+        M: method::Descendant<RootMethod> + method::OfType<LeafTransition>,
     >(
         self,
         request: ReqOf<'req, M>,

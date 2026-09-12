@@ -4,7 +4,7 @@ use std::{fmt::Debug, marker::PhantomData};
 
 use crate::{
     io::Connection,
-    method::{Descendant, Leaf, Loopback, ReqOf, ResOf},
+    method::{self, Descendant, LeafLoopback, ReqOf, ResOf},
 };
 
 pub struct Requester<State, Role, RootMethod: crate::Method, C: Connection> {
@@ -45,7 +45,11 @@ impl<State, Role, RootMethod: crate::Method, C: Connection> Requester<State, Rol
         &self.connection
     }
 
-    pub async fn request_loopback<'req, 'buf, M: Descendant<RootMethod> + Leaf + Loopback>(
+    pub async fn request_loopback<
+        'req,
+        'buf,
+        M: Descendant<RootMethod> + method::OfType<LeafLoopback>,
+    >(
         &self,
         request: ReqOf<'req, M>,
         buf: &'buf mut Vec<u8>,

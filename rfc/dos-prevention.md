@@ -3,7 +3,7 @@
 Both the sky and the earth are potentially vulnerable to denial-of-service
 attacks. We aim to ensure that performing a global attack requires significant
 resources and we aim to minimize the efficacy of local DOS attacks on a specific
-part of the network. Sku nodes and earth nodes have their own potential attack
+part of the network. Sky nodes and earth nodes have their own potential attack
 vectors and thus have their own mitigations to the variety of possible attacks,
 detailed below.
 
