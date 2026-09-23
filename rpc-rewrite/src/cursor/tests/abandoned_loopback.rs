@@ -60,7 +60,7 @@ scoped_thread_local!(static BLOCKED: Mutex<Option<bool>>);
 fn abandoned_loopback_blocks_transition() {
     let blocked = Mutex::new(None);
     BLOCKED.set(&blocked, || {
-        super::harness(client, server).ok();
+        super::harness(client, server, None).ok();
     });
     assert_eq!(*blocked.lock().unwrap(), Some(true));
 }

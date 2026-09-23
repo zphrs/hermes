@@ -9,7 +9,7 @@ use crate::{
 };
 
 use std::marker::PhantomData;
-use tracing::trace;
+use tracing::{instrument, trace};
 
 #[derive(thiserror::Error)]
 pub enum Error<C: Connection> {
@@ -22,6 +22,7 @@ pub enum Error<C: Connection> {
     #[error("while waiting for notification of transition")]
     ReceiveNotification(#[from] crate::io::notify::RecvError<C>),
 }
+#[instrument(skip_all, fields(role = ?Role::as_enum()))]
 pub(super) async fn definite_tiebreak_fn<
     State,
     Role: role::Sealed,
@@ -45,10 +46,12 @@ pub(super) async fn definite_tiebreak_fn<
         role::Role::Client => {
             trace!("as client");
             processor_transition.set_in_tiebreak(true);
+            trace!("replying with in_tiebreak=true");
             let ((res, next_handler), processor_transition) = processor_transition
                 .reply()
                 .await
                 .map_err(write::Error::Send)?;
+            trace!("replied");
             let connection = processor_transition.into_conn();
             trace!("notifying");
 
@@ -64,7 +67,9 @@ pub(super) async fn definite_tiebreak_fn<
         }
         role::Role::Server => {
             trace!("as server");
+            trace!("waiting for reply to our request");
             let (res, requester_transition) = recv_fut.await?;
+            trace!(in_tiebreak = res.in_tiebreak, "received reply");
             let requester_transition: RequesterTransition<State, Role, C, Finished> =
                 requester_transition;
             assert!(res.in_tiebreak);

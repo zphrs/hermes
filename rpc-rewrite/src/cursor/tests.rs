@@ -35,11 +35,12 @@ fn harness<
 >(
     client: impl Fn(quinn::Endpoint, SocketAddr) -> ClientFut + 'static + Copy,
     server: impl Fn(quinn::Endpoint) -> ServerFut + 'static + Copy,
+    sim_config: impl Into<Option<dens::sim::Config>>,
 ) -> Result<(), anyhow::Error> {
-    Sim::new_with_config(dens::sim::Config {
+    Sim::new_with_config(sim_config.into().unwrap_or(dens::sim::Config {
         tick_amount: Duration::from_millis(10),
         ..Default::default()
-    })
+    }))
     .enter_runtime(|| {
         let net = dens::IpNetwork::new_private_class_c().into_ref();
         let server = dens::os_mock::OsMock::new(move || {

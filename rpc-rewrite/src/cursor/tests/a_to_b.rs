@@ -44,5 +44,5 @@ async fn client(endpoint: quinn::Endpoint, server_addr: SocketAddr) -> anyhow::R
 
 #[test_log::test]
 fn transition() -> anyhow::Result<()> {
-    super::harness(client, server)
+    super::harness(client, server, None)
 }

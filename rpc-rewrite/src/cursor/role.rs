@@ -1,5 +1,6 @@
 use crate::marker::{Client, Server};
 
+#[derive(Debug)]
 pub enum Role {
     Client,
     Server,

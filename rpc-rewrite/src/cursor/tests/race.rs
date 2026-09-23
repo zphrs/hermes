@@ -2,8 +2,9 @@ pub mod states;
 
 use std::{future::pending, net::SocketAddr, pin::pin, sync::Mutex, time::Duration};
 
+use dens::sim::Config;
 use futures::future::select;
-use hegel::{TestCase, generators as gs};
+use hegel::{HealthCheck, TestCase, generators as gs};
 use quinn::Endpoint;
 use scoped_tls::scoped_thread_local;
 use tokio::sync::oneshot;
@@ -130,12 +131,14 @@ async fn server(
     match winner {
         crate::cursor::transition::Won::Processor { res, .. } => {
             let res: state::Wrapper<states::winner::client::State> = res;
-            let _cursor = Cursor::from_cursor_credit(credit, res);
+            let cursor = Cursor::from_cursor_credit(credit, res);
+            cursor.wait_to_close().await?;
             SERVER_REACHED.with(|cr| cr.lock().unwrap().replace(Winner::Client));
         }
         crate::cursor::transition::Won::Requester { res } => {
             let res: state::Wrapper<states::winner::server::State> = res;
-            let _cursor = Cursor::from_cursor_credit(credit, res);
+            let cursor = Cursor::from_cursor_credit(credit, res);
+            cursor.wait_to_close().await?;
             SERVER_REACHED.with(|cr| cr.lock().unwrap().replace(Winner::Server));
         }
     }
@@ -170,6 +173,8 @@ async fn client(
     (request, request_delay): (Duration, Duration),
 ) -> anyhow::Result<()> {
     tracing::trace!("running");
+    // the machine's clock is paused, so this measures sim-time
+    let start = tokio::time::Instant::now();
 
     let conn = super::connect_to_server(&endpoint, server_addr).await?;
 
@@ -236,53 +241,67 @@ async fn client(
     match winner {
         crate::cursor::transition::Won::Processor { res, .. } => {
             let res: state::Wrapper<states::winner::server::State> = res;
-            let _cursor = Cursor::from_cursor_credit(credit, res);
+            let cursor = Cursor::from_cursor_credit(credit, res);
+            cursor.close().await?;
             CLIENT_REACHED.with(|cr| cr.lock().unwrap().replace(Winner::Server));
         }
         crate::cursor::transition::Won::Requester { res } => {
             let res: state::Wrapper<states::winner::client::State> = res;
-            let _cursor = Cursor::from_cursor_credit(credit, res);
+            let cursor = Cursor::from_cursor_credit(credit, res);
+            cursor.close().await?;
             CLIENT_REACHED.with(|cr| cr.lock().unwrap().replace(Winner::Client));
         }
     }
 
+    if CLIENT_ELAPSED.is_set() {
+        CLIENT_ELAPSED.with(|e| e.lock().unwrap().replace(start.elapsed()));
+    }
     Ok(())
 }
+scoped_thread_local!(static CLIENT_ELAPSED: Mutex<Option<Duration>>);
 scoped_thread_local!(static CLIENT_REACHED: Mutex<Option<Winner>>);
 scoped_thread_local!(static SERVER_REACHED: Mutex<Option<Winner>>);
 
 #[test_log::test]
-#[hegel::test]
+#[hegel::test(test_cases = 8, report_multiple_failures = true)]
 fn race_once(tc: TestCase) {
-    let start = tokio::time::Instant::now();
     let which_is_long = tc.draw(gs::integers().min_value(0).max_value(3));
     let mut durations = [Duration::ZERO; 4];
-    durations[which_is_long] = Duration::from_secs(60);
+    // replace five with anything
+    let long_duration: Duration =
+        Duration::from_secs(tc.draw(gs::integers().max_value(20).min_value(1)));
+    durations[which_is_long] = long_duration;
     let client_durations = (durations[0], durations[1]);
     let server_durations = (durations[2], durations[3]);
     let cr = Default::default();
     let sr = Default::default();
-    CLIENT_REACHED
-        .set(&cr, || {
-            SERVER_REACHED.set(&sr, || {
-                harness(
-                    move |a, b| client(a, b, client_durations),
-                    move |e| server(e, server_durations),
-                )
-                .ok();
-                CLIENT_REACHED.with(|cr| {
-                    SERVER_REACHED.with(|sr| {
-                        assert_eq!(
-                            cr.lock().unwrap().as_ref().unwrap(),
-                            sr.lock().unwrap().as_ref().unwrap()
-                        )
-                    })
-                });
-                assert!(
-                    start.elapsed() < Duration::from_secs(1),
-                    "should not wait out the 100 second client delay"
-                );
-                anyhow::Ok(())
+    let elapsed = Default::default();
+    CLIENT_ELAPSED
+        .set(&elapsed, || {
+            CLIENT_REACHED.set(&cr, || {
+                SERVER_REACHED.set(&sr, || {
+                    harness(
+                        move |a, b| client(a, b, client_durations),
+                        move |e| server(e, server_durations),
+                        None,
+                    )
+                    .ok();
+                    CLIENT_REACHED.with(|cr| {
+                        SERVER_REACHED.with(|sr| {
+                            assert_eq!(
+                                cr.lock().unwrap().as_ref().unwrap(),
+                                sr.lock().unwrap().as_ref().unwrap()
+                            )
+                        })
+                    });
+                    let sim_elapsed = CLIENT_ELAPSED
+                        .with(|e| e.lock().unwrap().unwrap());
+                    assert!(
+                        sim_elapsed < long_duration,
+                        "should not wait out the {long_duration:?} client delay (waited {sim_elapsed:?} of sim-time)"
+                    );
+                    anyhow::Ok(())
+                })
             })
         })
         .unwrap();
@@ -298,7 +317,8 @@ fn durations_generator(tc: &TestCase) -> (Duration, Duration) {
     (tc.draw(duration_generator()), tc.draw(duration_generator()))
 }
 
-#[hegel::test]
+#[test_log::test]
+#[hegel::test(suppress_health_check = [HealthCheck::TooSlow])]
 #[ignore]
 fn race(tc: TestCase) {
     let client_durations = tc.draw(durations_generator());
@@ -311,6 +331,7 @@ fn race(tc: TestCase) {
                 harness(
                     move |a, b| client(a, b, client_durations),
                     move |e| server(e, server_durations),
+                    None,
                 )
                 .ok();
                 CLIENT_REACHED.with(|cr| {

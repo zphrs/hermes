@@ -99,7 +99,9 @@ where
                 // Thus we must wait for the remote's transition request to arrive
                 // before we continue.
 
+                trace!("joining processor and notification");
                 let (_processor_transition, notify_res) = join(processor_fut, notify_receive).await;
+                trace!("joined processor and notification");
                 let () = notify_res?;
             } else {
                 trace!("not in tiebreak");
