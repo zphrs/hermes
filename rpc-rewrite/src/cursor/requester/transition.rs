@@ -1,6 +1,6 @@
 pub mod requester_transition;
 
-use super::Requester;
+use super::{Requester, loopback};
 use crate::{
     cursor::{
         self,
@@ -21,6 +21,8 @@ pub enum RequestConcurrentTransitionError<C: Connection> {
     Open(#[source] C::OpenError),
     #[error("could not write transition request")]
     Write(#[from] io::write::Error<C::SendStream>),
+    #[error("a prior request_loopback call was abandoned before its response was read")]
+    AbandonedLoopback(#[source] loopback::Abandoned),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +35,8 @@ pub enum RequestTransitionError<C: Connection> {
     Read(#[from] io::read::Error<C::RecvStream>),
     #[error("in tiebreak flag unexpectedly set")]
     InTiebreak,
+    #[error("a prior request_loopback call was abandoned before its response was read")]
+    AbandonedLoopback(#[source] loopback::Abandoned),
 }
 
 impl<C: Connection> From<RequestConcurrentTransitionError<C>> for RequestTransitionError<C> {
@@ -40,6 +44,9 @@ impl<C: Connection> From<RequestConcurrentTransitionError<C>> for RequestTransit
         match value {
             RequestConcurrentTransitionError::Open(error) => RequestTransitionError::Open(error),
             RequestConcurrentTransitionError::Write(error) => RequestTransitionError::Write(error),
+            RequestConcurrentTransitionError::AbandonedLoopback(error) => {
+                RequestTransitionError::AbandonedLoopback(error)
+            }
         }
     }
 }
@@ -61,6 +68,11 @@ impl<State, Role, RootMethod: method::Method, C: Connection> Requester<State, Ro
         ReqOf<'req, RootMethod>: minicbor::CborLen<()> + minicbor::Encode<()>,
         ResOf<'buf, M>: minicbor::Decode<'buf, ()>,
     {
+        if let Some(abandoned) = self.abandoned_loopback.lock().unwrap().take() {
+            return Err(RequestConcurrentTransitionError::AbandonedLoopback(
+                abandoned,
+            ));
+        }
         let (send, recv) = self
             .connection
             .open_stream()

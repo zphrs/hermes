@@ -1,6 +1,9 @@
+pub mod loopback;
 pub mod transition;
 
-use std::{fmt::Debug, marker::PhantomData};
+use std::{fmt::Debug, marker::PhantomData, sync::Mutex};
+
+use loopback::LoopbackGuard;
 
 use crate::{
     io::Connection,
@@ -9,6 +12,7 @@ use crate::{
 
 pub struct Requester<State, Role, RootMethod: crate::Method, C: Connection> {
     connection: C,
+    abandoned_loopback: Mutex<Option<loopback::Abandoned>>,
     _marker: PhantomData<(State, Role, RootMethod)>,
 }
 
@@ -37,6 +41,7 @@ impl<State, Role, RootMethod: crate::Method, C: Connection> Requester<State, Rol
     pub(crate) fn new(connection: C) -> Self {
         Self {
             connection,
+            abandoned_loopback: Mutex::new(None),
             _marker: PhantomData,
         }
     }
@@ -63,8 +68,12 @@ impl<State, Role, RootMethod: crate::Method, C: Connection> Requester<State, Rol
             .open_stream()
             .await
             .map_err(RequestLoopbackError::Open)?;
-        let res: ResOf<'buf, M> =
-            crate::io::request::<RootMethod, M, C>(buf, request, stream).await?;
-        Ok(res)
+        // armed until `request` returns, Ok or Err: only dropping this future
+        // mid-flight leaves it armed, recording the abandonment so a later
+        // transition can refuse to race the unread reply
+        let guard = LoopbackGuard::new(&self.abandoned_loopback);
+        let res = crate::io::request::<RootMethod, M, C>(buf, request, stream).await;
+        guard.defuse();
+        Ok(res?)
     }
 }
