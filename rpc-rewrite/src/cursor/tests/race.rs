@@ -252,14 +252,19 @@ scoped_thread_local!(static CLIENT_REACHED: Mutex<Option<Winner>>);
 scoped_thread_local!(static SERVER_REACHED: Mutex<Option<Winner>>);
 
 #[test_log::test]
-fn race_once() {
-    let client_durations = (Duration::from_millis(100000), Duration::from_millis(0));
-    let server_durations = (Duration::from_millis(0), Duration::from_millis(0));
+#[hegel::test]
+fn race_once(tc: TestCase) {
+    let start = tokio::time::Instant::now();
+    let which_is_long = tc.draw(gs::integers().min_value(0).max_value(3));
+    let mut durations = [Duration::ZERO; 4];
+    durations[which_is_long] = Duration::from_secs(60);
+    let client_durations = (durations[0], durations[1]);
+    let server_durations = (durations[2], durations[3]);
     let cr = Default::default();
     let sr = Default::default();
-    CLIENT_REACHED.set(&cr, || {
-        SERVER_REACHED
-            .set(&sr, || {
+    CLIENT_REACHED
+        .set(&cr, || {
+            SERVER_REACHED.set(&sr, || {
                 harness(
                     move |a, b| client(a, b, client_durations),
                     move |e| server(e, server_durations),
@@ -273,10 +278,14 @@ fn race_once() {
                         )
                     })
                 });
+                assert!(
+                    start.elapsed() < Duration::from_secs(1),
+                    "should not wait out the 100 second client delay"
+                );
                 anyhow::Ok(())
             })
-            .unwrap();
-    })
+        })
+        .unwrap();
 }
 
 #[hegel::composite]
