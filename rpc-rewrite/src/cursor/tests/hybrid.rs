@@ -51,7 +51,7 @@ async fn client(endpoint: quinn::Endpoint, server_addr: SocketAddr) -> anyhow::R
         .await?;
 
     let b_cursor = Cursor::from_cursor_credit(cursor_credit, res);
-    b_cursor.close().await;
+    b_cursor.close().await?;
 
     Ok(())
 }

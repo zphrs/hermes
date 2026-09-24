@@ -85,8 +85,14 @@ impl<
     C: io::Connection,
 > Cursor<State, Server, C>
 {
-    pub async fn wait_to_close(self) -> Result<(), C::WaitForCloseError> {
-        self.connection.wait_for_close().await
+    /// waits for the client to [`close`](Cursor::close) and then closes the
+    /// connection. See [`close`] for why the server is the one that closes.
+    pub async fn wait_to_close(self) -> Result<(), close::WaitToCloseError<C>> {
+        io::notify::receive::<close::CloseRequested, _>(&mut Vec::new(), &self.connection).await?;
+        self.connection
+            .close()
+            .await
+            .map_err(close::WaitToCloseError::Close)
     }
 }
 
@@ -95,11 +101,18 @@ impl<
     C: io::Connection,
 > Cursor<State, Client, C>
 {
-    pub async fn close(self) -> Result<(), C::CloseError> {
-        self.connection.close().await
+    /// asks the server to close the connection and waits for it to do so.
+    /// See [`close`] for why the server is the one that closes.
+    pub async fn close(self) -> Result<(), close::CloseError<C>> {
+        io::notify::send::<close::CloseRequested, _>((), &self.connection).await?;
+        self.connection
+            .wait_for_close()
+            .await
+            .map_err(close::CloseError::WaitForClose)
     }
 }
 
+pub mod close;
 pub mod processor;
 pub mod requester;
 pub mod transition;

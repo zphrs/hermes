@@ -28,16 +28,9 @@ impl<S: BytesWriteStream> std::fmt::Debug for Error<S> {
 
 /// moves send to allow for pinning and to allow for dropping `send` after
 /// write_all succeeds
-pub(crate) async fn bytes<B: BytesWriteStream>(
-    mut send: B,
-    buf: Bytes,
-    assert_stopped: bool,
-) -> Result<(), B::Error> {
+pub(crate) async fn bytes<B: BytesWriteStream>(mut send: B, buf: Bytes) -> Result<(), B::Error> {
     send.try_put(buf).await?;
-    if assert_stopped {
-        send.finish();
-        send.stopped().await;
-    }
+    send.finish();
     Ok(())
 }
 
@@ -47,7 +40,7 @@ pub async fn write<Message: CborLen<()> + Encode<()>, SendStream: BytesWriteStre
 ) -> Result<(), Error<SendStream>> {
     let mut buf = Vec::with_capacity(minicbor::len(request));
     minicbor::encode(request, &mut buf)?;
-    bytes(send, Bytes::from(buf), core::cfg!(test))
+    bytes(send, Bytes::from(buf))
         .await
         .map_err(Error::Send)?;
     Ok(())

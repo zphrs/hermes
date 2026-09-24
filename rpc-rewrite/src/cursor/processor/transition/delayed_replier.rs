@@ -203,7 +203,7 @@ impl<Res, SendStream: BytesWriteStream> replier::Receipt<Res> for Receipt<Res, S
         if let Some(in_tiebreak) = self.in_tiebreak {
             TransitionReply::<Infallible>::set_in_tiebreak(self.buffer.as_mut_slice(), in_tiebreak);
         }
-        write::bytes(self.stream, self.buffer.into(), false).await?;
+        write::bytes(self.stream, self.buffer.into()).await?;
         Ok(self.res)
     }
 }

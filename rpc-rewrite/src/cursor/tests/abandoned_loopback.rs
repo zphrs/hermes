@@ -11,9 +11,9 @@ use crate::{
 };
 
 /// Accepts the connection and then never reads from it or replies. The client's write
-/// still completes because `stopped()` resolves on the peer's transport-level
-/// ACK, independent of the application reading. This holds only while the
-/// payload fits in the flow-control window (true for the empty request here).
+/// still completes because it only waits for the payload to be buffered, not
+/// for the application to read it. This holds only while the payload fits in
+/// the flow-control window (true for the empty request here).
 async fn server(endpoint: quinn::Endpoint) -> anyhow::Result<()> {
     let _conn = super::accept_client(&endpoint).await?;
     // bounded (sim-time) so the sim can go idle once the client is done

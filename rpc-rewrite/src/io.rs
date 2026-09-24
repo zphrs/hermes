@@ -20,17 +20,16 @@ pub trait BytesReadStream {
     fn try_next(&mut self) -> impl Future<Output = Result<Option<Bytes>, Self::Error>>;
 }
 
-pub trait BytesWriteStream: Stopped {
+pub trait BytesWriteStream: Finish {
     type Error: Debug;
     fn try_put(&mut self, bytes: Bytes) -> impl Future<Output = Result<(), Self::Error>>;
 }
 
-pub trait Stopped {
+pub trait Finish {
     fn finish(&mut self) -> ();
-    fn stopped(&self) -> impl Future<Output = ()>;
 }
 pub trait Connection {
-    type SendStream: BytesWriteStream + Stopped;
+    type SendStream: BytesWriteStream + Finish;
     type RecvStream: BytesReadStream;
     type OpenError;
     fn open_stream(
@@ -130,11 +129,7 @@ mod quinn {
         }
     }
 
-    impl super::Stopped for quinn::SendStream {
-        async fn stopped(&self) {
-            let _ = quinn::SendStream::stopped(self).await;
-        }
-
+    impl super::Finish for quinn::SendStream {
         fn finish(&mut self) {
             let _ = quinn::SendStream::finish(self);
         }

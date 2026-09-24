@@ -37,7 +37,8 @@ async fn client(endpoint: quinn::Endpoint, server_addr: SocketAddr) -> anyhow::R
         .request_transition::<a::Method>((), &mut read_buf, processor)
         .await?;
 
-    let _b_cursor = Cursor::from_cursor_credit(cursor_credit, res);
+    let b_cursor = Cursor::from_cursor_credit(cursor_credit, res);
+    b_cursor.close().await?;
 
     Ok(())
 }
