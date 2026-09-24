@@ -15,7 +15,7 @@ use rand::{SeedableRng as _, rngs::SmallRng};
 use scoped_tls::scoped_thread_local;
 use std::{
     any::{Any, TypeId},
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     hash::{BuildHasherDefault, DefaultHasher},
     marker::PhantomData,
@@ -42,6 +42,7 @@ pub struct Sim {
     config: Config,
     rng: RefCell<SmallRng>,
     dns: RefCell<Dns>,
+    next_machine_id: Cell<u64>,
 }
 
 impl Default for Sim {
@@ -52,6 +53,7 @@ impl Default for Sim {
             config: Config::default(),
             rng: SmallRng::seed_from_u64(Config::default().rng_seed).into(),
             dns: RefCell::default(),
+            next_machine_id: Cell::default(),
         }
     }
 }
@@ -313,6 +315,12 @@ impl Sim {
                     .tick(duration)
             })
         })
+    }
+
+    pub(crate) fn next_machine_id(&self) -> u64 {
+        let id = self.next_machine_id.get();
+        self.next_machine_id.set(id + 1);
+        id
     }
 
     pub fn enter_runtime<R>(&self, f: impl FnOnce() -> R) -> R {

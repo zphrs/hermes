@@ -270,10 +270,19 @@ impl Debug for MachineId {
 }
 
 impl MachineId {
+    /// Ids created inside a [`Sim`](crate::Sim) runtime are allocated by that
+    /// sim so that they (and therefore the order machines are ticked in) don't
+    /// depend on other sims running in the same process.
     pub fn new() -> Self {
-        pub(crate) static CTR: AtomicU64 = AtomicU64::new(0);
-        MachineId {
-            id: CTR.fetch_add(1, Ordering::AcqRel),
-        }
+        /// Ids created outside of a sim runtime set the top bit so that they
+        /// never collide with ids allocated by a sim.
+        const OUTSIDE_SIM: u64 = 1 << 63;
+        static CTR: AtomicU64 = AtomicU64::new(0);
+        let id = if crate::sim::SIM.is_set() {
+            crate::sim::SIM.with(crate::Sim::next_machine_id)
+        } else {
+            OUTSIDE_SIM | CTR.fetch_add(1, Ordering::AcqRel)
+        };
+        MachineId { id }
     }
 }
