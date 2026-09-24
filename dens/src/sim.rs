@@ -50,7 +50,7 @@ impl Default for Sim {
             machines: RefCell::default(),
             basic_machines: RefCell::default(),
             config: Config::default(),
-            rng: SmallRng::seed_from_u64(1234).into(),
+            rng: SmallRng::seed_from_u64(Config::default().rng_seed).into(),
             dns: RefCell::default(),
         }
     }
@@ -155,6 +155,7 @@ impl Sim {
     #[must_use]
     pub fn new_with_config(config: Config) -> Self {
         Self {
+            rng: SmallRng::seed_from_u64(config.rng_seed).into(),
             config,
             ..Default::default()
         }

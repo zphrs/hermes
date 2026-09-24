@@ -110,6 +110,8 @@ pub struct Config {
     pub tick_amount: Duration,
     pub latency: Latency,
     pub message_loss: MessageLoss,
+    /// Seed for the simulation's rng, which decides latency and message loss.
+    pub rng_seed: u64,
 }
 impl Config {
     #[must_use]
@@ -169,6 +171,7 @@ impl Default for Config {
             tick_amount: Duration::from_millis(1),
             latency: Latency::default(),
             message_loss: MessageLoss::default(),
+            rng_seed: 1234,
         }
     }
 }
