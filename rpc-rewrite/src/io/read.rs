@@ -12,6 +12,8 @@ pub enum Error<RecvStream: BytesReadStream> {
     Receive(RecvStream::Error),
     #[error("invalid data")]
     Decode(#[from] minicbor::decode::Error),
+    #[error("stream ended without any data")]
+    Empty,
 }
 
 impl<RecvStream: BytesReadStream> std::fmt::Debug for Error<RecvStream> {
@@ -19,6 +21,7 @@ impl<RecvStream: BytesReadStream> std::fmt::Debug for Error<RecvStream> {
         match self {
             Self::Receive(arg0) => f.debug_tuple("Receive").field(arg0).finish(),
             Self::Decode(arg0) => f.debug_tuple("Decode").field(arg0).finish(),
+            Self::Empty => write!(f, "Empty"),
         }
     }
 }
@@ -40,6 +43,7 @@ async fn read_into_buf<B: BytesReadStream>(
 
     Ok(())
 }
+/// Returns [`Error::Empty`] if the stream ended without any data.
 pub async fn read<'buf, Message, RecvStream: BytesReadStream>(
     buf: &'buf mut Vec<u8>,
     recv: RecvStream,
@@ -50,5 +54,8 @@ where
     read_into_buf(recv, buf, usize::MAX)
         .await
         .map_err(Error::Receive)?;
+    if buf.is_empty() {
+        return Err(Error::Empty);
+    }
     Ok(minicbor::decode(buf)?)
 }

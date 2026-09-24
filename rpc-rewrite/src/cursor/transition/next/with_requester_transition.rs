@@ -3,7 +3,7 @@ use std::{
     pin::{Pin, pin},
 };
 
-use futures::future::{join, select};
+use futures::future::select;
 use tracing::{instrument, trace};
 
 use crate::{
@@ -12,10 +12,7 @@ use crate::{
         role,
         transition::{
             CursorCredit, NextError, Won,
-            next::{
-                ProcessorSacrificed,
-                definite_tiebreak::{self},
-            },
+            next::{ProcessorSacrificed, commit_or_defer},
             requester_transition,
         },
     },
@@ -82,31 +79,27 @@ where
 
     let mut processor = CancelProcessorOnDrop(processor);
 
-    match select(recv, &mut processor.0).await {
-        futures::future::Either::Left((recv_result, processor_fut)) => {
-            let (TransitionReply { reply, in_tiebreak }, requester_transition) = recv_result?;
-            let connection = requester_transition.into_conn();
-            let mut read_buf = Vec::new();
-            let notify_receive =
-                notify::receive::<ProcessorSacrificed, _>(&mut read_buf, &connection);
+    match select(recv, processor.0.as_mut()).await {
+        futures::future::Either::Left((recv_result, _)) => {
+            let (reply, requester_transition) = recv_result?;
+            // the peer can only reject our request after we replied to theirs
+            let TransitionReply { reply, in_tiebreak } =
+                reply.ok_or(NextError::UnexpectedRejection)?;
             if in_tiebreak {
-                trace!("in tiebreak; waiting for notification");
-                // could get here if the remote approved our transition request
-                // after it sent out a transition request of its own and tiebroke
-                // between its local transition request and the one it sent to
-                // us before it received ours.
-                //
-                // Thus we must wait for the remote's transition request to arrive
-                // before we continue.
-
-                trace!("joining processor and notification");
-                let (_processor_transition, notify_res) = join(processor_fut, notify_receive).await;
-                trace!("joined processor and notification");
-                let () = notify_res?;
+                trace!("peer committed while it had a pending request; rejecting it");
+                // the peer's request must be consumed by this state's processor
+                // rather than leak into the next state's processor
+                processor
+                    .0
+                    .as_mut()
+                    .reject_transition()
+                    .await
+                    .map_err(NextError::Fut)?;
             } else {
-                trace!("not in tiebreak");
-                let () = notify_receive.await?;
+                processor.0.as_mut().cancel();
             }
+            let connection = requester_transition.into_conn();
+            notify::receive::<ProcessorSacrificed, _>(&mut Vec::new(), &connection).await?;
             Ok((
                 Won::Requester { res: reply },
                 CursorCredit {
@@ -116,10 +109,9 @@ where
             ))
         }
         futures::future::Either::Right((processor_transition, recv_fut)) => {
-            trace!("running definite tiebreak");
+            trace!("both sides requested a transition");
             let processor_transition = processor_transition.map_err(NextError::Fut)?;
-            let res =
-                definite_tiebreak::definite_tiebreak_fn(processor_transition, recv_fut).await?;
+            let res = commit_or_defer::commit_or_defer_fn(processor_transition, recv_fut).await?;
             Ok(res)
         }
     }

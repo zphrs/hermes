@@ -2,30 +2,9 @@ use std::net::SocketAddr;
 
 use super::super::Cursor;
 use super::{accept_client, connect_to_server};
-use crate::Method;
-use crate::marker::{self, Leaf, Loopback, not_applicable};
+
+use crate::marker::{self, not_applicable};
 use crate::method::handler::root_method::RootHandler;
-
-pub enum RootRequest {
-    A(ARequest),
-    B(BRequest),
-}
-
-pub struct ARequest;
-
-pub struct AMethod;
-
-pub struct BMethod;
-
-impl Method for AMethod {
-    type Req<'buf> = ARequest;
-
-    type Res<'buf> = ();
-
-    type Type = Leaf<Loopback>;
-}
-
-pub struct BRequest;
 
 mod ping {
     use minicbor::bytes::ByteSlice;

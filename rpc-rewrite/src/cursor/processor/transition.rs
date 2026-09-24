@@ -2,7 +2,11 @@ use std::{convert::Infallible, fmt::Debug};
 
 use super::Processor;
 use crate::{
-    cursor::{processor::ProcessorFut, requester::Requester, transition::CursorCredit},
+    cursor::{
+        processor::{ProcessorFut, processor_fut::TransitionGate},
+        requester::Requester,
+        transition::CursorCredit,
+    },
     io::{Connection, write},
     marker::{Branch, NotApplicable, Transition},
     method::{self, ReqOf, ResOf, handler::TransitionBranchHandler},
@@ -117,12 +121,13 @@ impl<
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
     {
-        ProcessorFut::new(self.handle_concurrent_transition_request_inner(write))
+        ProcessorFut::new(|gate| self.handle_concurrent_transition_request_inner(write, gate))
     }
 
     async fn handle_concurrent_transition_request_inner(
         self,
         write: &mut Vec<u8>,
+        gate: TransitionGate,
     ) -> Result<
         ProcessorTransition<
             State,
@@ -145,7 +150,7 @@ impl<
             .await
             .map_err(ConcurrentError::Accept)?;
 
-        let delayed_replier: DelayedReplier<RootMethod, _> = DelayedReplier::new(stream.0);
+        let delayed_replier: DelayedReplier<RootMethod, _> = DelayedReplier::new(stream.0, gate);
 
         write.clear();
         let request: ReqOf<RootMethod> = crate::io::read::read(write, stream.1).await?;
@@ -161,7 +166,8 @@ impl<
             next_handler,
         ))
     }
-
+    /// Only callable when the [`Requester`]'s [`Method`](crate::Method) is
+    /// [`NotApplicable`].
     pub async fn handle_transition_request(
         self,
         write: &mut Vec<u8>,
@@ -178,7 +184,7 @@ impl<
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
     {
         let processor_transition = self
-            .handle_concurrent_transition_request_inner(write)
+            .handle_concurrent_transition_request_inner(write, TransitionGate::default())
             .await?;
         // we're good to just transition; no tiebreak
         assert!(

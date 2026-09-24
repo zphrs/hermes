@@ -60,6 +60,7 @@ pub trait Connection {
     fn close(self) -> impl Future<Output = Result<(), Self::CloseError>>;
 }
 
+#[cfg(feature = "quinn-transport")]
 mod quinn {
     use std::convert::Infallible;
 

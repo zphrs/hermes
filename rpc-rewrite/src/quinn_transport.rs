@@ -1,7 +1,9 @@
 pub mod client;
+#[cfg(test)]
 pub mod end_to_end_socket;
 pub mod server;
 pub mod skip_server_verification;
+#[cfg(test)]
 pub mod dens_runtime {
     use quinn::TokioRuntime;
 
@@ -26,6 +28,7 @@ pub mod dens_runtime {
     }
 }
 
+#[cfg(test)]
 pub mod create_endpoint {
     use std::{
         net::{Ipv4Addr, SocketAddr},

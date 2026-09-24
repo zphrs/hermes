@@ -1,13 +1,14 @@
 mod possibly_delayed;
 
-use std::{convert::Infallible, ops::Deref, pin::pin};
+use std::{convert::Infallible, pin::pin};
 
-use futures::{FutureExt, StreamExt, select, stream::FuturesUnordered};
+use futures::{FutureExt, StreamExt, select_biased, stream::FuturesUnordered};
 use tracing::debug;
 
 use crate::{
     cursor::processor::{
         Processor, ProcessorFut,
+        processor_fut::TransitionGate,
         transition::{ProcessorTransition, ReplyPrimed, delayed_replier},
     },
     io::Connection,
@@ -74,7 +75,7 @@ impl<
     where
         for<'a> <RootMethod as method::Method>::Req<'a>: minicbor::Decode<'a, ()>,
     {
-        ProcessorFut::new(self.handle_hybrid_concurrent_transition_requests_inner(buf))
+        ProcessorFut::new(|gate| self.handle_hybrid_concurrent_transition_requests_inner(buf, gate))
     }
     /// SAFETY: caller must ensure that the 0th field returned, the Vec<u8>
     /// is moved to a &'buf mut Vec<u8> reference and must ensure that
@@ -84,6 +85,7 @@ impl<
     async unsafe fn handle_stream<'buf>(
         stream: (C::SendStream, C::RecvStream),
         handler: Handler,
+        gate: TransitionGate,
     ) -> Result<
         Option<(
             Vec<u8>,
@@ -99,7 +101,7 @@ impl<
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
     {
         let replier: possibly_delayed::Replier<RootMethod, _> =
-            possibly_delayed::Replier::new(stream.0);
+            possibly_delayed::Replier::new(stream.0, gate);
         let out = {
             let mut buffer = Vec::new();
             let res = {
@@ -142,9 +144,10 @@ impl<
         Result::<_, Error<C>>::Ok(out)
     }
 
-    pub async fn handle_hybrid_concurrent_transition_requests_inner<'buf>(
+    async fn handle_hybrid_concurrent_transition_requests_inner<'buf>(
         self,
         buf: &'buf mut Vec<u8>,
+        gate: TransitionGate,
     ) -> HandleHybridTransitionRequestResult<'buf, State, Role, C, RootMethod, Handler>
     where
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
@@ -153,28 +156,36 @@ impl<
         let (receipt, next_handler) = {
             let mut stream_fut = pin!(self.connection.accept_stream().fuse());
             loop {
-                select! {
-                    stream = stream_fut => {
-                        let stream = stream.map_err(Error::Accept)?;
-                        let handler = self.handler.clone();
-                        stream_fut.set(self.connection.accept_stream().fuse());
-                        debug!("pushing to joinset");
-                        js.push(unsafe {Self::handle_stream(stream, handler)});
-                    }
+                // biased: `select!` polls in an order that depends on
+                // process-wide state, which makes simulations irreproducible
+                //
+                // Fine to be biased because the body of each doesn't do any
+                // async calls
+                select_biased! {
+                    // first because we want to handle existing requests that
+                    // finished processing before taking on new requests
                     res = js.select_next_some() => {
                         let res = res?;
                         match res {
                             Some((buffer, transition_res, next_handler)) => {
-                                // SAFETY: js dropped here to ensure that we never
-                                // execute this code again (would need to call
-                                // js.next() to execute this block again) to ensure
-                                // we uphold the safety of calling handle_stream
+                                // SAFETY: js dropped here to ensure that we
+                                // never execute this code again (would need to
+                                // call js.next() to execute this block again)
+                                // to ensure we uphold the safety requirement of
+                                // handle_stream
                                 drop(js);
                                 *buf = buffer;
                                 break (transition_res, next_handler)
                             },
                             None => continue,
                         }
+                    }
+                    stream = stream_fut => {
+                        let stream = stream.map_err(Error::Accept)?;
+                        let handler = self.handler.clone();
+                        stream_fut.set(self.connection.accept_stream().fuse());
+                        debug!("pushing to joinset");
+                        js.push(unsafe {Self::handle_stream(stream, handler, gate.clone())});
                     }
                 }
             }

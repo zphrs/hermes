@@ -3,6 +3,7 @@ mod abandoned_loopback;
 mod hybrid;
 mod loopback;
 mod race;
+mod room;
 
 use std::{net::SocketAddr, time::Duration};
 

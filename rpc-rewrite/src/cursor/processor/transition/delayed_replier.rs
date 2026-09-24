@@ -2,7 +2,7 @@ use std::{convert::Infallible, marker::PhantomData};
 
 use crate::{
     Method,
-    cursor::state::WrapperCredit,
+    cursor::{processor::processor_fut::TransitionGate, state::WrapperCredit},
     io::{BytesWriteStream, write},
     marker,
     method::{
@@ -47,24 +47,39 @@ impl<T> TransitionReply<T> {
     }
 }
 
+/// Explicitly rejects a transition request by replying with
+/// `None::<TransitionReply<_>>` and finishing the stream.
+///
+/// The encoding of `None` is independent of the reply type, and an accepted
+/// reply encodes identically to a bare [`TransitionReply`].
+pub(crate) async fn reject<SendStream: BytesWriteStream>(
+    stream: SendStream,
+) -> Result<(), SendStream::Error> {
+    let rejection =
+        minicbor::to_vec(None::<TransitionReply<()>>).expect("encoding into a Vec is infallible");
+    write::bytes(stream, rejection.into()).await
+}
+
 pub(super) struct DelayedReplier<M, SendStream: BytesWriteStream> {
     stream: SendStream,
+    gate: TransitionGate,
     _marker: PhantomData<M>,
 }
 
 impl<M, SendStream: BytesWriteStream> DelayedReplier<M, SendStream> {
-    pub fn new(stream: SendStream) -> Self {
+    pub fn new(stream: SendStream, gate: TransitionGate) -> Self {
         Self {
             stream,
-
+            gate,
             _marker: PhantomData,
         }
     }
 
     pub fn map<Descendant>(self) -> DelayedReplier<Descendant, SendStream> {
-        let Self { stream, .. } = self;
+        let Self { stream, gate, .. } = self;
         DelayedReplier {
             stream,
+            gate,
             _marker: PhantomData,
         }
     }
@@ -112,11 +127,15 @@ impl<M: method::OfType<method::Branch<method::Transition>>, SendStream: BytesWri
     where
         ResOf<'req, Descendant>: minicbor::Encode<()> + minicbor::CborLen<()>,
     {
-        let res = handler
-            .handle_transition(request, WrapperCredit::new())
+        let (stream, res) = self
+            .gate
+            .run_leaf(
+                self.stream,
+                handler.handle_transition(request, WrapperCredit::new()),
+            )
             .await;
 
-        let receipt = Receipt::new(self.stream, res.0, true)?.map(Descendant::res_to_parent);
+        let receipt = Receipt::new(stream, res.0, true)?.map(Descendant::res_to_parent);
         Ok((receipt, res.1))
     }
 }
@@ -174,10 +193,6 @@ impl<Res, SendStream: BytesWriteStream> Receipt<Res, SendStream> {
         }
     }
 
-    pub(crate) fn res(&self) -> &Res {
-        &self.res
-    }
-
     /// Sets the in tiebreak of this [`Receipt<Res, SendStream>`].
     ///
     /// [`in_tiebreak`](Self::in_tiebreak) defaults to false in a transition.
@@ -193,6 +208,19 @@ impl<Res, SendStream: BytesWriteStream> Receipt<Res, SendStream> {
         if existing_in_tiebreak != in_tiebreak {
             self.in_tiebreak = Some(in_tiebreak)
         }
+    }
+
+    /// Discards the held reply and explicitly rejects the transition request.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside of a transition.
+    pub(crate) async fn reject(self) -> Result<(), SendStream::Error> {
+        assert!(
+            self.in_tiebreak.is_some(),
+            "reject should only be called during a transition"
+        );
+        reject(self.stream).await
     }
 }
 

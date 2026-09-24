@@ -17,7 +17,7 @@ impl<State, Role, C: Connection, T> RequesterTransition<State, Role, C, T> {
 /// state of waiting for a response
 pub struct Sent<'buf, RootRequest, Recv: BytesReadStream, M> {
     recv: Recv,
-    root_request: RootRequest,
+    _root_request: RootRequest,
     buf: &'buf mut Vec<u8>,
     _marker: PhantomData<M>,
 }
@@ -39,21 +39,20 @@ impl<'buf, State, Role, C: Connection, RootRequest, M: Method>
             connection,
             Sent {
                 recv,
-                root_request,
+                _root_request: root_request,
                 buf,
                 _marker: PhantomData,
             },
         )
     }
-    pub(crate) fn res(&self) -> &RootRequest {
-        &self.2.root_request
-    }
-
+    /// Resolves to `None` if the peer explicitly rejected the request. A peer
+    /// that finishes the stream without replying (e.g. because it dropped its
+    /// processor) surfaces as [`read::Error::Empty`](crate::io::read::Error::Empty).
     pub(crate) async fn receive(
         self,
     ) -> Result<
         (
-            TransitionReply<ResOf<'buf, M>>,
+            Option<TransitionReply<ResOf<'buf, M>>>,
             RequesterTransition<State, Role, C, Finished>,
         ),
         crate::io::read::Error<C::RecvStream>,
@@ -61,7 +60,7 @@ impl<'buf, State, Role, C: Connection, RootRequest, M: Method>
     where
         ResOf<'buf, M>: minicbor::Decode<'buf, ()>,
     {
-        let res: TransitionReply<ResOf<'buf, M>> =
+        let res: Option<TransitionReply<ResOf<'buf, M>>> =
             crate::io::read::read(self.2.buf, self.2.recv).await?;
         // recv dropped here
         Ok((res, RequesterTransition(self.0, self.1, Finished(()))))

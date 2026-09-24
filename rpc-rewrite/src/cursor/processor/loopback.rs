@@ -7,7 +7,7 @@ use crate::{
     io::read::read,
     method::{self, ReqOf, ResOf, handler, replier, replier::Receipt},
 };
-use futures::{FutureExt, StreamExt, select, stream::FuturesUnordered};
+use futures::{FutureExt, StreamExt, select_biased, stream::FuturesUnordered};
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -106,7 +106,9 @@ impl<
         let mut stream_fut = pin!(self.connection.accept_stream().fuse());
 
         loop {
-            select! {
+            // biased: `select!` polls in an order that depends on process-wide
+            // state, which makes simulations irreproducible
+            select_biased! {
                 stream = &mut stream_fut => {
                     match stream {
                         Ok(stream) => {
@@ -133,6 +135,6 @@ impl<
         for<'a> ReqOf<'a, RootMethod>: minicbor::Decode<'a, ()>,
         Handler: Clone,
     {
-        super::ProcessorFut::new(self.handle_loopback_requests_inner())
+        super::ProcessorFut::new(|_| self.handle_loopback_requests_inner())
     }
 }

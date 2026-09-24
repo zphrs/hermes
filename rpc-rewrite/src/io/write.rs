@@ -40,8 +40,6 @@ pub async fn write<Message: CborLen<()> + Encode<()>, SendStream: BytesWriteStre
 ) -> Result<(), Error<SendStream>> {
     let mut buf = Vec::with_capacity(minicbor::len(request));
     minicbor::encode(request, &mut buf)?;
-    bytes(send, Bytes::from(buf))
-        .await
-        .map_err(Error::Send)?;
+    bytes(send, Bytes::from(buf)).await.map_err(Error::Send)?;
     Ok(())
 }

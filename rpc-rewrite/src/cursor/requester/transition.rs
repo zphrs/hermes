@@ -35,6 +35,8 @@ pub enum RequestTransitionError<C: Connection> {
     Read(#[from] io::read::Error<C::RecvStream>),
     #[error("in tiebreak flag unexpectedly set")]
     InTiebreak,
+    #[error("transition request was rejected")]
+    Rejected,
     #[error("a prior request_loopback call was abandoned before its response was read")]
     AbandonedLoopback(#[source] loopback::Abandoned),
 }
@@ -111,7 +113,10 @@ impl<State, Role, RootMethod: method::Method, C: Connection> Requester<State, Ro
 
         // next::with_requester_transition(requester_transition, pin!(processor.into())).await?;
         let recv = requester_transition.receive().await?;
-        let (TransitionReply { reply, in_tiebreak }, requester_transition) = recv;
+        let (reply, requester_transition) = recv;
+        let Some(TransitionReply { reply, in_tiebreak }) = reply else {
+            Err(RequestTransitionError::Rejected)?
+        };
         let connection = requester_transition.into_conn();
         // would ordinarily notify, but no need to do so here
         // because there's no case where we might be tiebreaking

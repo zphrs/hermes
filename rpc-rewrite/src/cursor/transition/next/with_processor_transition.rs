@@ -10,7 +10,7 @@ use crate::{
     method::{Method, ResOf},
 };
 
-use std::{marker::PhantomData, pin::pin};
+use std::marker::PhantomData;
 use tracing::{instrument, trace};
 
 pub type Result<'rbuf, State, Role, C, PRes, NextHandler, RequesterMethod, RequesterError> =
@@ -88,14 +88,12 @@ where
                 requester_transition.conn().stable_id() == processor.conn().stable_id(),
                 "requester and processor should both belong to the same connection"
             );
-            trace!("tiebreaking");
-            // need to tiebreak
-            let _processor_res = processor.res();
-            let _requester_res = requester_transition.res();
-
-            let pinned_recv = pin!(requester_transition.receive());
-            let res =
-                super::definite_tiebreak::definite_tiebreak_fn(processor, pinned_recv).await?;
+            trace!("both sides requested a transition");
+            let res = super::commit_or_defer::commit_or_defer_fn(
+                processor,
+                requester_transition.receive(),
+            )
+            .await?;
             Ok(res)
         }
     }

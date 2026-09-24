@@ -43,10 +43,6 @@ impl<State, Role, C: io::Connection, Res, SendStream: BytesWriteStream, NextHand
         )
     }
 
-    pub(crate) fn res(&self) -> &Res {
-        self.2.receipt.res()
-    }
-
     pub(crate) async fn reply(
         self,
     ) -> Result<
@@ -65,6 +61,15 @@ impl<State, Role, C: io::Connection, Res, SendStream: BytesWriteStream, NextHand
 
         let finished = ProcessorTransition(self.0, self.1, Finished(()));
         Ok(((res, next_handler), finished))
+    }
+
+    /// Discards the held reply and explicitly rejects the peer's transition
+    /// request.
+    pub(crate) async fn reject(
+        self,
+    ) -> Result<ProcessorTransition<State, Role, C, Finished>, SendStream::Error> {
+        self.2.receipt.reject().await?;
+        Ok(ProcessorTransition(self.0, self.1, Finished(())))
     }
 
     pub(crate) fn set_in_tiebreak(&mut self, in_tiebreak: bool) {

@@ -6,11 +6,16 @@
 //! - fewer custom async machines
 //! - no need for types to have a definite maximum size
 
+// lets `rpc_rewrite::...` paths resolve inside this crate's own tests (the room
+// example is shared with them via `#[path]`)
+#[cfg(test)]
+extern crate self as rpc_rewrite;
+
 mod io;
 pub mod marker;
 pub mod method;
-#[cfg(test)]
-mod quinn_transport;
+#[cfg(feature = "quinn-transport")]
+pub mod quinn_transport;
 
 pub mod cursor;
 

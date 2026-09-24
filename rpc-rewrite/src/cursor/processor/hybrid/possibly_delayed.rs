@@ -2,26 +2,31 @@ use std::marker::PhantomData;
 
 use crate::{
     Method,
-    cursor::{processor::transition::delayed_replier, state::WrapperCredit},
+    cursor::{
+        processor::{processor_fut::TransitionGate, transition::delayed_replier},
+        state::WrapperCredit,
+    },
     io::{BytesWriteStream, write},
     method::replier::{self, immediate},
 };
 
 pub struct Replier<M, SendStream: BytesWriteStream> {
     stream: SendStream,
+    gate: TransitionGate,
     _marker: PhantomData<M>,
 }
 
 impl<M, SendStream: BytesWriteStream> Replier<M, SendStream> {
-    pub fn new(stream: SendStream) -> Self {
+    pub fn new(stream: SendStream, gate: TransitionGate) -> Self {
         Self {
             stream,
+            gate,
             _marker: PhantomData,
         }
     }
 
     pub fn map<Descendant>(self) -> Replier<Descendant, SendStream> {
-        Replier::new(self.stream)
+        Replier::new(self.stream, self.gate)
     }
 }
 
@@ -122,12 +127,16 @@ impl<M: Method, SendStream: BytesWriteStream> replier::transition::Replier<M>
     where
         crate::method::ResOf<'req, Descendant>: minicbor::Encode<()> + minicbor::CborLen<()>,
     {
-        let res = handler
-            .handle_transition(request, WrapperCredit::new())
+        let (stream, res) = self
+            .gate
+            .run_leaf(
+                self.stream,
+                handler.handle_transition(request, WrapperCredit::new()),
+            )
             .await;
 
         let receipt =
-            delayed_replier::Receipt::new(self.stream, res.0, true)?.map(Descendant::res_to_parent);
+            delayed_replier::Receipt::new(stream, res.0, true)?.map(Descendant::res_to_parent);
 
         Ok((Receipt::Delayed(receipt), res.1))
     }
