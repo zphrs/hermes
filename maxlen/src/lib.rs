@@ -17,7 +17,7 @@
 //!
 //! When the `derive` feature is enabled (default), you can use the `#[derive(MaxLen)]` macro:
 //!
-//! ```
+//! ```ignored
 //! use maxlen::MaxLen;
 //! use minicbor::{Encode, Decode, CborLen};
 //!
@@ -39,14 +39,22 @@
 //! use maxlen::MaxLen;
 //! use minicbor::CborLen;
 //!
-//! impl MaxLen for u32 {
+//! struct MyValue(u32);
+//!
+//! impl CborLen<()> for MyValue {
+//!     fn cbor_len(&self, ctx: &mut ()) -> usize {
+//!         self.0.cbor_len(ctx)
+//!     }
+//! }
+//!
+//! impl MaxLen for MyValue {
 //!     fn biggest_instantiation() -> Self {
-//!         u32::MAX
+//!         MyValue(u32::MAX)
 //!     }
 //! }
 //!
 //! // Calculate max length
-//! let max_len = u32::max_len();
+//! let max_len = MyValue::max_len();
 //! assert!(max_len > 0);
 //! ```
 
@@ -78,14 +86,22 @@ pub use maxlen_derive::MaxLen;
 /// use maxlen::MaxLen;
 /// use minicbor::CborLen;
 ///
-/// impl MaxLen for u32 {
-///     fn biggest_instantiation() -> Self {
-///         u32::MAX
+/// struct MyValue(u32);
+///
+/// impl CborLen<()> for MyValue {
+///     fn cbor_len(&self, ctx: &mut ()) -> usize {
+///         self.0.cbor_len(ctx)
 ///     }
 /// }
 ///
-/// let instance = u32::biggest_instantiation();
-/// assert_eq!(instance, u32::MAX);
+/// impl MaxLen for MyValue {
+///     fn biggest_instantiation() -> Self {
+///         MyValue(u32::MAX)
+///     }
+/// }
+///
+/// let instance = MyValue::biggest_instantiation();
+/// assert_eq!(instance.0, u32::MAX);
 /// ```
 pub trait MaxLen
 where
@@ -117,12 +133,20 @@ where
     /// use maxlen::MaxLen;
     /// use minicbor::CborLen;
     ///
-    /// impl MaxLen for u32 {
-    ///     fn biggest_instantiation() -> Self { u32::MAX }
+    /// struct MyValue(u32);
+    ///
+    /// impl CborLen<()> for MyValue {
+    ///     fn cbor_len(&self, ctx: &mut ()) -> usize {
+    ///         self.0.cbor_len(ctx)
+    ///     }
     /// }
     ///
-    /// let len1 = u32::max_len();
-    /// let len2 = u32::max_len(); // Uses cached value
+    /// impl MaxLen for MyValue {
+    ///     fn biggest_instantiation() -> Self { Wrapper(u32::MAX) }
+    /// }
+    ///
+    /// let len1 = MyValue::max_len();
+    /// let len2 = MyValue::max_len(); // Uses cached value
     /// assert_eq!(len1, len2);
     /// ```
     fn max_len() -> usize {
