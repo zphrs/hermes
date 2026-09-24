@@ -187,25 +187,3 @@ impl<
         ))
     }
 }
-
-trait GetBuffer {
-    async fn get_buffer(&self) -> impl Deref<Target = [u8]>;
-}
-
-pub struct Allocator {
-    buffer: [u8; 100000],
-}
-
-impl Allocator {
-    pub fn new() -> Self {
-        Self {
-            buffer: [0u8; 100000],
-        }
-    }
-}
-
-impl GetBuffer for Allocator {
-    async fn get_buffer(&self) -> impl Deref<Target = [u8]> {
-        self.buffer.as_slice()
-    }
-}
