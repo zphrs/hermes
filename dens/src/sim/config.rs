@@ -16,11 +16,24 @@ pub struct MessageLoss {
     pub fail_rate: f64,
 }
 
+/// Error returned by [`MessageLoss::new`].
+#[derive(Debug, thiserror::Error)]
+pub enum MessageLossError {
+    #[error("fail_rate {0} is outside the allowed range of 0.0..={max}", max = MessageLoss::extreme().fail_rate)]
+    OutOfRange(f64),
+}
+
 impl MessageLoss {
     pub const ZERO: MessageLoss = MessageLoss { fail_rate: 0.0 };
-    #[must_use]
-    pub fn new(fail_rate: f64) -> Self {
-        Self { fail_rate }
+
+    /// # Errors
+    /// Returns [`MessageLossError::OutOfRange`] if `fail_rate` is negative, NaN,
+    /// or greater than [`MessageLoss::extreme()`]'s fail rate.
+    pub fn new(fail_rate: f64) -> Result<Self, MessageLossError> {
+        if !(0.0..=Self::extreme().fail_rate).contains(&fail_rate) {
+            return Err(MessageLossError::OutOfRange(fail_rate));
+        }
+        Ok(Self { fail_rate })
     }
     /// 0.5% packet loss, typical for residential ISP connections
     #[must_use]
@@ -173,5 +186,19 @@ impl Default for Config {
             message_loss: MessageLoss::default(),
             rng_seed: 1234,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_loss_new_bounds() {
+        assert!(MessageLoss::new(0.0).is_ok());
+        assert!(MessageLoss::new(0.1).is_ok());
+        assert!(MessageLoss::new(0.11).is_err());
+        assert!(MessageLoss::new(-0.01).is_err());
+        assert!(MessageLoss::new(f64::NAN).is_err());
     }
 }
